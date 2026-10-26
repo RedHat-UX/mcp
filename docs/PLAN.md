@@ -52,7 +52,7 @@ servers and it does not require Node at runtime.
 | Repository    | `redhat-ux/mcp`                                                                      |
 | Go module     | `github.com/redhat-ux/mcp`; command at `github.com/redhat-ux/mcp/cmd/rhds-mcp`       |
 | npm package   | `@rhds/mcp`, wrapper in `npm/`                                                       |
-| Go version    | `go 1.26.4` minimum (asimonim requirement); pin the build with a `toolchain` directive in `go.mod`, which `setup-go` and grw's `go-version-file` read |
+| Go version    | `go 1.26.4` minimum (asimonim requirement); pin the build with a `toolchain` directive in `go.mod`, which `setup-go` and grw's `go-version-file` read. The pin is the latest 1.26-line patch (`go1.26.10`): Go treats a toolchain equal to the `go` directive as redundant and rejects the module |
 | MCP SDK       | `github.com/modelcontextprotocol/go-sdk` v1.8.0                                      |
 | Protocol      | Negotiated. Advertise `2026-07-28`, `2025-11-25`, `2025-06-18`. See section 8        |
 | Transport     | stdio                                                                                |
