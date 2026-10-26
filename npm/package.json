@@ -1,0 +1,42 @@
+{
+  "name": "@rhds/mcp",
+  "version": "0.0.1",
+  "description": "MCP server for the Red Hat Design System: version-aware element APIs, design tokens, guidelines, and migration help",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "bin": {
+    "rhds-mcp": "bin/rhds-mcp.js"
+  },
+  "optionalDependencies": {
+    "@rhds/mcp-linux-x64": "0.0.1",
+    "@rhds/mcp-linux-arm64": "0.0.1",
+    "@rhds/mcp-darwin-x64": "0.0.1",
+    "@rhds/mcp-darwin-arm64": "0.0.1",
+    "@rhds/mcp-win32-x64": "0.0.1",
+    "@rhds/mcp-win32-arm64": "0.0.1"
+  },
+  "files": [
+    "bin/rhds-mcp.js",
+    "LICENSE",
+    "README.md"
+  ],
+  "keywords": [
+    "mcp",
+    "model context protocol",
+    "design system",
+    "design tokens",
+    "web components",
+    "custom elements"
+  ],
+  "author": "Benny Powers <bennyp@redhat.com>",
+  "homepage": "https://github.com/redhat-ux/mcp#readme",
+  "bugs": "https://github.com/redhat-ux/mcp/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/redhat-ux/mcp.git",
+    "directory": "npm"
+  }
+}
