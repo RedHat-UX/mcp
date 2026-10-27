@@ -73,6 +73,10 @@ func NormalizeTokens(input []byte) (*Result, error) {
 	if err := ctx.resolvePendingThemes(); err != nil {
 		return nil, err
 	}
+	// asimonim resolves only top-level aliases. Shadow dimensions are nested
+	// inside the composite value, so resolve them here once every token value
+	// is known.
+	ctx.resolveShadowAliases()
 
 	encoded, err := json.MarshalIndent(document, "", "  ")
 	if err != nil {
@@ -90,6 +94,7 @@ type normalizer struct {
 	themes  map[string]map[string]string
 	values  map[string]any
 	pending []pendingComposite
+	shadows []any
 	stats   Stats
 }
 
@@ -332,6 +337,9 @@ func (n *normalizer) normalizeToken(key string, node map[string]any, path []stri
 		return nil, fmt.Errorf("token %s: %w", strings.Join(path, "."), err)
 	}
 	n.values[strings.Join(path, ".")] = canonical
+	if typeName == token.TypeShadow {
+		n.shadows = append(n.shadows, canonical)
+	}
 
 	result := map[string]any{
 		"$value": canonical,
@@ -477,6 +485,44 @@ func cssNameFor(node map[string]any, path []string) string {
 
 // resolvePendingThemes resolves composite arms after every ordinary token has
 // a canonical value.
+// resolveShadowAliases replaces dimension aliases nested inside shadow values
+// with the values they reference.
+func (n *normalizer) resolveShadowAliases() {
+	for _, shadow := range n.shadows {
+		resolveNestedAliases(shadow, n.values, 0)
+	}
+}
+
+func resolveNestedAliases(value any, values map[string]any, depth int) any {
+	if depth > 32 {
+		return value
+	}
+	switch v := value.(type) {
+	case string:
+		if !isAlias(v) {
+			return v
+		}
+		path := strings.TrimSuffix(strings.TrimPrefix(v, "{"), "}")
+		resolved, ok := values[path]
+		if !ok {
+			return v
+		}
+		return resolveNestedAliases(resolved, values, depth+1)
+	case map[string]any:
+		for key, item := range v {
+			v[key] = resolveNestedAliases(item, values, depth+1)
+		}
+		return v
+	case []any:
+		for i := range v {
+			v[i] = resolveNestedAliases(v[i], values, depth+1)
+		}
+		return v
+	default:
+		return value
+	}
+}
+
 func (n *normalizer) resolvePendingThemes() error {
 	for _, composite := range n.pending {
 		light, err := n.resolveThemeValue(composite.arms[0], 0)
@@ -735,6 +781,9 @@ func canonicalDimension(value any) (any, error) {
 		text := strings.TrimSpace(v)
 		if isAlias(text) {
 			return text, nil
+		}
+		if isZero(text) {
+			return "0px", nil
 		}
 		number, unit, ok := splitDimension(text)
 		if !ok {

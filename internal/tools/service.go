@@ -23,6 +23,7 @@ import (
 	cemtypes "bennypowers.dev/cem/lsp/types"
 	"bennypowers.dev/cem/manifest"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"golang.org/x/mod/semver"
 
 	"github.com/redhat-ux/mcp/internal/data"
 )
@@ -176,6 +177,39 @@ func (s *Service) bundledVersion(pkg, kind, requested string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// docsVersionFor maps a resolved elements version to the newest bundled docs
+// snapshot for the same major. If that major has no snapshot, the newest
+// snapshot overall is used, matching the docs-only behavior in PLAN section
+// 5.5.
+func (s *Service) docsVersionFor(elementsVersion string) string {
+	if s == nil || s.store == nil {
+		return ""
+	}
+	versions := s.store.Index().Versions(packageDocs, kindDocs)
+	if len(versions) == 0 {
+		return ""
+	}
+	target := semver.Canonical("v" + strings.TrimPrefix(elementsVersion, "v"))
+	if target == "" {
+		return versions[0]
+	}
+	targetMajor := semver.Major(target)
+	best := ""
+	for _, tag := range versions {
+		canonical := semver.Canonical("v" + strings.TrimPrefix(tag, "v"))
+		if canonical == "" || semver.Major(canonical) != targetMajor {
+			continue
+		}
+		if best == "" || semver.Compare(canonical, "v"+strings.TrimPrefix(best, "v")) > 0 {
+			best = tag
+		}
+	}
+	if best != "" {
+		return best
+	}
+	return versions[0]
 }
 
 func (s *Service) loadManifest(version string) (*manifest.Package, *ToolError) {

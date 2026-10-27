@@ -257,6 +257,27 @@ func TestGenerateRejectsUnparseablePackageJSON(t *testing.T) {
 	}
 }
 
+func TestGenerateCleansPartialOutputOnFailure(t *testing.T) {
+	inputs := testInputs()
+	inputs.Elements["3.0.0"] = ElementInput{
+		Manifest:    []byte(`{"schemaVersion":"2.1.0"}`),
+		PackageJSON: []byte(`{`),
+	}
+	out := t.TempDir()
+	if _, err := Generate(inputs, out); err == nil {
+		t.Fatal("Generate() accepted malformed package.json")
+	}
+	entries, err := os.ReadDir(out)
+	if err != nil {
+		t.Fatalf("reading output: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != ".gitkeep" {
+			t.Errorf("failed generation left partial output %q", entry.Name())
+		}
+	}
+}
+
 func TestGenerateRejectsDocTagTraversal(t *testing.T) {
 	for _, tag := range []string{"../../escape", "v1.4.5/../../escape", "v1.4.5-beta.1", "1.4.5"} {
 		inputs := testInputs()

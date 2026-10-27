@@ -151,6 +151,32 @@ func TestProcessMarkdownCodeBlockThenImage(t *testing.T) {
 	}
 }
 
+func TestStripHTMLImagesIgnoresNonTagTokens(t *testing.T) {
+	input := `img before <img src="x.png" alt="ALT"> after <!--img--> done`
+	got := stripHTMLImages(input)
+	for _, want := range []string{"img before", "ALT", "after", "<!--img-->", "done"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("stripHTMLImages() = %q, missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "x.png") {
+		t.Errorf("stripHTMLImages() = %q, image src not removed", got)
+	}
+}
+
+func TestProcessMarkdownScriptRawTextDoesNotStick(t *testing.T) {
+	// A literal </script> inside script raw text closes the block; the
+	// following <script> opens a new one. Naive tag counting misses this and
+	// leaves the block open forever, which stops image stripping in later
+	// prose.
+	input := "<script type=\"text/html\">\n<script>\n<</script><script type=\"text/html\">\n</script>\n\n![drop](after.png)\n"
+	result := ProcessMarkdown([]byte(input), "src")
+	content := string(result.Content)
+	if strings.Contains(content, "after.png") {
+		t.Errorf("image after a script code block was not removed:\n%s", content)
+	}
+}
+
 func TestProcessMarkdownPreservesBlankLinesInCode(t *testing.T) {
 	input := "# X\n\ntext\n\n\nmore\n\n```md\na\n\n\nb\n```\n"
 	result := ProcessMarkdown([]byte(input), "src")

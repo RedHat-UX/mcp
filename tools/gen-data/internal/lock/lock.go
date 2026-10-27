@@ -340,7 +340,7 @@ func satisfiesAlternative(v, spec string) bool {
 		}
 		return semver.Compare(v, low) >= 0 && semver.Compare(v, high) < 0
 	}
-	fields := strings.Fields(spec)
+	fields := mergeComparatorOperators(strings.Fields(spec))
 	if len(fields) == 0 {
 		return true
 	}
@@ -350,6 +350,27 @@ func satisfiesAlternative(v, spec string) bool {
 		}
 	}
 	return true
+}
+
+// mergeComparatorOperators joins an operator split from its operand by
+// whitespace, as npm permits `>= 1.0.0`. Without this, the operator becomes a
+// field of its own and matches nothing.
+func mergeComparatorOperators(fields []string) []string {
+	operators := map[string]bool{
+		"<": true, "<=": true, ">": true, ">=": true, "=": true,
+		"^": true, "~": true,
+	}
+	merged := make([]string, 0, len(fields))
+	for i := 0; i < len(fields); i++ {
+		field := fields[i]
+		if operators[field] && i+1 < len(fields) {
+			merged = append(merged, field+fields[i+1])
+			i++
+			continue
+		}
+		merged = append(merged, field)
+	}
+	return merged
 }
 
 func satisfiesComparator(v, comparator string) bool {
@@ -474,7 +495,7 @@ func caretUpper(spec string) (string, bool) {
 
 func tildeUpper(spec string) (string, bool) {
 	parts := splitVersion(spec)
-	if len(parts) < 2 || parts[0] == "" {
+	if len(parts) == 0 || parts[0] == "" {
 		return "", false
 	}
 	major, err := strconv.Atoi(parts[0])

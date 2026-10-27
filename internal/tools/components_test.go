@@ -340,3 +340,62 @@ func TestListComponentsAcceptsVPrefixedVersion(t *testing.T) {
 		t.Error("total = 0, want components")
 	}
 }
+
+func TestListComponentsReportsDocsForMajorSnapshot(t *testing.T) {
+	manifestJSON, err := os.ReadFile("testdata/elements/custom-elements.json")
+	if err != nil {
+		t.Fatalf("reading fixture manifest: %v", err)
+	}
+	manifestSum := sha256.Sum256(manifestJSON)
+	docsJSON := []byte(`{"records":[]}`)
+	docsSum := sha256.Sum256(docsJSON)
+	index := data.Index{
+		SchemaVersion: data.SchemaVersion,
+		Artifacts: []data.Artifact{
+			{
+				Package: "elements",
+				Version: "4.1.5",
+				Kind:    "manifest",
+				Path:    "elements/custom-elements.json",
+				SHA256:  hex.EncodeToString(manifestSum[:]),
+				Bytes:   int64(len(manifestJSON)),
+			},
+			{
+				Package: "docs",
+				Version: "v4.2.2",
+				Kind:    "docs",
+				Path:    "docs/v4.2.2.json",
+				SHA256:  hex.EncodeToString(docsSum[:]),
+				Bytes:   int64(len(docsJSON)),
+			},
+		},
+	}
+	indexJSON, err := json.Marshal(index)
+	if err != nil {
+		t.Fatalf("marshaling index: %v", err)
+	}
+	store, err := data.Open(fstest.MapFS{
+		"index.json":                    &fstest.MapFile{Data: indexJSON},
+		"elements/custom-elements.json": &fstest.MapFile{Data: manifestJSON},
+		"docs/v4.2.2.json":              &fstest.MapFile{Data: docsJSON},
+	})
+	if err != nil {
+		t.Fatalf("opening memory store: %v", err)
+	}
+
+	out := New(store, nil).ListComponents(context.Background(), ListComponentsInput{
+		Version: "4.1.5",
+	})
+	if out.Error != nil {
+		t.Fatalf("ListComponents() error = %+v", out.Error)
+	}
+	if len(out.Components) == 0 {
+		t.Fatal("components = 0, want components")
+	}
+	for _, component := range out.Components {
+		if !component.DocsAvailable {
+			t.Errorf("%s docsAvailable = false, want true for the v4.2.2 snapshot",
+				component.TagName)
+		}
+	}
+}

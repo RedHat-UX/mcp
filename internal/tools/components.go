@@ -117,8 +117,8 @@ func (s *Service) ListComponents(_ context.Context, input ListComponentsInput) L
 	}
 
 	entries := collectComponents(pkg, input.IncludeDeprecated)
-	docsAvailable := s.store.Has(packageDocs, version, kindDocs) ||
-		s.store.Has(packageDocs, "v"+version, kindDocs)
+	docsVersion := s.docsVersionFor(version)
+	docsAvailable := docsVersion != "" && s.store.Has(packageDocs, docsVersion, kindDocs)
 
 	pageSize := input.PageSize
 	if pageSize == 0 {
