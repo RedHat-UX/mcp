@@ -156,6 +156,9 @@ func (l *Lock) Validate() error {
 			if !semver.IsValid(versionTag(version.Version)) {
 				return fmt.Errorf("%s version %q is not valid semver", pkg.ID, version.Version)
 			}
+			if semver.Prerelease(versionTag(version.Version)) != "" {
+				return fmt.Errorf("%s version %q is a prerelease", pkg.ID, version.Version)
+			}
 			if version.Integrity == "" {
 				return fmt.Errorf("%s@%s has no integrity hash", pkg.ID, version.Version)
 			}
@@ -175,6 +178,9 @@ func (l *Lock) Validate() error {
 		if snapshot.Tag == "" {
 			return fmt.Errorf("docs.snapshots[%d] has no tag", i)
 		}
+		if !ValidDocTag(snapshot.Tag) {
+			return fmt.Errorf("docs.snapshots[%d] has an invalid tag %q", i, snapshot.Tag)
+		}
 		if len(snapshot.Commit) != 40 {
 			return fmt.Errorf("docs.snapshots[%d] has an invalid commit sha %q", i, snapshot.Commit)
 		}
@@ -185,6 +191,21 @@ func (l *Lock) Validate() error {
 		}
 	}
 	return nil
+}
+
+// ValidDocTag accepts only release tags of the form vX.Y.Z. Docs tags become
+// directory names in the generated tree, so separators are rejected too.
+func ValidDocTag(tag string) bool {
+	if !strings.HasPrefix(tag, "v") {
+		return false
+	}
+	if strings.ContainsAny(tag, `/\`) || strings.Contains(tag, "..") {
+		return false
+	}
+	if !semver.IsValid(tag) {
+		return false
+	}
+	return semver.Prerelease(tag) == "" && semver.Canonical(tag) == tag
 }
 
 // PackageByID returns a pinned package by its short ID.

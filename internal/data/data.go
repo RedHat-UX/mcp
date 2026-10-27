@@ -71,6 +71,9 @@ func artifactKeyOf(pkg, version, kind string) artifactKey {
 // Index is the startup manifest of the embedded data tree.
 type Index struct {
 	SchemaVersion int `json:"schemaVersion"`
+	// GeneratorVersion changes when tools/gen-data output format or
+	// normalization changes. `make data` regenerates when it does not match.
+	GeneratorVersion int `json:"generatorVersion,omitempty"`
 	// LockSHA256 is the digest of internal/data/sources.lock.json that
 	// produced this tree. It lets `make data` decide whether it is stale.
 	LockSHA256 string `json:"lockSHA256,omitempty"`

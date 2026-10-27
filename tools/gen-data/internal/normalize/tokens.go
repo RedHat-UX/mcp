@@ -904,6 +904,9 @@ func canonicalCubicBezier(value any) (any, error) {
 		if err != nil {
 			return nil, err
 		}
+		if len(arms) != 4 {
+			return nil, fmt.Errorf("cubicBezier has %d values, want 4", len(arms))
+		}
 		values := make([]any, 0, 4)
 		for _, arm := range arms {
 			number, err := canonicalNumber(strings.TrimSpace(arm))

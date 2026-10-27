@@ -202,8 +202,33 @@ func TestIsUpToDate(t *testing.T) {
 		t.Fatalf("IsUpToDate(other digest) = %v, %v; want false", upToDate, err)
 	}
 
+	// A stale generator version forces regeneration even with the same lock.
+	indexPath := filepath.Join(out, data.IndexPath)
+	raw, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded data.Index
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	decoded.GeneratorVersion = GeneratorVersion + 1
+	encoded, err := marshalJSON(&decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(indexPath, encoded, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if upToDate, err := IsUpToDate(out, lockDigest); err != nil || upToDate {
+		t.Fatalf("IsUpToDate(stale generator) = %v, %v; want false", upToDate, err)
+	}
+	if _, err := Generate(testInputs(), out); err != nil {
+		t.Fatal(err)
+	}
+
 	// Missing artifacts make the tree stale even when the digest matches.
-	index, err := readIndex(filepath.Join(out, "index.json"))
+	index, err := readIndex(indexPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,9 +254,33 @@ func TestGenerateRejectsUnparseablePackageJSON(t *testing.T) {
 	}
 }
 
+func TestGenerateRejectsDocTagTraversal(t *testing.T) {
+	for _, tag := range []string{"../../escape", "v1.4.5/../../escape", "v1.4.5-beta.1", "1.4.5"} {
+		inputs := testInputs()
+		inputs.Docs[0].Tag = tag
+		if _, err := Generate(inputs, t.TempDir()); err == nil {
+			t.Errorf("Generate() accepted docs tag %q", tag)
+		}
+	}
+}
+
 func TestGenerateRejectsUnsafeOutputDirectory(t *testing.T) {
-	if _, err := Generate(testInputs(), "/"); err == nil {
-		t.Fatal("Generate() accepted the filesystem root as an output directory")
+	for _, out := range []string{".", "..", "/", "internal/data"} {
+		if _, err := Generate(testInputs(), out); err == nil {
+			t.Errorf("Generate(out=%q) accepted an unsafe output directory", out)
+		}
+	}
+}
+
+func TestGenerateRejectsOutputDirectoriesContainingSource(t *testing.T) {
+	for _, name := range []string{"go.mod", "sources.lock.json"} {
+		out := t.TempDir()
+		if err := os.WriteFile(filepath.Join(out, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Generate(testInputs(), out); err == nil {
+			t.Errorf("Generate() accepted an output directory containing %s", name)
+		}
 	}
 }
 

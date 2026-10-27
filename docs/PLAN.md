@@ -492,6 +492,12 @@ Implementation notes from Phase C:
   not fatal. Theme-map entries that have no DTCG token are added back at load time as
   lookup tokens, so `rhds_query_tokens` can find `color-accent-base` and report its
   light/dark values.
+- The `rh-surface` palette marker (six arms) is prose, not a light/dark token, so
+  `color-surface` is absent from normalized DTCG in tokens 2.1.0 through 2.2.4. Its
+  `color-surface-*` children remain. This is intentional per the palette rule above.
+- `tools/gen-data` records a generator version in `index.json`. `make data` regenerates
+  when it changes, so generator updates never leave a stale dist tree. Use
+  `make data-force` to regenerate unconditionally.
 
 All embedded token data is normalized DTCG, produced at `@rhds/mcp` development time.
 The runtime never sees Style Dictionary output. It parses normalized DTCG with asimonim

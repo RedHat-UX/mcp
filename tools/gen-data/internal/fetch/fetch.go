@@ -30,6 +30,11 @@ const (
 	DefaultAPIBase      = "https://api.github.com"
 	DefaultCodeloadBase = "https://codeload.github.com"
 	DefaultRawBase      = "https://raw.githubusercontent.com"
+
+	// DefaultMaxDownloadBytes caps a single npm tarball or API response.
+	DefaultMaxDownloadBytes int64 = 256 << 20
+	// DefaultMaxEntryBytes caps one extracted tarball entry.
+	DefaultMaxEntryBytes int64 = 64 << 20
 )
 
 // Client fetches registry and GitHub inputs.
@@ -42,6 +47,8 @@ type Client struct {
 	CodeloadBase string
 	RawBase      string
 	Retries      int
+	// MaxDownloadBytes caps Download. Zero uses DefaultMaxDownloadBytes.
+	MaxDownloadBytes int64
 }
 
 // New returns a client with production defaults.
@@ -50,12 +57,13 @@ func New() *Client {
 		HTTP: &http.Client{
 			Timeout: 5 * time.Minute,
 		},
-		UserAgent:    "rhds-mcp-gen-data/1.0",
-		RegistryBase: DefaultRegistryBase,
-		APIBase:      DefaultAPIBase,
-		CodeloadBase: DefaultCodeloadBase,
-		RawBase:      DefaultRawBase,
-		Retries:      3,
+		UserAgent:        "rhds-mcp-gen-data/1.0",
+		RegistryBase:     DefaultRegistryBase,
+		APIBase:          DefaultAPIBase,
+		CodeloadBase:     DefaultCodeloadBase,
+		RawBase:          DefaultRawBase,
+		Retries:          3,
+		MaxDownloadBytes: DefaultMaxDownloadBytes,
 	}
 }
 
@@ -105,14 +113,21 @@ func (c *Client) Download(ctx context.Context, endpoint, integrity string) ([]by
 		return nil, err
 	}
 	defer func() { _ = body.Close() }()
-	data, err := io.ReadAll(body)
+	data, err := readLimited(body, c.maxDownloadBytes())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s: %w", endpoint, err)
 	}
 	if err := VerifyIntegrity(data, integrity); err != nil {
 		return nil, fmt.Errorf("%s: %w", endpoint, err)
 	}
 	return data, nil
+}
+
+func (c *Client) maxDownloadBytes() int64 {
+	if c.MaxDownloadBytes > 0 {
+		return c.MaxDownloadBytes
+	}
+	return DefaultMaxDownloadBytes
 }
 
 // Open downloads a URL and returns the response body. The caller closes it.
@@ -153,19 +168,24 @@ func equalBytes(a, b []byte) bool {
 // ExtractTarGz reads a gzipped tarball, strips prefix, and returns the entries
 // accepted by selectFunc. Keys are the paths after the prefix.
 func ExtractTarGz(reader io.Reader, prefix string, selectFunc func(string) bool) (map[string][]byte, error) {
+	return ExtractTarGzLimited(reader, prefix, selectFunc, DefaultMaxEntryBytes)
+}
+
+// ExtractTarGzLimited is ExtractTarGz with an explicit per-entry byte cap.
+func ExtractTarGzLimited(reader io.Reader, prefix string, selectFunc func(string) bool, maxEntryBytes int64) (map[string][]byte, error) {
 	return extractTarGz(reader, func(name string) string {
 		return path.Clean(strings.TrimPrefix(name, prefix))
-	}, selectFunc)
+	}, selectFunc, maxEntryBytes)
 }
 
 // ExtractTarGzTree reads a gzipped tarball and strips its top-level directory.
 // GitHub and codeload archives wrap everything in one component whose name
 // depends on the ref, so callers cannot always know the prefix in advance.
 func ExtractTarGzTree(reader io.Reader, selectFunc func(string) bool) (map[string][]byte, error) {
-	return extractTarGz(reader, stripFirstComponent, selectFunc)
+	return extractTarGz(reader, stripFirstComponent, selectFunc, DefaultMaxEntryBytes)
 }
 
-func extractTarGz(reader io.Reader, transform func(string) string, selectFunc func(string) bool) (map[string][]byte, error) {
+func extractTarGz(reader io.Reader, transform func(string) string, selectFunc func(string) bool, maxEntryBytes int64) (map[string][]byte, error) {
 	result := make(map[string][]byte)
 	gz, err := gzip.NewReader(reader)
 	if err != nil {
@@ -184,14 +204,21 @@ func extractTarGz(reader io.Reader, transform func(string) string, selectFunc fu
 		if header.Typeflag != tar.TypeReg {
 			continue
 		}
+		if path.IsAbs(header.Name) {
+			continue
+		}
+		cleanedName := path.Clean(header.Name)
+		if cleanedName == ".." || strings.HasPrefix(cleanedName, "../") {
+			continue
+		}
 		name := transform(header.Name)
-		if name == "." || name == "" || strings.HasPrefix(name, "../") {
+		if name == "." || name == "" || path.IsAbs(name) || strings.HasPrefix(name, "../") {
 			continue
 		}
 		if selectFunc != nil && !selectFunc(name) {
 			continue
 		}
-		data, err := io.ReadAll(tr)
+		data, err := readLimited(tr, maxEntryBytes)
 		if err != nil {
 			return nil, fmt.Errorf("reading %s: %w", name, err)
 		}
@@ -391,4 +418,18 @@ func TokenFromEnvironment() string {
 func decodeJSON(reader io.Reader, value any) error {
 	decoder := json.NewDecoder(reader)
 	return decoder.Decode(value)
+}
+
+func readLimited(reader io.Reader, limit int64) ([]byte, error) {
+	if limit <= 0 {
+		return io.ReadAll(reader)
+	}
+	data, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("content exceeds the %d byte limit", limit)
+	}
+	return data, nil
 }

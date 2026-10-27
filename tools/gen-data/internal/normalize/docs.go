@@ -4,6 +4,9 @@
 package normalize
 
 import (
+	"errors"
+	"io"
+	"strconv"
 	"strings"
 
 	"golang.org/x/net/html"
@@ -49,11 +52,26 @@ func ProcessMarkdown(input []byte, source string) MarkdownResult {
 	}
 
 	processed := make([]string, 0, len(body))
+	prose := make([]string, 0, len(body))
+	htmlTagOpen := false
+	flushProse := func() {
+		if len(prose) == 0 {
+			return
+		}
+		joined := strings.Join(collapseBlankLines(prose), "\n")
+		protected, spans := protectInlineCode(joined)
+		protected = stripHTMLImages(protected)
+		processed = append(processed, strings.Split(restoreInlineCode(protected, spans), "\n")...)
+		prose = prose[:0]
+		htmlTagOpen = false
+	}
+
 	fence := ""
 	htmlCodeDepth := 0
 	for _, line := range body {
 		trimmed := strings.TrimLeft(line, " \t")
 		if fence != "" {
+			flushProse()
 			processed = append(processed, line)
 			if strings.HasPrefix(trimmed, fence) {
 				fence = ""
@@ -61,15 +79,18 @@ func ProcessMarkdown(input []byte, source string) MarkdownResult {
 			continue
 		}
 		if marker := fenceMarker(trimmed); marker != "" {
+			flushProse()
 			fence = marker
 			processed = append(processed, line)
 			continue
 		}
-		if isIndentedCode(line) {
+		if !htmlTagOpen && isIndentedCode(line) {
+			flushProse()
 			processed = append(processed, line)
 			continue
 		}
-		if htmlCodeDepth > 0 || opensHTMLCode(line) {
+		if htmlCodeDepth > 0 || startsHTMLCodeBlock(line) {
+			flushProse()
 			processed = append(processed, line)
 			htmlCodeDepth += htmlCodeDelta(line)
 			if htmlCodeDepth < 0 {
@@ -88,17 +109,19 @@ func ProcessMarkdown(input []byte, source string) MarkdownResult {
 		rewritten, changed := mapOutsideInlineCode(line, func(segment string) string {
 			segment, found := stripMarkdownImages(segment)
 			removed = removed || found
-			return stripHTMLImages(segment)
+			return segment
 		})
 		removed = removed || changed
 		if removed && strings.TrimSpace(rewritten) == "" {
 			// An image-only line is dropped entirely.
 			continue
 		}
-		processed = append(processed, rewritten)
+		prose = append(prose, rewritten)
+		htmlTagOpen = tagOpenAfter(rewritten, htmlTagOpen)
 	}
+	flushProse()
 
-	content := collapseBlankLines(strings.Join(processed, "\n"))
+	content := strings.Join(processed, "\n")
 	content = strings.TrimLeft(content, "\n")
 	content = strings.TrimRight(content, "\n")
 	if content != "" {
@@ -120,6 +143,113 @@ func fenceMarker(line string) string {
 	return ""
 }
 
+const inlineCodePlaceholderPrefix = "\x00rhds-inline-code-"
+
+// protectInlineCode replaces Markdown code spans with placeholders so the
+// HTML tokenizer does not treat `<img>` inside them as markup.
+func protectInlineCode(text string) (string, []string) {
+	var builder strings.Builder
+	builder.Grow(len(text))
+	spans := make([]string, 0)
+	for i := 0; i < len(text); {
+		if text[i] != '`' {
+			builder.WriteByte(text[i])
+			i++
+			continue
+		}
+		run := 1
+		for i+run < len(text) && text[i+run] == '`' {
+			run++
+		}
+		closing := strings.Index(text[i+run:], strings.Repeat("`", run))
+		if closing < 0 {
+			builder.WriteString(text[i:])
+			break
+		}
+		end := i + run + closing + run
+		placeholder := inlineCodePlaceholderPrefix + strconv.Itoa(len(spans)) + "\x00"
+		spans = append(spans, text[i:end])
+		builder.WriteString(placeholder)
+		i = end
+	}
+	return builder.String(), spans
+}
+
+func restoreInlineCode(text string, spans []string) string {
+	for i, span := range spans {
+		placeholder := inlineCodePlaceholderPrefix + strconv.Itoa(i) + "\x00"
+		text = strings.ReplaceAll(text, placeholder, span)
+	}
+	return text
+}
+
+// tagOpenAfter reports whether the line leaves an HTML start tag open. It is
+// used so continuation lines of a multi-line <img> tag are treated as prose,
+// not as indented code.
+func tagOpenAfter(line string, open bool) bool {
+	index := 0
+	for index < len(line) {
+		if !open {
+			offset := strings.IndexByte(line[index:], '<')
+			if offset < 0 {
+				return false
+			}
+			position := index + offset
+			if position+1 >= len(line) {
+				return true
+			}
+			next := line[position+1]
+			if (next < 'a' || next > 'z') && (next < 'A' || next > 'Z') &&
+				next != '/' && next != '!' && next != '?' {
+				index = position + 1
+				continue
+			}
+			open = true
+			index = position + 1
+			continue
+		}
+
+		quote := byte(0)
+		for ; index < len(line); index++ {
+			c := line[index]
+			if quote != 0 {
+				if c == quote {
+					quote = 0
+				}
+				continue
+			}
+			switch c {
+			case '\'', '"':
+				quote = c
+			case '>':
+				open = false
+				index++
+			}
+			if !open {
+				break
+			}
+		}
+		if index >= len(line) {
+			return open
+		}
+	}
+	return open
+}
+
+// collapseBlankLines collapses runs of blank lines in prose only. Code blocks
+// are never passed through it.
+func collapseBlankLines(lines []string) []string {
+	result := make([]string, 0, len(lines))
+	previousBlank := false
+	for _, line := range lines {
+		if line == "" && previousBlank {
+			continue
+		}
+		result = append(result, line)
+		previousBlank = line == ""
+	}
+	return result
+}
 func isIndentedCode(line string) bool {
 	if !strings.HasPrefix(line, "    ") && !strings.HasPrefix(line, "\t") {
 		return false
@@ -130,17 +260,32 @@ func isIndentedCode(line string) bool {
 	return !strings.HasPrefix(trimmed, "<")
 }
 
-// opensHTMLCode reports whether a line starts an HTML block whose contents are
-// a code sample rather than prose. Images inside these blocks are examples,
-// not asset references.
-func opensHTMLCode(line string) bool {
-	lower := strings.ToLower(line)
-	for _, tag := range []string{"<rh-code-block", "<pre", "<code", "<script"} {
-		if strings.Contains(lower, tag) {
+// startsHTMLCodeBlock reports whether a line begins an HTML block whose
+// contents are a code sample. Requiring the tag at the start of the line
+// avoids treating prose mentions of `<code>` or `<script>` as sticky blocks.
+func startsHTMLCodeBlock(line string) bool {
+	trimmed := strings.ToLower(strings.TrimLeft(line, " \t"))
+	for _, tag := range []string{"rh-code-block", "pre", "script", "code"} {
+		if hasTagPrefix(trimmed, "<"+tag) {
 			return true
 		}
 	}
 	return false
+}
+
+func hasTagPrefix(line, tag string) bool {
+	if !strings.HasPrefix(line, tag) {
+		return false
+	}
+	if len(line) == len(tag) {
+		return true
+	}
+	switch line[len(tag)] {
+	case ' ', '\t', '>', '/', '\n':
+		return true
+	default:
+		return false
+	}
 }
 
 func htmlCodeDelta(line string) int {
@@ -270,6 +415,11 @@ func stripHTMLImages(line string) string {
 	for {
 		tokenType := tokenizer.Next()
 		if tokenType == html.ErrorToken {
+			if len(tokenizer.Raw()) > 0 || !errors.Is(tokenizer.Err(), io.EOF) {
+				// Malformed markup: leave the line untouched rather than
+				// truncating everything after the error.
+				return line
+			}
 			break
 		}
 		token := tokenizer.Token()
@@ -290,13 +440,6 @@ func stripHTMLImages(line string) string {
 		builder.Write(tokenizer.Raw())
 	}
 	return builder.String()
-}
-
-func collapseBlankLines(text string) string {
-	for strings.Contains(text, "\n\n\n") {
-		text = strings.ReplaceAll(text, "\n\n\n", "\n\n")
-	}
-	return text
 }
 
 func unquote(value string) string {

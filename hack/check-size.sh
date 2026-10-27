@@ -33,3 +33,15 @@ if command -v npm >/dev/null 2>&1 && [ -f npm/package.json ]; then
 		exit 1
 	fi
 fi
+
+# Phase F produces per-platform packages under dist/npm. Check them when the
+# build pipeline has staged them.
+for tarball in dist/npm/*.tgz; do
+	[ -e "$tarball" ] || continue
+	tarball_size=$(wc -c <"$tarball" | tr -d ' ')
+	printf 'size-check: platform tarball %s is %s bytes\n' "$tarball" "$tarball_size"
+	if [ "$tarball_size" -gt "$TARBALL_LIMIT" ]; then
+		echo "size-check: platform tarball $tarball exceeds the 16 MB limit" >&2
+		exit 1
+	fi
+done

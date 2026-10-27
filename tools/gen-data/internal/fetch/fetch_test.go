@@ -56,6 +56,46 @@ func makeTarGz(t *testing.T, files map[string]string) []byte {
 	return buf.Bytes()
 }
 
+type tarEntry struct {
+	name     string
+	content  string
+	linkname string
+	typeflag byte
+}
+
+func makeTarGzEntries(t *testing.T, entries []tarEntry) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for _, entry := range entries {
+		header := &tar.Header{
+			Name:     entry.name,
+			Mode:     0o644,
+			Typeflag: entry.typeflag,
+			Linkname: entry.linkname,
+		}
+		if entry.typeflag == tar.TypeReg {
+			header.Size = int64(len(entry.content))
+		}
+		if err := tw.WriteHeader(header); err != nil {
+			t.Fatal(err)
+		}
+		if entry.typeflag == tar.TypeReg {
+			if _, err := tw.Write([]byte(entry.content)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
 func integrityOf(data []byte) string {
 	sum := sha512.Sum512(data)
 	return "sha512-" + base64.StdEncoding.EncodeToString(sum[:])
@@ -94,6 +134,43 @@ func TestVerifyIntegrity(t *testing.T) {
 	sum1 := hex.EncodeToString([]byte{0x01})
 	if err := VerifyIntegrity(data, sum1); err == nil {
 		t.Fatal("VerifyIntegrity() accepted a non-sha512 integrity string")
+	}
+}
+
+func TestExtractTarGzRejectsTraversalAndSymlinks(t *testing.T) {
+	archive := makeTarGzEntries(t, []tarEntry{
+		{name: "package/../../evil.txt", content: "evil", typeflag: tar.TypeReg},
+		{name: "/etc/passwd", content: "absolute", typeflag: tar.TypeReg},
+		{name: "package/link", typeflag: tar.TypeSymlink, linkname: "/etc/passwd"},
+		{name: "package/ok.txt", content: "okay", typeflag: tar.TypeReg},
+	})
+	entries, err := ExtractTarGz(bytes.NewReader(archive), "package/", nil)
+	if err != nil {
+		t.Fatalf("ExtractTarGz() = %v", err)
+	}
+	if len(entries) != 1 || string(entries["ok.txt"]) != "okay" {
+		t.Fatalf("entries = %v, want only ok.txt", entries)
+	}
+}
+
+func TestExtractTarGzEntryLimit(t *testing.T) {
+	archive := makeTarGz(t, map[string]string{"package/big.txt": "too large"})
+	if _, err := ExtractTarGzLimited(bytes.NewReader(archive), "package/", nil, 2); err == nil {
+		t.Fatal("ExtractTarGzLimited() accepted an entry over the cap")
+	}
+}
+
+func TestDownloadLimit(t *testing.T) {
+	data := []byte("downloaded tarball")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(data)
+	}))
+	defer server.Close()
+
+	client := New()
+	client.MaxDownloadBytes = 4
+	if _, err := client.Download(context.Background(), server.URL, integrityOf(data)); err == nil {
+		t.Fatal("Download() accepted a response over the cap")
 	}
 }
 

@@ -119,6 +119,73 @@ func TestProcessMarkdownPreservesInlineCodeAndHTMLCodeBlocks(t *testing.T) {
 	}
 }
 
+func TestProcessMarkdownProseCodeMentionsDoNotStick(t *testing.T) {
+	input := "# Guide\n\n" +
+		"Images use the `<code>`, `<pre>`, `<script>`, and `<rh-code-block>` elements.\n" +
+		"Use <rh-code-block> for examples in prose.\n\n" +
+		"### Syntax highlighting\n\n" +
+		"![drop](later.png)\n\n" +
+		"    ![keep](indented.png)\n"
+	result := ProcessMarkdown([]byte(input), "src")
+	content := string(result.Content)
+	if result.Title != "Guide" {
+		t.Errorf("Title = %q, want Guide", result.Title)
+	}
+	if strings.Contains(content, "later.png") {
+		t.Error("image after prose code mentions was not removed")
+	}
+	if !strings.Contains(content, "![keep](indented.png)") {
+		t.Error("indented code after prose code mentions was modified")
+	}
+}
+
+func TestProcessMarkdownCodeBlockThenImage(t *testing.T) {
+	input := "<rh-code-block>\n  <script type=\"text/html\"><img src=\"sample.svg\" alt=\"sample\"></script>\n</rh-code-block>\n\n![drop](after.png)\n"
+	result := ProcessMarkdown([]byte(input), "src")
+	content := string(result.Content)
+	if !strings.Contains(content, `<img src="sample.svg" alt="sample">`) {
+		t.Error("HTML code block was modified")
+	}
+	if strings.Contains(content, "after.png") {
+		t.Error("image after a closed HTML code block was not removed")
+	}
+}
+
+func TestProcessMarkdownPreservesBlankLinesInCode(t *testing.T) {
+	input := "# X\n\ntext\n\n\nmore\n\n```md\na\n\n\nb\n```\n"
+	result := ProcessMarkdown([]byte(input), "src")
+	content := string(result.Content)
+	if strings.Contains(content, "text\n\n\nmore") {
+		t.Error("blank lines outside code were not collapsed")
+	}
+	if !strings.Contains(content, "a\n\n\nb") {
+		t.Error("blank lines inside a fence were collapsed")
+	}
+}
+
+func TestProcessMarkdownRemovesMultilineHTMLImages(t *testing.T) {
+	input := "# X\n\n<uxdot-example>\n  <img src=\"samples.svg\"\n       alt=\"Form samples\"\n       width=\"736\">\n</uxdot-example>\n\ntext\n"
+	result := ProcessMarkdown([]byte(input), "src")
+	content := string(result.Content)
+	if strings.Contains(content, "samples.svg") {
+		t.Error("multi-line HTML image was not removed")
+	}
+	if !strings.Contains(content, "Form samples") {
+		t.Error("multi-line HTML image alt text was not kept")
+	}
+	if !strings.Contains(content, "text") {
+		t.Error("text after the image was removed")
+	}
+}
+
+func TestProcessMarkdownMalformedImageDoesNotTruncate(t *testing.T) {
+	input := "# X\n\nbefore <img src=\"x.png\" alt=\"a\" after\n"
+	result := ProcessMarkdown([]byte(input), "src")
+	if !strings.Contains(string(result.Content), "after") {
+		t.Error("malformed img tag truncated the rest of the line")
+	}
+}
+
 func TestProcessMarkdownDropsImageOnlyLines(t *testing.T) {
 	result := ProcessMarkdown([]byte("# X\n\n![](logo.svg)\n\ntext\n"), "src")
 	content := string(result.Content)

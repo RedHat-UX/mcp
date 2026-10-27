@@ -266,6 +266,57 @@ func TestValidateRejectsMissingFields(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsPrereleasesAndBadDocTags(t *testing.T) {
+	base := func() *Lock {
+		return &Lock{
+			SchemaVersion: SchemaVersion,
+			Packages: []Package{{
+				Name: "@rhds/elements",
+				ID:   "elements",
+				Versions: []PackageVersion{{
+					Version:   "5.0.0",
+					Integrity: "sha512-abc",
+					Tarball:   "https://example.test/x.tgz",
+				}},
+			}},
+			Docs: Docs{
+				Repo: "RedHat-UX/red-hat-design-system",
+				Snapshots: []DocSnapshot{{
+					Tag:    "v5.0.0",
+					Commit: "d2321d5a1feb5b677682305dee2c073422eda67c",
+				}},
+			},
+		}
+	}
+	if err := base().Validate(); err != nil {
+		t.Fatalf("baseline Validate() = %v", err)
+	}
+
+	l := base()
+	l.Packages[0].Versions[0].Version = "5.1.0-beta.1"
+	if err := l.Validate(); err == nil {
+		t.Error("Validate() accepted a prerelease package version")
+	}
+
+	for _, tag := range []string{
+		"../../escape",
+		"v1.4.5/../../escape",
+		"v1.4.5-beta.1",
+		"1.4.5",
+		"v1.4",
+		`v1.4.5\..\escape`,
+	} {
+		l := base()
+		l.Docs.Snapshots[0].Tag = tag
+		if err := l.Validate(); err == nil {
+			t.Errorf("Validate() accepted docs tag %q", tag)
+		}
+	}
+	if !ValidDocTag("v1.4.5") {
+		t.Error("ValidDocTag(v1.4.5) = false")
+	}
+}
+
 func TestCanonicalJSONIsSorted(t *testing.T) {
 	l := &Lock{
 		SchemaVersion: SchemaVersion,

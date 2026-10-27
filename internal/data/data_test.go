@@ -325,3 +325,92 @@ func TestOpenRejectsUnsupportedSchema(t *testing.T) {
 		t.Fatalf("Open() error = %v, want ErrInvalidIndex", err)
 	}
 }
+
+func TestOpenRejectsDuplicateArtifactKeys(t *testing.T) {
+	fsys := fstest.MapFS{IndexPath: &fstest.MapFile{Data: indexJSON(t,
+		Artifact{Package: "elements", Version: "5.0.0", Kind: "manifest", Path: "a"},
+		Artifact{Package: "elements", Version: "5.0.0", Kind: "manifest", Path: "b"},
+	)}}
+	if _, err := Open(fsys); !errors.Is(err, ErrInvalidIndex) {
+		t.Fatalf("Open() error = %v, want ErrInvalidIndex", err)
+	}
+}
+
+// countingFS records how many times each artifact is opened.
+type countingFS struct {
+	fstest.MapFS
+	opens map[string]int
+}
+
+func (f *countingFS) Open(name string) (fs.File, error) {
+	if f.opens == nil {
+		f.opens = make(map[string]int)
+	}
+	f.opens[name]++
+	return f.MapFS.Open(name)
+}
+
+// ReadFile is promoted from fstest.MapFS and would bypass Open, so count it
+// separately.
+func (f *countingFS) ReadFile(name string) ([]byte, error) {
+	if f.opens == nil {
+		f.opens = make(map[string]int)
+	}
+	f.opens[name]++
+	return f.MapFS.ReadFile(name)
+}
+
+func TestReadCachesDecompressedArtifact(t *testing.T) {
+	payload := []byte("cached payload")
+	compressed := writeGzip(t, payload)
+	sum := sha256.Sum256(compressed)
+	fsys := &countingFS{MapFS: fstest.MapFS{
+		IndexPath: &fstest.MapFile{Data: indexJSON(t, Artifact{
+			Package: "tokens",
+			Version: "3.2.0",
+			Kind:    "tokens",
+			Path:    "tokens/3.2.0/rhds.tokens.json.gz",
+			SHA256:  hex.EncodeToString(sum[:]),
+			Bytes:   int64(len(compressed)),
+		})},
+		"tokens/3.2.0/rhds.tokens.json.gz": &fstest.MapFile{Data: compressed},
+	}}
+
+	store, err := Open(fsys)
+	if err != nil {
+		t.Fatalf("Open() = %v", err)
+	}
+	if _, err := store.Read("tokens", "3.2.0", "tokens"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Read("tokens", "3.2.0", "tokens"); err != nil {
+		t.Fatal(err)
+	}
+	if got := fsys.opens["tokens/3.2.0/rhds.tokens.json.gz"]; got != 1 {
+		t.Fatalf("artifact was opened %d times, want 1 (cache miss)", got)
+	}
+}
+
+func TestTokensForElements(t *testing.T) {
+	store, err := Open(fstest.MapFS{IndexPath: &fstest.MapFile{Data: indexJSONWithMap(t,
+		map[string]string{"5.0.0": "3.2.0"})}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := store.Index().TokensForElements("5.0.0")
+	if !ok || got != "3.2.0" {
+		t.Fatalf("TokensForElements() = %q, %v", got, ok)
+	}
+	if _, ok := store.Index().TokensForElements("9.9.9"); ok {
+		t.Fatal("TokensForElements() found an unknown version")
+	}
+}
+
+func indexJSONWithMap(t *testing.T, mapping map[string]string) []byte {
+	t.Helper()
+	encoded, err := json.Marshal(Index{SchemaVersion: SchemaVersion, ElementsTokens: mapping})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}

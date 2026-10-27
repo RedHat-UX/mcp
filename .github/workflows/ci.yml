@@ -47,6 +47,27 @@ jobs:
         with:
           version: v2.15.0
 
+  real-data:
+    name: Real artifact tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Generate pinned data
+        run: make data
+      - name: Run real artifact tests and reject skips
+        run: |
+          set -o pipefail
+          go test ./internal/data ./internal/tools ./cmd/rhds-mcp -count=1 -v | tee /tmp/real-tests.log
+          if grep -q -- '--- SKIP' /tmp/real-tests.log; then
+            echo "real artifact tests skipped; generated data was not available" >&2
+            exit 1
+          fi
+
   actionlint:
     name: Lint workflows
     runs-on: ubuntu-latest

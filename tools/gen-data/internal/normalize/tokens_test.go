@@ -179,7 +179,15 @@ func TestNormalizeEachMajor(t *testing.T) {
 
 			// light-dark composites are excluded from DTCG and appear in the
 			// theme map instead.
-			if major == "3.x" {
+			switch major {
+			case "2.x":
+				if got := result.Themes["light"]["--rh-color-accent-base"]; got != "#0066cc" {
+					t.Errorf("2.x light theme color-accent-base = %q, want #0066cc", got)
+				}
+				if got := result.Themes["dark"]["--rh-color-accent-base"]; got != "#92c5f9" {
+					t.Errorf("2.x dark theme color-accent-base = %q, want #92c5f9", got)
+				}
+			case "3.x":
 				for _, tok := range tokens {
 					if tok.Name == "color-accent-base" {
 						t.Error("light-dark composite color-accent-base leaked into DTCG")
@@ -338,6 +346,55 @@ func TestNormalizeShadowValue(t *testing.T) {
 	}
 	if value["color"] != "#15151533" {
 		t.Errorf("color = %#v, want #15151533", value["color"])
+	}
+}
+
+func hasToken(tokens []*token.Token, name string) bool {
+	for _, tok := range tokens {
+		if tok.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func TestSurfacePaletteIsNotAToken(t *testing.T) {
+	for _, major := range []string{"1.x", "2.x", "3.x"} {
+		t.Run(major, func(t *testing.T) {
+			result, err := NormalizeTokens(loadFixture(t, major))
+			if err != nil {
+				t.Fatal(err)
+			}
+			tokens := parseNormalized(t, result.Document)
+			// rh-surface palettes are prose, not a light/dark token. The
+			// six-arm marker is dropped from DTCG by design.
+			if hasToken(tokens, "color-surface") {
+				t.Error("color-surface palette leaked into DTCG")
+			}
+			if !hasToken(tokens, "color-surface-lightest") && !hasToken(tokens, "color-surface-light") {
+				t.Error("surface palette children are missing")
+			}
+		})
+	}
+}
+
+func TestCanonicalCubicBezierStringRequiresFourValues(t *testing.T) {
+	bad := []byte(`{"animation":{"timing":{"$type":"cubicBezier","$value":"cubic-bezier(0.1, 0.2, 0.3)"}}}`)
+	if _, err := NormalizeTokens(bad); err == nil {
+		t.Fatal("NormalizeTokens() accepted a three-value cubic-bezier()")
+	}
+	good := []byte(`{"animation":{"timing":{"$type":"cubicBezier","$value":"cubic-bezier(0.1, 0.2, 0.3, 0.4)"}}}`)
+	result, err := NormalizeTokens(good)
+	if err != nil {
+		t.Fatalf("NormalizeTokens() = %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(result.Document, &doc); err != nil {
+		t.Fatal(err)
+	}
+	value := doc["animation"].(map[string]any)["timing"].(map[string]any)["$value"].([]any)
+	if len(value) != 4 {
+		t.Fatalf("cubicBezier value = %v, want four numbers", value)
 	}
 }
 

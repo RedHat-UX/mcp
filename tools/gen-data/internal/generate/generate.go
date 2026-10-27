@@ -45,6 +45,10 @@ const (
 	KindChangelog = "changelog"
 )
 
+// GeneratorVersion changes whenever generation or normalization changes in a
+// way that requires regenerating an existing dist tree.
+const GeneratorVersion = 1
+
 // Inputs is everything generation needs. Network fetching builds this value;
 // tests construct it from fixtures.
 type Inputs struct {
@@ -121,8 +125,8 @@ func Generate(inputs *Inputs, outDir string) (*data.Index, error) {
 	if err != nil {
 		return nil, err
 	}
-	if absoluteOut == string(filepath.Separator) || filepath.Dir(absoluteOut) == absoluteOut {
-		return nil, fmt.Errorf("generate: refusing to clear unsafe output directory %q", outDir)
+	if err := validateOutputDir(absoluteOut); err != nil {
+		return nil, err
 	}
 	if err := os.RemoveAll(outDir); err != nil {
 		return nil, fmt.Errorf("clearing %s: %w", outDir, err)
@@ -137,9 +141,10 @@ func Generate(inputs *Inputs, outDir string) (*data.Index, error) {
 	}
 
 	index := &data.Index{
-		SchemaVersion:  data.SchemaVersion,
-		LockSHA256:     inputs.LockDigest,
-		ElementsTokens: make(map[string]string),
+		SchemaVersion:    data.SchemaVersion,
+		GeneratorVersion: GeneratorVersion,
+		LockSHA256:       inputs.LockDigest,
+		ElementsTokens:   make(map[string]string),
 	}
 	tokensVersions := sortedKeys(inputs.Tokens)
 
@@ -162,6 +167,64 @@ func Generate(inputs *Inputs, outDir string) (*data.Index, error) {
 		return nil, err
 	}
 	return index, nil
+}
+
+// validateOutputDir refuses paths whose removal could destroy the checkout or
+// the pinned lock. Generated data belongs under internal/data/dist, or in a
+// temporary directory for tests.
+func validateOutputDir(absolute string) error {
+	resolved, err := resolveExisting(absolute)
+	if err != nil {
+		return err
+	}
+	if absolute == string(filepath.Separator) || filepath.Dir(absolute) == absolute {
+		return fmt.Errorf("generate: refusing to clear filesystem root")
+	}
+	if !isTempPath(resolved) && !isInternalDataDist(resolved) {
+		return fmt.Errorf(
+			"generate: output %q is not under internal/data/dist or a temporary directory",
+			absolute)
+	}
+	for _, name := range []string{"go.mod", "sources.lock.json"} {
+		if _, err := os.Stat(filepath.Join(resolved, name)); err == nil {
+			return fmt.Errorf(
+				"generate: refusing to clear %q because it contains %s", absolute, name)
+		}
+	}
+	return nil
+}
+
+func isTempPath(resolved string) bool {
+	temp := filepath.Clean(os.TempDir())
+	return resolved == temp || strings.HasPrefix(resolved, temp+string(filepath.Separator))
+}
+
+func isInternalDataDist(resolved string) bool {
+	slash := filepath.ToSlash(resolved)
+	return slash == "internal/data/dist" ||
+		strings.HasSuffix(slash, "/internal/data/dist")
+}
+
+// resolveExisting resolves symlinks for the nearest existing ancestor and
+// reattaches the non-existent suffix.
+func resolveExisting(path string) (string, error) {
+	current := path
+	var suffix []string
+	for {
+		resolved, err := filepath.EvalSymlinks(current)
+		if err == nil {
+			for i := len(suffix) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, suffix[i])
+			}
+			return resolved, nil
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", err
+		}
+		suffix = append(suffix, filepath.Base(current))
+		current = parent
+	}
 }
 
 func generateElements(inputs *Inputs, tokensVersions []string, outDir string, index *data.Index) error {
@@ -301,8 +364,9 @@ func generateDocs(snapshots []DocsInput, outDir string, index *data.Index) error
 }
 
 func writeDocsSnapshot(snapshot DocsInput, outDir string, index *data.Index) error {
-	if snapshot.Tag == "" {
-		return errors.New("docs snapshot has no tag")
+	tag, err := cleanDocTag(snapshot.Tag)
+	if err != nil {
+		return err
 	}
 	sourceRepo := "RedHat-UX/red-hat-design-system"
 	records := make([]docRecord, 0, len(snapshot.Files))
@@ -313,18 +377,18 @@ func writeDocsSnapshot(snapshot DocsInput, outDir string, index *data.Index) err
 			return err
 		}
 		if seen[cleaned] {
-			return fmt.Errorf("docs snapshot %s has duplicate path %s", snapshot.Tag, cleaned)
+			return fmt.Errorf("docs snapshot %s has duplicate path %s", tag, cleaned)
 		}
 		seen[cleaned] = true
 		source := file.Source
 		if source == "" {
-			source = sourceRepo + "@" + snapshot.Tag + " " + cleaned
+			source = sourceRepo + "@" + tag + " " + cleaned
 		}
 		processed := normalize.ProcessMarkdown(file.Content, source)
 		kind := "doc:" + cleaned
-		artifactPath := path.Join(PackageDocs, snapshot.Tag, cleaned+".gz")
+		artifactPath := path.Join(PackageDocs, tag, cleaned+".gz")
 		artifact, err := writeGzipArtifact(
-			outDir, artifactPath, PackageDocs, snapshot.Tag, kind, processed.Content)
+			outDir, artifactPath, PackageDocs, tag, kind, processed.Content)
 		if err != nil {
 			return err
 		}
@@ -345,8 +409,8 @@ func writeDocsSnapshot(snapshot DocsInput, outDir string, index *data.Index) err
 	}
 	artifact, err := writeGzipArtifact(
 		outDir,
-		path.Join(PackageDocs, snapshot.Tag, "index.json.gz"),
-		PackageDocs, snapshot.Tag, KindDocs, manifest)
+		path.Join(PackageDocs, tag, "index.json.gz"),
+		PackageDocs, tag, KindDocs, manifest)
 	if err != nil {
 		return err
 	}
@@ -362,7 +426,7 @@ func writeDocsSnapshot(snapshot DocsInput, outDir string, index *data.Index) err
 			content := strings.ReplaceAll(string(pattern.Content), "\r\n", "\n")
 			patterns = append(patterns, patternRecord{
 				Path:   cleaned,
-				Source: sourceRepo + "@" + snapshot.Tag + " " + cleaned,
+				Source: sourceRepo + "@" + tag + " " + cleaned,
 				HTML:   content,
 			})
 		}
@@ -373,8 +437,8 @@ func writeDocsSnapshot(snapshot DocsInput, outDir string, index *data.Index) err
 		}
 		artifact, err := writeGzipArtifact(
 			outDir,
-			path.Join(PackageDocs, snapshot.Tag, "patterns.json.gz"),
-			PackageDocs, snapshot.Tag, KindPatterns, encoded)
+			path.Join(PackageDocs, tag, "patterns.json.gz"),
+			PackageDocs, tag, KindPatterns, encoded)
 		if err != nil {
 			return err
 		}
@@ -453,7 +517,8 @@ func IsUpToDate(outDir, lockDigest string) (bool, error) {
 		}
 		return false, nil
 	}
-	if index.SchemaVersion != data.SchemaVersion || index.LockSHA256 != lockDigest {
+	if index.SchemaVersion != data.SchemaVersion || index.LockSHA256 != lockDigest ||
+		index.GeneratorVersion != GeneratorVersion {
 		return false, nil
 	}
 	for _, artifact := range index.Artifacts {
@@ -511,6 +576,20 @@ func compareVersions(a, b string) int {
 		return semver.Compare(ta, tb)
 	}
 	return strings.Compare(a, b)
+}
+
+func cleanDocTag(tag string) (string, error) {
+	if !lock.ValidDocTag(tag) {
+		return "", fmt.Errorf("invalid docs tag %q", tag)
+	}
+	cleaned, err := cleanRelative(tag)
+	if err != nil {
+		return "", err
+	}
+	if cleaned != tag {
+		return "", fmt.Errorf("invalid docs tag %q", tag)
+	}
+	return cleaned, nil
 }
 
 func cleanRelative(value string) (string, error) {
