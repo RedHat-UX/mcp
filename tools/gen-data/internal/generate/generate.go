@@ -26,6 +26,7 @@ import (
 	"golang.org/x/mod/semver"
 
 	"github.com/redhat-ux/mcp/internal/data"
+	"github.com/redhat-ux/mcp/internal/markdown"
 	"github.com/redhat-ux/mcp/tools/gen-data/internal/lock"
 	"github.com/redhat-ux/mcp/tools/gen-data/internal/normalize"
 )
@@ -37,12 +38,13 @@ const (
 	PackageDocs         = "docs"
 	PackageReleaseNotes = "release-notes"
 
-	KindManifest  = "manifest"
-	KindTokens    = "tokens"
-	KindThemes    = "themes"
-	KindDocs      = "docs"
-	KindPatterns  = "patterns"
-	KindChangelog = "changelog"
+	KindManifest     = "manifest"
+	KindTokens       = "tokens"
+	KindThemes       = "themes"
+	KindDocs         = "docs"
+	KindPatterns     = "patterns"
+	KindChangelog    = "changelog"
+	KindReleaseNotes = "release-notes"
 )
 
 // GeneratorVersion changes whenever generation or normalization changes in a
@@ -150,7 +152,7 @@ func Generate(inputs *Inputs, outDir string) (*data.Index, error) {
 	if err := generateTokens(inputs, tokensVersions, outDir, index); err != nil {
 		return nil, err
 	}
-	if err := generateDocs(inputs.Docs, outDir, index); err != nil {
+	if err := generateDocs(inputs, outDir, index); err != nil {
 		return nil, err
 	}
 
@@ -436,8 +438,8 @@ func generateTokens(inputs *Inputs, versions []string, outDir string, index *dat
 	return nil
 }
 
-func generateDocs(snapshots []DocsInput, outDir string, index *data.Index) error {
-	sorted := append([]DocsInput(nil), snapshots...)
+func generateDocs(inputs *Inputs, outDir string, index *data.Index) error {
+	sorted := append([]DocsInput(nil), inputs.Docs...)
 	sort.Slice(sorted, func(i, j int) bool {
 		return compareVersions(sorted[i].Tag, sorted[j].Tag) < 0
 	})
@@ -463,6 +465,27 @@ func generateDocs(snapshots []DocsInput, outDir string, index *data.Index) error
 			return err
 		}
 		index.Artifacts = append(index.Artifacts, artifact)
+
+		// One release-note artifact per bundled elements version. The
+		// combined changelog stays available as the raw source.
+		seen := make(map[string]bool)
+		for _, section := range markdown.Sections(processed.Content, 2) {
+			version := strings.TrimSpace(section.Heading)
+			if _, bundled := inputs.Elements[version]; !bundled || seen[version] {
+				continue
+			}
+			seen[version] = true
+			content := "<!-- source: " + source + " -->\n\n## " + version + "\n\n" + section.Body + "\n"
+			artifact, err := writeGzipArtifact(
+				outDir,
+				path.Join(PackageReleaseNotes, version, "CHANGELOG.md.gz"),
+				PackageReleaseNotes, version, KindReleaseNotes, []byte(content),
+			)
+			if err != nil {
+				return err
+			}
+			index.Artifacts = append(index.Artifacts, artifact)
+		}
 	}
 	return nil
 }

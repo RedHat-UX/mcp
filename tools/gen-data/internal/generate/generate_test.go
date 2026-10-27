@@ -76,7 +76,11 @@ func testInputs() *Inputs {
 				Path:    "docs/patterns/button/patterns/basic.html",
 				Content: []byte("<rh-button>Click</rh-button>\n"),
 			}},
-			Changelog: []byte("# Changelog\n\n## 1.0.0\n\n- Initial release.\n"),
+			Changelog: []byte("# Changelog\n\n" +
+				"## 4.0.0\n\n- Not bundled.\n\n" +
+				"## 3.0.0\n\n- Removed a thing.\n\n" +
+				"## 2.0.0\n\n- Added a thing.\n\n" +
+				"## 1.0.0\n\n- Initial release.\n"),
 		}},
 	}
 }
@@ -166,6 +170,27 @@ func TestGenerateProducesIndexAndArtifacts(t *testing.T) {
 	}
 	if !bytes.Contains(changelog, []byte("Initial release")) {
 		t.Errorf("changelog = %s", changelog)
+	}
+
+	for version, want := range map[string]string{
+		"3.0.0": "Removed a thing",
+		"2.0.0": "Added a thing",
+		"1.0.0": "Initial release",
+	} {
+		notes, err := store.Read("release-notes", version, "release-notes")
+		if err != nil {
+			t.Errorf("release notes for %s: %v", version, err)
+			continue
+		}
+		if !bytes.Contains(notes, []byte(want)) {
+			t.Errorf("release notes for %s = %s, want %q", version, notes, want)
+		}
+		if !bytes.Contains(notes, []byte("<!-- source: RedHat-UX/red-hat-design-system@v1.0.0 CHANGELOG.md")) {
+			t.Errorf("release notes for %s have no source header: %s", version, notes)
+		}
+	}
+	if _, err := store.Read("release-notes", "4.0.0", "release-notes"); err == nil {
+		t.Error("generated release notes for a version that is not bundled")
 	}
 
 	docsIndex, err := store.Read("docs", "v1.0.0", "docs")

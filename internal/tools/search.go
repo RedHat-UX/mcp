@@ -54,11 +54,12 @@ type SearchHit struct {
 
 // SearchOutput is the output for rhds_search.
 type SearchOutput struct {
-	Resolved ResolvedVersion `json:"resolved"`
-	Scope    string          `json:"scope"`
-	Hits     []SearchHit     `json:"hits"`
-	Total    int             `json:"total"`
-	Error    *ToolError      `json:"error,omitempty"`
+	Resolved  ResolvedVersion `json:"resolved"`
+	Scope     string          `json:"scope"`
+	Hits      []SearchHit     `json:"hits"`
+	Total     int             `json:"total"`
+	Truncated bool            `json:"truncated"`
+	Error     *ToolError      `json:"error,omitempty"`
 }
 
 type docRecord struct {
@@ -80,7 +81,7 @@ func (s *Service) Search(ctx context.Context, input SearchInput) SearchOutput {
 	resolved, failure := s.bundledResolution(input.Version, "")
 	if failure != nil {
 		out := SearchOutput{Hits: []SearchHit{}, Error: failure}
-		fitSearch(&out, defaultResponseBudget)
+		fitSearch(&out, s.responseBudget(false))
 		return out
 	}
 	return s.search(resolved, input)
@@ -98,14 +99,14 @@ func (s *Service) searchWithEnv(
 	}
 	if failure != nil {
 		out := SearchOutput{Hits: []SearchHit{}, Error: failure}
-		fitSearch(&out, defaultResponseBudget)
+		fitSearch(&out, s.responseBudget(false))
 		return nil, out
 	}
 	return nil, s.search(resolved, input)
 }
 
 func (s *Service) search(resolved resolution, input SearchInput) (out SearchOutput) {
-	defer func() { fitSearch(&out, defaultResponseBudget) }()
+	defer func() { fitSearch(&out, s.responseBudget(false)) }()
 	out = SearchOutput{
 		Resolved: resolved.Resolved,
 		Hits:     []SearchHit{},
@@ -185,6 +186,7 @@ func (s *Service) search(resolved resolution, input SearchInput) (out SearchOutp
 		hits = hits[:limit]
 	}
 	out.Hits = hits
+
 	return out
 }
 

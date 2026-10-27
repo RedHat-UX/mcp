@@ -289,6 +289,12 @@ func newFieldTruncation() *fieldTruncation {
 }
 
 func (t *fieldTruncation) record(subject, field string, current, result int) {
+	t.recordUnit(subject, field, current, result, "runes")
+}
+
+// recordUnit is record with an explicit unit, so the alias-chain entry cap can
+// report entries rather than runes.
+func (t *fieldTruncation) recordUnit(subject, field string, current, result int, unit string) {
 	original, ok := t.originals[field]
 	if !ok {
 		original = current
@@ -296,7 +302,7 @@ func (t *fieldTruncation) record(subject, field string, current, result int) {
 		t.order = append(t.order, field)
 	}
 	t.notices[field] = fmt.Sprintf(
-		"%s %s truncated from %d to %d runes", subject, field, original, result)
+		"%s %s truncated from %d to %d %s", subject, field, original, result, unit)
 }
 
 func (t *fieldTruncation) list() []string {
@@ -646,54 +652,6 @@ func componentAPIResponseBytes(out ComponentAPIOutput, pending []string) int {
 	return size
 }
 
-func fitQueryTokens(out QueryTokensOutput, budget int) QueryTokensOutput {
-	out.Resolved.Warnings = sanitizeWarnings(out.Resolved.Warnings)
-	if out.Error != nil {
-		out.Error = boundError(out.Error)
-		if estimatedResponseBytes(out) > budget {
-			out.Error = responseTooLarge("the token response", budget)
-			out.Tokens = nil
-		}
-		return out
-	}
-	if estimatedResponseBytes(out) > budget {
-		out.Resolved.Warnings = summarizeWarnings(out.Resolved.Warnings)
-	}
-	for i := range out.Tokens {
-		result := &out.Tokens[i]
-		result.Name = truncateResponseText(result.Name, 300)
-		result.CSSVariable = truncateResponseText(result.CSSVariable, 300)
-		result.Value = truncateResponseText(result.Value, 500)
-		result.RawValue = truncateResponseText(result.RawValue, 500)
-		result.Description = truncateResponseText(result.Description, 500)
-		result.ThemeValue = truncateResponseText(result.ThemeValue, 300)
-		if len(result.AliasChain) > 20 {
-			result.AliasChain = result.AliasChain[:20]
-		}
-		for j := range result.AliasChain {
-			result.AliasChain[j] = truncateResponseText(result.AliasChain[j], 200)
-		}
-	}
-	trimmed := 0
-	for estimatedResponseBytes(out) > budget && len(out.Tokens) > 0 {
-		out.Tokens = out.Tokens[:len(out.Tokens)-1]
-		trimmed++
-	}
-	if trimmed > 0 {
-		out.Resolved.Warnings = sanitizeWarnings(append(out.Resolved.Warnings,
-			fmt.Sprintf("results trimmed from %d to %d to fit the response budget",
-				out.Total, len(out.Tokens))))
-	}
-	if estimatedResponseBytes(out) > budget {
-		out.Tokens = nil
-		out.Resolved.Warnings = []string{"results trimmed to fit the response budget"}
-	}
-	if estimatedResponseBytes(out) > budget {
-		out.Error = responseTooLarge("the token response", budget)
-	}
-	return out
-}
-
 func fitValidateMarkup(out ValidateMarkupOutput, budget int) ValidateMarkupOutput {
 	out.Resolved.Warnings = sanitizeWarnings(out.Resolved.Warnings)
 	out.Warnings = sanitizeWarnings(out.Warnings)
@@ -729,4 +687,358 @@ func fitValidateMarkup(out ValidateMarkupOutput, budget int) ValidateMarkupOutpu
 		out.Error = responseTooLarge("the markup validation response", budget)
 	}
 	return out
+}
+
+// responseBudget returns the NFR-03 budget for a tool call. Summary responses
+// use the 8k default; full responses may use the 32k hard cap. Tests lower
+// maxResponseBytes to exercise follow-up behavior with small fixtures.
+func (s *Service) responseBudget(full bool) int {
+	budget := defaultResponseBudget
+	if full {
+		budget = hardResponseBudget
+	}
+	if s != nil && s.maxResponseBytes > 0 && s.maxResponseBytes < budget {
+		budget = s.maxResponseBytes
+	}
+	return budget
+}
+
+// markTokenTruncation shortens the budget-controlled fields and alias chain of
+// one token row. Every shortening sets Truncated and records a notice naming
+// the field, its true original length, and the actual resulting length.
+func markTokenTruncation(result *TokenResult, state *fieldTruncation) {
+	subject := "token " + truncateResponseText(result.Name, 300)
+	fields := []struct {
+		name  string
+		value *string
+		limit int
+	}{
+		{"name", &result.Name, 300},
+		{"cssVariable", &result.CSSVariable, 300},
+		{"value", &result.Value, 500},
+		{"rawValue", &result.RawValue, 500},
+		{"description", &result.Description, 500},
+		{"themeValue", &result.ThemeValue, 300},
+	}
+	for _, field := range fields {
+		before := utf8.RuneCountInString(*field.value)
+		after := truncateResponseText(*field.value, field.limit)
+		if after == *field.value {
+			continue
+		}
+		*field.value = after
+		result.Truncated = true
+		state.record(subject, field.name, before, utf8.RuneCountInString(after))
+	}
+	if len(result.AliasChain) > 20 {
+		before := len(result.AliasChain)
+		result.AliasChain = result.AliasChain[:20]
+		result.Truncated = true
+		state.recordUnit(subject, "aliasChain", before, len(result.AliasChain), "entries")
+	}
+	for i := range result.AliasChain {
+		before := utf8.RuneCountInString(result.AliasChain[i])
+		after := truncateResponseText(result.AliasChain[i], 200)
+		if after == result.AliasChain[i] {
+			continue
+		}
+		result.AliasChain[i] = after
+		result.Truncated = true
+		state.record(subject, "aliasChain entry", before, utf8.RuneCountInString(after))
+	}
+}
+
+// fitQueryTokensPage trims one token page to the wire budget. Truncation and
+// trim notices are reserved from the warning cap and describe only the entries
+// that survive. The cursor always points at the first token that did not fit,
+// so trimming is never silent and every result remains reachable.
+func fitQueryTokensPage(out QueryTokensOutput, budget, offset int) QueryTokensOutput {
+	out.Resolved.Warnings = sanitizeWarnings(out.Resolved.Warnings)
+	if out.Error != nil {
+		out.Error = boundError(out.Error)
+		if estimatedResponseBytes(out) > budget {
+			out.Error = responseTooLarge("the token response", budget)
+			out.Tokens = nil
+		}
+		return out
+	}
+	baseWarnings := out.Resolved.Warnings
+	states := make([]*fieldTruncation, len(out.Tokens))
+	for i := range out.Tokens {
+		states[i] = newFieldTruncation()
+		markTokenTruncation(&out.Tokens[i], states[i])
+	}
+	setWarnings := func(extra ...string) {
+		reserved := truncationNotices(states, len(out.Tokens))
+		reserved = append(reserved, extra...)
+		out.Resolved.Warnings = sanitizeWarningsWithReserved(baseWarnings, reserved)
+	}
+	setWarnings()
+	// Truncate first: if that alone fits, substantive warnings survive. Only
+	// summarize them when the page is still over budget.
+	if estimatedResponseBytes(out) > budget && len(baseWarnings) > 1 {
+		baseWarnings = summarizeWarnings(baseWarnings)
+		setWarnings()
+	}
+
+	trimmed := 0
+	for estimatedResponseBytes(out) > budget && len(out.Tokens) > 0 {
+		out.Tokens = out.Tokens[:len(out.Tokens)-1]
+		trimmed++
+		setWarnings()
+	}
+	if trimmed > 0 {
+		out.Truncated = true
+		// Recompute the warning and cursor inside the loop so both describe
+		// and account for the final page.
+		for {
+			trimWarning := fmt.Sprintf("results trimmed from %d to %d to fit the response budget",
+				out.Total, len(out.Tokens))
+			setWarnings(trimWarning)
+			if offset+len(out.Tokens) < out.Total {
+				out.NextCursor = encodeCursor(out.Resolved.Tokens, offset+len(out.Tokens), false)
+			} else {
+				out.NextCursor = ""
+			}
+			if estimatedResponseBytes(out) <= budget || len(out.Tokens) == 0 {
+				break
+			}
+			out.Tokens = out.Tokens[:len(out.Tokens)-1]
+		}
+		if len(out.Tokens) == 0 && offset < out.Total {
+			out.NextCursor = ""
+			setWarnings("results trimmed to fit the response budget")
+			out.Error = responseTooLarge("the token response", budget)
+			return out
+		}
+	}
+	if estimatedResponseBytes(out) > budget {
+		out.Tokens = nil
+		out.NextCursor = ""
+		setWarnings("results trimmed to fit the response budget")
+		out.Error = responseTooLarge("the token response", budget)
+	}
+	return out
+}
+
+// migrationCategoryCounts holds the post-limit selection counts used to
+// report what the budget dropped. These are the entries the caller asked to
+// see, not the pre-limit totals.
+type migrationCategoryCounts struct {
+	changes int
+	notes   int
+	tokens  int
+}
+
+// fitMigrationGuide allocates the wire budget across the selected categories
+// instead of dropping one whole category first. It computes item wire sizes
+// once, keeps at least one item from every non-empty category when possible,
+// then trims from the largest category until the response fits. The minimum is
+// re-applied after the final trim so a late warning cannot empty a category.
+func fitMigrationGuide(out MigrationGuideOutput, budget int) MigrationGuideOutput {
+	out.Resolved.Warnings = sanitizeWarnings(out.Resolved.Warnings)
+	if out.Error != nil {
+		return out
+	}
+	if estimatedResponseBytes(out) <= budget {
+		return out
+	}
+
+	baseWarnings := out.Resolved.Warnings
+	selected := migrationCategoryCounts{
+		changes: len(out.Changes),
+		notes:   len(out.ReleaseNotes),
+		tokens:  len(out.TokenChanges),
+	}
+	out.Truncated = true
+
+	base := out
+	base.Changes = nil
+	base.ReleaseNotes = nil
+	base.TokenChanges = nil
+	base.Resolved.Warnings = migrationGuideWarnings(baseWarnings, out, selected)
+	baseWire := estimatedResponseBytes(base)
+	if baseWire >= budget {
+		return migrationGuideTooLarge(out, budget)
+	}
+	availableWire := budget - baseWire
+
+	changeSizes := migrationItemWireSizes(out.Changes)
+	noteSizes := migrationItemWireSizes(out.ReleaseNotes)
+	tokenSizes := migrationItemWireSizes(out.TokenChanges)
+	changeWire := sumInts(changeSizes)
+	noteWire := sumInts(noteSizes)
+	tokenWire := sumInts(tokenSizes)
+	totalWire := changeWire + noteWire + tokenWire
+	if totalWire <= 0 {
+		return out
+	}
+
+	keepChanges := allocationCount(changeSizes, changeWire, totalWire, availableWire)
+	keepNotes := allocationCount(noteSizes, noteWire, totalWire, availableWire)
+	keepTokens := allocationCount(tokenSizes, tokenWire, totalWire, availableWire)
+	if len(out.Changes) > 0 && keepChanges == 0 {
+		keepChanges = 1
+	}
+	if len(out.ReleaseNotes) > 0 && keepNotes == 0 {
+		keepNotes = 1
+	}
+	if len(out.TokenChanges) > 0 && keepTokens == 0 {
+		keepTokens = 1
+	}
+	out.Changes = out.Changes[:keepChanges]
+	out.ReleaseNotes = out.ReleaseNotes[:keepNotes]
+	out.TokenChanges = out.TokenChanges[:keepTokens]
+
+	for estimatedResponseBytes(out) > budget {
+		if !trimLargestMigrationCategory(&out) {
+			break
+		}
+	}
+	out = enforceMigrationMinimum(out, selected)
+	for {
+		out.Resolved.Warnings = migrationGuideWarnings(baseWarnings, out, selected)
+		if estimatedResponseBytes(out) <= budget {
+			return out
+		}
+		if !trimMigrationAboveMinimum(&out) {
+			return migrationGuideTooLarge(out, budget)
+		}
+	}
+}
+
+// migrationGuideWarnings reports the generic budget notice plus explicit
+// omitted counts per category.
+func migrationGuideWarnings(
+	base []string,
+	out MigrationGuideOutput,
+	selected migrationCategoryCounts,
+) []string {
+	notices := []string{
+		"the response budget was reached; use sections or limit to request one category",
+	}
+	if omitted := selected.changes - len(out.Changes); omitted > 0 {
+		notices = append(notices,
+			fmt.Sprintf("omitted %d of %d changes to fit the response budget", omitted, selected.changes))
+	}
+	if omitted := selected.notes - len(out.ReleaseNotes); omitted > 0 {
+		notices = append(notices,
+			fmt.Sprintf("omitted %d of %d release notes to fit the response budget", omitted, selected.notes))
+	}
+	if omitted := selected.tokens - len(out.TokenChanges); omitted > 0 {
+		notices = append(notices,
+			fmt.Sprintf("omitted %d of %d token changes to fit the response budget", omitted, selected.tokens))
+	}
+	return sanitizeWarningsWithReserved(base, notices)
+}
+
+// enforceMigrationMinimum restores the first item of every non-empty category
+// after trimming. The underlying slices still hold that item, so a zero-length
+// slice with spare capacity can be reopened without copying.
+func enforceMigrationMinimum(out MigrationGuideOutput, selected migrationCategoryCounts) MigrationGuideOutput {
+	if selected.changes > 0 && len(out.Changes) == 0 && cap(out.Changes) > 0 {
+		out.Changes = out.Changes[:1]
+	}
+	if selected.notes > 0 && len(out.ReleaseNotes) == 0 && cap(out.ReleaseNotes) > 0 {
+		out.ReleaseNotes = out.ReleaseNotes[:1]
+	}
+	if selected.tokens > 0 && len(out.TokenChanges) == 0 && cap(out.TokenChanges) > 0 {
+		out.TokenChanges = out.TokenChanges[:1]
+	}
+	return out
+}
+
+func migrationGuideTooLarge(out MigrationGuideOutput, budget int) MigrationGuideOutput {
+	out.Changes = nil
+	out.ReleaseNotes = nil
+	out.TokenChanges = nil
+	out.Error = responseTooLarge("the migration guide", budget)
+	return out
+}
+
+func migrationItemWireSizes[T any](items []T) []int {
+	sizes := make([]int, len(items))
+	for i, item := range items {
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			sizes[i] = 1
+			continue
+		}
+		escaped, err := json.Marshal(string(encoded))
+		if err != nil {
+			sizes[i] = len(encoded) + 1
+			continue
+		}
+		// Add one byte for the comma separating the item from its neighbors.
+		sizes[i] = len(encoded) + len(escaped) + 1
+	}
+	return sizes
+}
+
+func sumInts(values []int) int {
+	total := 0
+	for _, value := range values {
+		total += value
+	}
+	return total
+}
+
+func allocationCount(sizes []int, categoryWire, totalWire, availableWire int) int {
+	if len(sizes) == 0 || totalWire <= 0 || availableWire <= 0 {
+		return 0
+	}
+	categoryBudget := categoryWire * availableWire / totalWire
+	used := 0
+	keep := 0
+	for _, size := range sizes {
+		if used+size > categoryBudget {
+			break
+		}
+		used += size
+		keep++
+	}
+	return keep
+}
+
+func trimLargestMigrationCategory(out *MigrationGuideOutput) bool {
+	switch {
+	case len(out.Changes) >= len(out.ReleaseNotes) &&
+		len(out.Changes) >= len(out.TokenChanges) &&
+		len(out.Changes) > 0:
+		out.Changes = out.Changes[:len(out.Changes)-1]
+		return true
+	case len(out.ReleaseNotes) >= len(out.Changes) &&
+		len(out.ReleaseNotes) >= len(out.TokenChanges) &&
+		len(out.ReleaseNotes) > 0:
+		out.ReleaseNotes = out.ReleaseNotes[:len(out.ReleaseNotes)-1]
+		return true
+	case len(out.TokenChanges) > 0:
+		out.TokenChanges = out.TokenChanges[:len(out.TokenChanges)-1]
+		return true
+	default:
+		return false
+	}
+}
+
+// trimMigrationAboveMinimum removes one item from the largest category that
+// still has more than one entry, preserving the last representation of every
+// category that survived allocation.
+func trimMigrationAboveMinimum(out *MigrationGuideOutput) bool {
+	switch {
+	case len(out.Changes) > 1 &&
+		len(out.Changes) >= len(out.ReleaseNotes) &&
+		len(out.Changes) >= len(out.TokenChanges):
+		out.Changes = out.Changes[:len(out.Changes)-1]
+		return true
+	case len(out.ReleaseNotes) > 1 &&
+		len(out.ReleaseNotes) >= len(out.Changes) &&
+		len(out.ReleaseNotes) >= len(out.TokenChanges):
+		out.ReleaseNotes = out.ReleaseNotes[:len(out.ReleaseNotes)-1]
+		return true
+	case len(out.TokenChanges) > 1:
+		out.TokenChanges = out.TokenChanges[:len(out.TokenChanges)-1]
+		return true
+	default:
+		return false
+	}
 }

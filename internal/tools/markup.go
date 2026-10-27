@@ -39,10 +39,11 @@ type MarkupIssue struct {
 
 // ValidateMarkupOutput is the output for rhds_validate_markup.
 type ValidateMarkupOutput struct {
-	Resolved ResolvedVersion `json:"resolved"`
-	Issues   []MarkupIssue   `json:"issues"`
-	Warnings []string        `json:"warnings,omitempty"`
-	Error    *ToolError      `json:"error,omitempty"`
+	Resolved  ResolvedVersion `json:"resolved"`
+	Issues    []MarkupIssue   `json:"issues"`
+	Warnings  []string        `json:"warnings,omitempty"`
+	Truncated bool            `json:"truncated"`
+	Error     *ToolError      `json:"error,omitempty"`
 }
 
 // globalAttributes may appear on any HTML element and are not declared in CEM.
@@ -237,7 +238,7 @@ func (s *Service) documentManager() (cemtypes.Manager, error) {
 // encode required slots or cardinality, and the #458 API will expose the
 // structure-aware findings this spike cannot make through DocumentManager.
 func (s *Service) ValidateMarkup(_ context.Context, input ValidateMarkupInput) (out ValidateMarkupOutput) {
-	defer func() { out = fitValidateMarkup(out, defaultResponseBudget) }()
+	defer func() { out = fitValidateMarkup(out, s.responseBudget(false)) }()
 	out = ValidateMarkupOutput{Issues: []MarkupIssue{}}
 	if failure := s.dataFailure(); failure != nil {
 		out.Error = failure

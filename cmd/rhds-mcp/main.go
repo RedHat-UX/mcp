@@ -35,34 +35,49 @@ var supportedProtocolVersions = []string{
 	"2025-06-18",
 }
 
+// buildInstructions derives the version statement from the negotiated
+// protocol list and the bundled data index. It never repeats a second literal
+// version list.
+func buildInstructions(protocols []string, service *tools.Service) string {
+	var builder strings.Builder
+	builder.WriteString("RHDS MCP server for the Red Hat Design System.\n\n")
+	builder.WriteString("Supported protocol versions: ")
+	builder.WriteString(strings.Join(protocols, ", "))
+	builder.WriteString(".\n\n")
+
+	elements, tokens := service.SupportedVersions()
+	if len(elements) > 0 && len(tokens) > 0 {
+		fmt.Fprintf(&builder,
+			"Bundled stable versions: @rhds/elements %s through %s (%d versions); @rhds/tokens %s through %s (%d versions). Call rhds_resolve_version to list every candidate.\n\n",
+			elements[len(elements)-1], elements[0], len(elements),
+			tokens[len(tokens)-1], tokens[0], len(tokens))
+	} else {
+		builder.WriteString("This build has no bundled RHDS data; data tools return no_bundled_data. Build with generated data: make data build.\n\n")
+	}
+
+	builder.WriteString("The server is offline by default. It reads versioned RHDS data embedded in the binary and makes no network requests at runtime.\n\n")
+	builder.WriteString("Version resolution order, first hit wins: an explicit version argument, a workspace lockfile, an installed @rhds/elements package, project package.json dependencies, a bounded scan of HTML and Twig templates, then the latest bundled stable version with a warning.\n\n")
+	builder.WriteString("Use search for discovery. Use exact lookup when the element, token, or topic is already known: rhds_get_component_api, rhds_query_tokens with token, and rhds_get_design_guidelines with element. Every response carries the resolved versions and warnings; tools respect the response budget and report truncation or provide a follow-up control instead of truncating silently.")
+	return builder.String()
+}
+
+// serverInstructions returns the instructions for a build without bundled data.
 func serverInstructions() string {
-	return fmt.Sprintf(`RHDS MCP server for the Red Hat Design System.
-
-Supported protocol versions: %s.
-
-The server is offline by default. It reads versioned RHDS data embedded in the
-binary and makes no network requests at runtime.
-
-Version resolution order, first hit wins: an explicit version argument, a
-workspace lockfile, an installed @rhds/elements package, project package.json
-dependencies, a bounded scan of HTML and Twig templates, then the latest
-bundled stable version with a warning.
-
-Use search for discovery and exact lookup when the element, token, or topic is
-already known. Every response carries the resolved versions and warnings.`,
-		strings.Join(supportedProtocolVersions, ", "))
+	return buildInstructions(supportedProtocolVersions, nil)
 }
 
 func newServer(logger *slog.Logger, service *tools.Service) *mcp.Server {
 	server := mcp.NewServer(
 		&mcp.Implementation{Name: serverName, Version: serverVersion},
 		&mcp.ServerOptions{
-			Instructions:              serverInstructions(),
+			Instructions:              buildInstructions(supportedProtocolVersions, service),
 			Logger:                    logger,
 			SupportedProtocolVersions: supportedProtocolVersions,
 		},
 	)
 	tools.Register(server, service)
+	tools.RegisterPrompts(server, service)
+	tools.RegisterResources(server, service)
 	return server
 }
 

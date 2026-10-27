@@ -1,6 +1,8 @@
 {
   "schemaVersion": 1,
   "elementsTokens": {
+    "1.0.0": "1.1.2",
+    "4.0.0": "3.1.0",
     "5.0.0": "3.2.0"
   },
   "artifacts": [
@@ -21,12 +23,20 @@
       "bytes": 1151
     },
     {
+      "package": "elements",
+      "version": "1.0.0",
+      "kind": "manifest",
+      "path": "elements/1.0.0.json",
+      "sha256": "a620a108cbc7644057c388c5f27ef513200f024e85942f7aa3fc8225ca72c770",
+      "bytes": 1291
+    },
+    {
       "package": "docs",
       "version": "v5.0.0",
       "kind": "docs",
       "path": "docs/v5.0.0/index.json",
-      "sha256": "471f1abb8cf11288c8f88016fffd83e74a3ae9818d3c9e4d4bf6efcb9904882f",
-      "bytes": 826
+      "sha256": "c9df9448b59bca7872e78efc3c0e357c15172d774495ca189e105d5f02de47cf",
+      "bytes": 1128
     },
     {
       "package": "docs",
@@ -43,6 +53,22 @@
       "path": "docs/v5.0.0/patterns/button.md",
       "sha256": "4b094f0d96e1042d82e3990996eb885d4ca8d6371fd2082f66d29c4f27e6d98b",
       "bytes": 122
+    },
+    {
+      "package": "docs",
+      "version": "v5.0.0",
+      "kind": "doc:elements/rh-button/docs/00-overview.md",
+      "path": "docs/v5.0.0/elements/rh-button/docs/00-overview.md",
+      "sha256": "2addf3a4434a5fbc107b22fed9dd631752f3f45d4e8835c291711f08388c226d",
+      "bytes": 312
+    },
+    {
+      "package": "docs",
+      "version": "v5.0.0",
+      "kind": "doc:elements/rh-button/docs/10-style.md",
+      "path": "docs/v5.0.0/elements/rh-button/docs/10-style.md",
+      "sha256": "42bd934145a38782d0c39ce6606c73f25516a1fcde7dbb1f5efb6a4136c286a5",
+      "bytes": 130
     },
     {
       "package": "docs",
@@ -69,6 +95,14 @@
       "bytes": 80
     },
     {
+      "package": "release-notes",
+      "version": "5.0.0",
+      "kind": "release-notes",
+      "path": "release-notes/5.0.0/release-notes.md",
+      "sha256": "951c89e6e9b33533d595ebbf33a9a89a1527b94017c9be215f02bb81a730d203",
+      "bytes": 508
+    },
+    {
       "package": "tokens",
       "version": "3.2.0",
       "kind": "tokens",
@@ -81,16 +115,16 @@
       "version": "3.2.0",
       "kind": "themes",
       "path": "tokens/themes.json",
-      "sha256": "2b108af2c2e80823cd555dec857a898bce9a794481140fd154fc4fe3db7f3012",
-      "bytes": 216
+      "sha256": "59a59b97ea324a81ed60e04f47ca9222bb3cc8b8dfbdd4309c57be8848e75a43",
+      "bytes": 288
     },
     {
-      "package": "docs",
-      "version": "v5.0.0",
-      "kind": "doc:elements/rh-button/docs/00-overview.md",
-      "path": "docs/v5.0.0/elements/rh-button/docs/00-overview.md",
-      "sha256": "36ed3b370ac555870b69f52609bc965b7e6a5010eb3b7028c1e90cf1559a0dbc",
-      "bytes": 89
+      "package": "tokens",
+      "version": "1.1.2",
+      "kind": "tokens",
+      "path": "tokens/1.1.2.json",
+      "sha256": "afd5706cb7354f88bcf62d91ca9150d8f40d3f29a76357c31435cfe6894b1503",
+      "bytes": 1573
     }
   ]
 }
