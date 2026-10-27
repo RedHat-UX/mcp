@@ -22,6 +22,9 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/redhat-ux/mcp/internal/data"
+	"github.com/redhat-ux/mcp/internal/tools"
 )
 
 type rpcMessage struct {
@@ -87,7 +90,7 @@ func TestInitializeAtEachAdvertisedVersion(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
-			server := newServer(slog.New(slog.DiscardHandler))
+			server := newServer(slog.New(slog.DiscardHandler), tools.New(nil, data.ErrNoData))
 			serverTransport, clientTransport := mcp.NewInMemoryTransports()
 			session, err := server.Connect(ctx, serverTransport, nil)
 			if err != nil {
@@ -308,5 +311,106 @@ func TestSIGTERMExitsCleanly(t *testing.T) {
 	}
 	if code := cmd.ProcessState.ExitCode(); code != 0 {
 		t.Errorf("exit code after SIGTERM = %d, want 0 (stderr: %s)", code, stderr.String())
+	}
+}
+
+func connectTestClient(t *testing.T, server *mcp.Server) *mcp.ClientSession {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	serverSession, err := server.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatalf("connecting server: %v", err)
+	}
+	t.Cleanup(func() { _ = serverSession.Close() })
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "rhds-mcp-test", Version: "0.0.0"}, nil)
+	clientSession, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("connecting client: %v", err)
+	}
+	t.Cleanup(func() { _ = clientSession.Close() })
+	return clientSession
+}
+
+func TestPhaseBToolsAreRegistered(t *testing.T) {
+	clientSession := connectTestClient(t,
+		newServer(slog.New(slog.DiscardHandler), tools.New(nil, data.ErrNoData)))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := clientSession.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	var names []string
+	for _, tool := range result.Tools {
+		names = append(names, tool.Name)
+		if tool.OutputSchema == nil {
+			t.Errorf("tool %q has no output schema", tool.Name)
+		}
+		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
+			t.Errorf("tool %q is not marked read-only", tool.Name)
+		}
+	}
+	want := []string{"rhds_list_components", "rhds_query_tokens", "rhds_validate_markup"}
+	for _, name := range want {
+		if !slices.Contains(names, name) {
+			t.Errorf("tools/list is missing %q: %v", name, names)
+		}
+	}
+}
+
+func TestDataToolsReturnStructuredErrorWithoutData(t *testing.T) {
+	clientSession := connectTestClient(t,
+		newServer(slog.New(slog.DiscardHandler), tools.New(nil, data.ErrNoData)))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	calls := []struct {
+		name string
+		args map[string]any
+	}{
+		{"rhds_list_components", map[string]any{}},
+		{"rhds_validate_markup", map[string]any{"markup": "<rh-button></rh-button>"}},
+		{"rhds_query_tokens", map[string]any{"token": "color-brand"}},
+	}
+	for _, call := range calls {
+		t.Run(call.name, func(t *testing.T) {
+			result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+				Name:      call.name,
+				Arguments: call.args,
+			})
+			if err != nil {
+				t.Fatalf("CallTool(%s) error = %v", call.name, err)
+			}
+			if !result.IsError {
+				t.Fatalf("CallTool(%s) IsError = false, want true", call.name)
+			}
+			encoded, err := json.Marshal(result.StructuredContent)
+			if err != nil {
+				t.Fatalf("marshaling structured content: %v", err)
+			}
+			var structured struct {
+				Error struct {
+					Code string `json:"code"`
+					Hint string `json:"hint"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(encoded, &structured); err != nil {
+				t.Fatalf("decoding structured content %s: %v", encoded, err)
+			}
+			if structured.Error.Code != "no_bundled_data" {
+				t.Errorf("error code = %q, want no_bundled_data (content: %s)",
+					structured.Error.Code, encoded)
+			}
+			if structured.Error.Hint == "" {
+				t.Errorf("structured error has no hint: %s", encoded)
+			}
+		})
 	}
 }

@@ -1,0 +1,328 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright 2026 Red Hat, Inc.
+
+package tools
+
+import (
+	"context"
+	"fmt"
+	"slices"
+	"sort"
+	"strings"
+
+	"bennypowers.dev/cem/lsp/document"
+	cemtypes "bennypowers.dev/cem/lsp/types"
+	"bennypowers.dev/cem/manifest"
+	"go.lsp.dev/protocol"
+)
+
+// ValidateMarkupInput is the input for rhds_validate_markup.
+type ValidateMarkupInput struct {
+	Markup  string `json:"markup" jsonschema:"HTML or Twig markup to validate"`
+	Format  string `json:"format,omitempty" jsonschema:"Markup format: html or twig; defaults to html"`
+	Version string `json:"version,omitempty" jsonschema:"RHDS elements version; defaults to the latest bundled version"`
+}
+
+// MarkupIssue is one finding from rhds_validate_markup.
+type MarkupIssue struct {
+	Rule       string `json:"rule"`
+	Severity   string `json:"severity"`
+	Confidence string `json:"confidence"`
+	Message    string `json:"message"`
+	Element    string `json:"element,omitempty"`
+	Attribute  string `json:"attribute,omitempty"`
+	Line       int    `json:"line"`
+	Column     int    `json:"column"`
+}
+
+// ValidateMarkupOutput is the output for rhds_validate_markup.
+type ValidateMarkupOutput struct {
+	Resolved ResolvedVersion `json:"resolved"`
+	Issues   []MarkupIssue   `json:"issues"`
+	Warnings []string        `json:"warnings,omitempty"`
+	Error    *ToolError      `json:"error,omitempty"`
+}
+
+// globalAttributes may appear on any HTML element and are not declared in CEM.
+var globalAttributes = []string{
+	"accesskey", "autocapitalize", "autofocus", "class", "contenteditable",
+	"dir", "draggable", "exportparts", "hidden", "id", "inert", "inputmode",
+	"is", "itemid", "itemprop", "itemref", "itemscope", "itemtype", "lang",
+	"nonce", "part", "role", "slot", "spellcheck", "style", "tabindex",
+	"title", "translate",
+}
+
+func isGlobalAttribute(name string) bool {
+	lower := strings.ToLower(name)
+	if slices.Contains(globalAttributes, lower) {
+		return true
+	}
+	return strings.HasPrefix(lower, "aria-") || strings.HasPrefix(lower, "data-")
+}
+
+// twigBlockOpeners are Jinja/Twig block tags that require a matching end tag.
+var twigBlockOpeners = []string{
+	"apply", "autoescape", "block", "call", "embed", "filter", "for", "if",
+	"macro", "raw", "trans", "verbatim", "with",
+}
+
+func twigControlFlowUnbalanced(markup string) bool {
+	depth := 0
+	remaining := markup
+	for {
+		start := strings.Index(remaining, "{%")
+		if start < 0 {
+			break
+		}
+		rest := remaining[start+2:]
+		end := strings.Index(rest, "%}")
+		if end < 0 {
+			return true
+		}
+		tag := strings.TrimSpace(rest[:end])
+		tag = strings.TrimPrefix(tag, "-")
+		tag = strings.TrimSuffix(tag, "-")
+		fields := strings.Fields(tag)
+		if len(fields) > 0 {
+			word := fields[0]
+			switch {
+			case slices.Contains(twigBlockOpeners, word):
+				depth++
+			case strings.HasPrefix(word, "end"):
+				depth--
+				if depth < 0 {
+					return true
+				}
+			}
+		}
+		remaining = rest[end+2:]
+	}
+	return depth != 0
+}
+
+func (s *Service) documentManager() (cemtypes.Manager, error) {
+	s.documentsOnce.Do(func() {
+		s.documents, s.documentsErr = document.NewDocumentManager()
+	})
+	return s.documents, s.documentsErr
+}
+
+// ValidateMarkup implements rhds_validate_markup using the interim
+// bennypowers.dev/cem/lsp/document entry point. Phase D replaces this with the
+// exported cem/validate/markup API (cem#458).
+//
+// Slot-name and content-model rules are intentionally deferred: CEM does not
+// encode required slots or cardinality, and the #458 API will expose the
+// structure-aware findings this spike cannot make through DocumentManager.
+func (s *Service) ValidateMarkup(_ context.Context, input ValidateMarkupInput) ValidateMarkupOutput {
+	out := ValidateMarkupOutput{Issues: []MarkupIssue{}}
+	if failure := s.dataFailure(); failure != nil {
+		out.Error = failure
+		return out
+	}
+
+	format := input.Format
+	if format == "" {
+		format = "html"
+	}
+	var extension string
+	switch format {
+	case "html":
+		extension = "html"
+	case "twig":
+		extension = "twig"
+	default:
+		out.Error = invalidArgument("format must be html or twig")
+		return out
+	}
+
+	version, failure := s.resolveVersion(packageElements, kindManifest, input.Version)
+	if failure != nil {
+		out.Error = failure
+		return out
+	}
+	out.Resolved = ResolvedVersion{Elements: version, Source: "bundled"}
+
+	pkg, failure := s.loadManifest(version)
+	if failure != nil {
+		out.Error = failure
+		return out
+	}
+
+	manager, err := s.documentManager()
+	if err != nil {
+		out.Error = &ToolError{
+			Code:    "markup_parser_unavailable",
+			Message: "could not initialize the HTML parser",
+			Hint:    err.Error(),
+		}
+		return out
+	}
+
+	uri := fmt.Sprintf("file:///rhds-mcp/inline-%d.%s", s.docSeq.Add(1), extension)
+	doc := manager.OpenDocument(uri, input.Markup, 1)
+	defer manager.CloseDocument(uri)
+	if doc == nil {
+		out.Error = &ToolError{
+			Code:    "markup_parse_failed",
+			Message: "the parser could not create a document for this markup",
+		}
+		return out
+	}
+
+	matches, err := doc.FindCustomElements(manager)
+	if err != nil {
+		out.Error = &ToolError{
+			Code:    "markup_parse_failed",
+			Message: "the parser could not read this markup",
+			Hint:    err.Error(),
+		}
+		return out
+	}
+
+	unbalanced := format == "twig" && twigControlFlowUnbalanced(input.Markup)
+	if unbalanced {
+		out.Warnings = append(out.Warnings,
+			"twig control flow is unbalanced; structural findings are low confidence")
+	}
+
+	elements := declarationsByTag(pkg)
+	for _, match := range matches {
+		element, known := elements[match.TagName]
+		if !known {
+			if strings.HasPrefix(match.TagName, "rh-") {
+				out.Issues = append(out.Issues, MarkupIssue{
+					Rule:       "unknown-tag",
+					Severity:   "error",
+					Confidence: "high",
+					Message:    fmt.Sprintf("unknown RHDS custom element %q", match.TagName),
+					Element:    match.TagName,
+					Line:       lineOf(match.Range),
+					Column:     columnOf(match.Range),
+				})
+			}
+			continue
+		}
+
+		if element.IsDeprecated() {
+			out.Issues = append(out.Issues, MarkupIssue{
+				Rule:       "deprecated-element",
+				Severity:   "warning",
+				Confidence: "high",
+				Message:    deprecationMessage(fmt.Sprintf("%s is deprecated", match.TagName), element.Deprecated),
+				Element:    match.TagName,
+				Line:       lineOf(match.Range),
+				Column:     columnOf(match.Range),
+			})
+		}
+
+		attributes := make(map[string]*manifest.Attribute, len(element.CustomElement.Attributes))
+		for i := range element.CustomElement.Attributes {
+			attributes[element.CustomElement.Attributes[i].Name] = &element.CustomElement.Attributes[i]
+		}
+
+		for _, name := range sortedKeys(match.Attributes) {
+			attributeMatch := match.Attributes[name]
+			if isGlobalAttribute(name) {
+				continue
+			}
+			declaration, ok := attributes[name]
+			if !ok {
+				out.Issues = append(out.Issues, MarkupIssue{
+					Rule:       "unknown-attribute",
+					Severity:   "warning",
+					Confidence: "high",
+					Message:    fmt.Sprintf("%q is not an attribute of %s", name, match.TagName),
+					Element:    match.TagName,
+					Attribute:  name,
+					Line:       lineOf(attributeMatch.Range),
+					Column:     columnOf(attributeMatch.Range),
+				})
+				continue
+			}
+			if declaration.IsDeprecated() {
+				out.Issues = append(out.Issues, MarkupIssue{
+					Rule:       "deprecated-attribute",
+					Severity:   "warning",
+					Confidence: "high",
+					Message: deprecationMessage(
+						fmt.Sprintf("attribute %q on %s is deprecated", name, match.TagName),
+						declaration.Deprecated),
+					Element:   match.TagName,
+					Attribute: name,
+					Line:      lineOf(attributeMatch.Range),
+					Column:    columnOf(attributeMatch.Range),
+				})
+			}
+			if attributeMatch.Value != "" && !declaration.IsValidValue(attributeMatch.Value) {
+				out.Issues = append(out.Issues, MarkupIssue{
+					Rule:       "invalid-attribute-value",
+					Severity:   "error",
+					Confidence: "high",
+					Message: fmt.Sprintf(
+						"%q is not a valid value for %s attribute %q; valid values: %v",
+						attributeMatch.Value, match.TagName, name, declaration.EnumValues()),
+					Element:   match.TagName,
+					Attribute: name,
+					Line:      lineOf(attributeMatch.Range),
+					Column:    columnOf(attributeMatch.Range),
+				})
+			}
+		}
+	}
+
+	if unbalanced {
+		for i := range out.Issues {
+			out.Issues[i].Confidence = "low"
+			if out.Issues[i].Severity == "error" {
+				out.Issues[i].Severity = "warning"
+			}
+		}
+	}
+
+	sort.Slice(out.Issues, func(i, j int) bool {
+		a, b := out.Issues[i], out.Issues[j]
+		if a.Line != b.Line {
+			return a.Line < b.Line
+		}
+		if a.Column != b.Column {
+			return a.Column < b.Column
+		}
+		if a.Rule != b.Rule {
+			return a.Rule < b.Rule
+		}
+		return a.Message < b.Message
+	})
+	return out
+}
+
+func declarationsByTag(pkg *manifest.Package) map[string]*manifest.CustomElementDeclaration {
+	elements := make(map[string]*manifest.CustomElementDeclaration)
+	for i := range pkg.Modules {
+		for _, declaration := range pkg.Modules[i].Declarations {
+			element, ok := declaration.(*manifest.CustomElementDeclaration)
+			if ok && element.TagName != "" {
+				elements[element.TagName] = element
+			}
+		}
+	}
+	return elements
+}
+
+func deprecationMessage(prefix string, deprecated manifest.Deprecated) string {
+	if deprecated == nil {
+		return prefix
+	}
+	if reason, ok := deprecated.Value().(string); ok && reason != "" {
+		return prefix + ": " + reason
+	}
+	return prefix
+}
+
+func lineOf(r protocol.Range) int {
+	return int(r.Start.Line) + 1
+}
+
+func columnOf(r protocol.Range) int {
+	return int(r.Start.Character) + 1
+}

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "artifacts": [
+    {
+      "package": "elements",
+      "version": "5.0.0",
+      "kind": "manifest",
+      "path": "elements/custom-elements.json"
+    },
+    {
+      "package": "docs",
+      "version": "5.0.0",
+      "kind": "docs",
+      "path": "docs/5.0.0.md"
+    },
+    {
+      "package": "tokens",
+      "version": "3.2.0",
+      "kind": "tokens",
+      "path": "tokens/rhds.tokens.json"
+    },
+    {
+      "package": "tokens",
+      "version": "3.2.0",
+      "kind": "themes",
+      "path": "tokens/themes.json"
+    }
+  ]
+}

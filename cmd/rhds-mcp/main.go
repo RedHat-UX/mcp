@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -15,6 +16,9 @@ import (
 	"syscall"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/redhat-ux/mcp/internal/data"
+	"github.com/redhat-ux/mcp/internal/tools"
 )
 
 const serverName = "rhds-mcp"
@@ -49,8 +53,8 @@ already known. Every response carries the resolved versions and warnings.`,
 		strings.Join(supportedProtocolVersions, ", "))
 }
 
-func newServer(logger *slog.Logger) *mcp.Server {
-	return mcp.NewServer(
+func newServer(logger *slog.Logger, service *tools.Service) *mcp.Server {
+	server := mcp.NewServer(
 		&mcp.Implementation{Name: serverName, Version: serverVersion},
 		&mcp.ServerOptions{
 			Instructions:              serverInstructions(),
@@ -58,11 +62,32 @@ func newServer(logger *slog.Logger) *mcp.Server {
 			SupportedProtocolVersions: supportedProtocolVersions,
 		},
 	)
+	tools.Register(server, service)
+	return server
 }
 
-func run(ctx context.Context, logger *slog.Logger) error {
+// loadService opens the embedded data index. Reading the index is the only
+// embedded-data work performed at startup; artifacts are loaded lazily.
+func loadService(logger *slog.Logger) *tools.Service {
+	dist, err := fs.Sub(data.Embedded(), "dist")
+	if err != nil {
+		logger.Error("opening embedded data tree", "error", err)
+		return tools.New(nil, err).WithLogger(logger)
+	}
+	store, err := data.Open(dist)
+	switch {
+	case errors.Is(err, data.ErrNoData):
+		logger.Warn("starting without bundled RHDS data",
+			"hint", "build with generated data: make data build")
+	case err != nil:
+		logger.Error("reading bundled data index", "error", err)
+	}
+	return tools.New(store, err).WithLogger(logger)
+}
+
+func run(ctx context.Context, logger *slog.Logger, service *tools.Service) error {
 	logger.Info("starting server", "name", serverName, "version", serverVersion)
-	return newServer(logger).Run(ctx, &mcp.StdioTransport{})
+	return newServer(logger, service).Run(ctx, &mcp.StdioTransport{})
 }
 
 // exitCode maps an error returned by run to a process exit code. A canceled
@@ -83,7 +108,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	err := run(ctx, logger)
+	service := loadService(logger)
+	err := run(ctx, logger, service)
 	code := exitCode(err)
 	switch {
 	case err == nil:

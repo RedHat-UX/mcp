@@ -355,6 +355,22 @@ Measured 2026-10-26 on linux-x64 with a probe binary (cem `manifest`, `breaking`
   should come in smaller
 - Process start to `main`: 7 to 11 ms direct, about 33 ms spawned through Node
 
+Phase B remeasurement, 2026-10-27, linux-x64 (Go 1.27.3, gcc, cem
+`d497f94c5b42` / pseudo-version `v0.11.5-0.20261026202837-d497f94c5b42`,
+asimonim `98c22de1` / pseudo-version `v0.3.4-0.20261026144458-98c22de15b8a`,
+built with `-trimpath -ldflags="-s -w"`, with a 12.5 KB `index.json` present):
+
+- NFR-01, spawn to `initialize` response: direct binary 7.1 ms median,
+  10.1 ms p95, 14.4 ms max (n=50); through a Node 22 wrapper process 26.5 ms
+  median, 37.4 ms p95, 39.3 ms max (n=30). Budget is 150 ms
+- NFR-06, stripped binary: 22.8 MB (21.7 MiB), 6.1 MB gzipped. Budget is 40 MB.
+  Platform npm tarballs do not exist yet, so the 16 MB tarball gate is not
+  measurable in Phase B
+- Startup read only `index.json`. The binary links cem `manifest`,
+  `lsp/document` (all grammars), and asimonim `parser`, `resolver`, and `token`.
+  `lsp/document` still pulls in every grammar cem supports; cem#458's narrower
+  export should reduce size in Phase D
+
 Embedded data:
 
 - CEM per version: 0.75 to 1.2 MB raw, 66 to 140 KB gzipped
