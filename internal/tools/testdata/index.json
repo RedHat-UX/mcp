@@ -25,8 +25,8 @@
       "version": "v5.0.0",
       "kind": "docs",
       "path": "docs/v5.0.0/index.json",
-      "sha256": "c8368d1c7f066c548a6ac79911a6e88cb650778f424f800c065b885f455c9c8a",
-      "bytes": 509
+      "sha256": "471f1abb8cf11288c8f88016fffd83e74a3ae9818d3c9e4d4bf6efcb9904882f",
+      "bytes": 826
     },
     {
       "package": "docs",

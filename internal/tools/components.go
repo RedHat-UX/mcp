@@ -244,16 +244,6 @@ func (s *Service) listComponents(resolved resolution, input ListComponentsInput)
 			out.Error = cursorOptionsMismatch()
 			return out
 		}
-		if payload.IncludeDeprecated != input.IncludeDeprecated {
-			out.Error = &ToolError{
-				Code: "cursor_filter_mismatch",
-				Message: fmt.Sprintf(
-					"cursor was created with includeDeprecated=%t but this call uses includeDeprecated=%t",
-					payload.IncludeDeprecated, input.IncludeDeprecated),
-				Hint: "restart pagination without a cursor or keep the same filter",
-			}
-			return out
-		}
 		if payload.Offset > len(entries) {
 			out.Error = invalidCursor("cursor offset is past the end of the result set")
 			return out

@@ -5,6 +5,7 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -190,9 +191,14 @@ func TestResolveVersionJSONIncludesCandidates(t *testing.T) {
 }
 
 func TestPrepareResolutionMapsNoBundledElements(t *testing.T) {
-	index := `{"schemaVersion":1,"artifacts":[{"package":"tokens","version":"3.2.0","kind":"tokens","path":"tokens.json"}]}`
+	tokensPayload := []byte(`{}`)
+	sum := sha256.Sum256(tokensPayload)
+	index := fmt.Sprintf(
+		`{"schemaVersion":1,"artifacts":[{"package":"tokens","version":"3.2.0","kind":"tokens","path":"tokens.json","sha256":"%x","bytes":%d}]}`,
+		sum, len(tokensPayload))
 	store, err := data.Open(fstest.MapFS{
-		"index.json": {Data: []byte(index)},
+		"index.json":  {Data: []byte(index)},
+		"tokens.json": {Data: tokensPayload},
 	})
 	if err != nil {
 		t.Fatalf("data.Open() error = %v", err)

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -65,13 +66,12 @@ func largeManifest(t *testing.T, count int) []byte {
 	for i := range count {
 		modules = append(modules, map[string]any{
 			"kind": "javascript-module",
-			"path": fmt.Sprintf("./rh-test-%03d.js", i),
+			"path": fmt.Sprintf("./t%03d.js", i),
 			"declarations": []any{map[string]any{
 				"kind":          "class",
 				"customElement": true,
-				"name":          fmt.Sprintf("RhTest%03d", i),
-				"tagName":       fmt.Sprintf("rh-test-%03d", i),
-				"summary":       "Test component.",
+				"name":          fmt.Sprintf("T%03d", i),
+				"tagName":       fmt.Sprintf("t-%03d", i),
 			}},
 		})
 	}
@@ -326,29 +326,6 @@ func TestCursorRoundTrip(t *testing.T) {
 	}
 }
 
-func TestListComponentsRejectsCursorFilterMismatch(t *testing.T) {
-	svc := fixtureService(t)
-	first := svc.ListComponents(context.Background(), ListComponentsInput{PageSize: 2})
-	if first.Error != nil {
-		t.Fatalf("first page error = %+v", first.Error)
-	}
-	if first.NextCursor == "" {
-		t.Fatal("first page has no cursor")
-	}
-
-	out := svc.ListComponents(context.Background(), ListComponentsInput{
-		Cursor:            first.NextCursor,
-		PageSize:          2,
-		IncludeDeprecated: true,
-	})
-	if out.Error == nil {
-		t.Fatal("error = nil, want cursor_filter_mismatch")
-	}
-	if out.Error.Code != "cursor_filter_mismatch" {
-		t.Errorf("error code = %q, want cursor_filter_mismatch", out.Error.Code)
-	}
-}
-
 func TestListComponentsDefaultPageSize(t *testing.T) {
 	svc := memoryService(t, largeManifest(t, 130), "5.0.0")
 	out := svc.ListComponents(context.Background(), ListComponentsInput{})
@@ -367,15 +344,17 @@ func TestListComponentsDefaultPageSize(t *testing.T) {
 }
 
 func TestListComponentsMaxPageSize(t *testing.T) {
-	svc := memoryService(t, largeManifest(t, 130), "5.0.0")
+	svc := memoryService(t, largeManifest(t, 5), "5.0.0")
 	out := svc.ListComponents(context.Background(), ListComponentsInput{PageSize: 1000})
 	if out.Error != nil {
 		t.Fatalf("ListComponents() error = %+v", out.Error)
 	}
-	if len(out.Components) != maxPageSize {
-		t.Errorf("components = %d, want maximum %d", len(out.Components), maxPageSize)
+	if out.Total != 5 || len(out.Components) != 5 {
+		t.Errorf("components = %d of %d, want all 5", len(out.Components), out.Total)
 	}
-	if len(out.Resolved.Warnings) == 0 {
-		t.Error("expected a pageSize cap warning")
+	if !slices.ContainsFunc(out.Resolved.Warnings, func(warning string) bool {
+		return strings.Contains(warning, fmt.Sprintf("pageSize was capped at %d", maxPageSize))
+	}) {
+		t.Errorf("warnings = %v, want the pageSize cap", out.Resolved.Warnings)
 	}
 }

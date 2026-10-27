@@ -191,11 +191,11 @@ func (s *Service) loadModel(version string) (*cem.Model, *ToolError) {
 	if cached, ok := s.models.Load(version); ok {
 		return cached.(*cem.Model), nil
 	}
-	payload, err := s.store.Read(packageElements, version, kindManifest)
-	if err != nil {
-		return nil, toolErrorFrom(err)
+	pkg, failure := s.loadManifest(version)
+	if failure != nil {
+		return nil, failure
 	}
-	model, err := cem.Parse(payload)
+	model, err := cem.Normalize(pkg)
 	if err != nil {
 		return nil, &ToolError{
 			Code:    "invalid_manifest",
