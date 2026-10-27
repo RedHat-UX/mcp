@@ -225,15 +225,33 @@ func latestBundled(bundled []string) (string, bool) {
 }
 
 func selectCandidate(result Result, bundled []string) (Result, error) {
-	winning := result.Candidates[0].Precedence
-	top := make([]Candidate, 0, len(result.Candidates))
+	levels := make([]int, 0)
+	seen := make(map[int]bool, len(result.Candidates))
 	for _, candidate := range result.Candidates {
-		if candidate.Precedence > winning {
-			continue
+		if !seen[candidate.Precedence] {
+			seen[candidate.Precedence] = true
+			levels = append(levels, candidate.Precedence)
 		}
-		top = append(top, candidate)
 	}
+	sort.Ints(levels)
+	for _, level := range levels {
+		top := make([]Candidate, 0, len(result.Candidates))
+		for _, candidate := range result.Candidates {
+			if candidate.Precedence == level {
+				top = append(top, candidate)
+			}
+		}
+		if selected, ok := selectFromLevel(result, top, level, bundled); ok {
+			return selected, nil
+		}
+	}
+	return defaultResult(result, bundled)
+}
 
+// selectFromLevel chooses a version from the candidates at one precedence
+// level. It reports false when the level has no parseable candidate, so the
+// caller can fall back to lower-precedence evidence instead of dropping it.
+func selectFromLevel(result Result, top []Candidate, winning int, bundled []string) (Result, bool) {
 	majors := make(map[int]bool)
 	type parsedCandidate struct {
 		candidate    Candidate
@@ -289,10 +307,10 @@ func selectCandidate(result Result, bundled []string) (Result, error) {
 		}
 		result.Elements = ""
 		result.Source = LevelForPrecedence(winning)
-		return result, nil
+		return result, true
 	}
 	if len(parsedTop) == 0 {
-		return defaultResult(result, bundled)
+		return result, false
 	}
 
 	sort.Slice(parsedTop, func(i, j int) bool {
@@ -320,7 +338,7 @@ func selectCandidate(result Result, bundled []string) (Result, error) {
 				chosen.resolvedText, chosen.candidate.Source))
 	}
 	addLowerPrecedenceWarning(&result, chosen.parsed, chosen.resolvedText, winning)
-	return result, nil
+	return result, true
 }
 
 // highestBundledFor maps a partial range to the highest bundled version that
