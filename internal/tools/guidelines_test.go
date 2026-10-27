@@ -6,6 +6,7 @@ package tools
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -164,5 +165,16 @@ func TestDesignGuidelinesElementWithUnmatchedTopicIsEmpty(t *testing.T) {
 	}
 	if !hasWarning(out.Resolved.Warnings, "spaceship") {
 		t.Errorf("warnings = %v, want a topic-specific warning", out.Resolved.Warnings)
+	}
+}
+
+func TestStripSourceComment(t *testing.T) {
+	input := "<!-- source: RedHat-UX/red-hat-design-system@v5.0.0 docs/x.md -->\n\n# Heading\n\nBody."
+	got := stripSourceComment(input)
+	if strings.Contains(got, "<!-- source:") {
+		t.Errorf("stripSourceComment() = %q, leaked the source comment", got)
+	}
+	if !strings.HasPrefix(got, "# Heading") {
+		t.Errorf("stripSourceComment() = %q, want the heading first", got)
 	}
 }

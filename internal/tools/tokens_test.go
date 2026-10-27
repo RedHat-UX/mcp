@@ -345,3 +345,51 @@ func TestQueryTokensAcceptsVPrefixedVersion(t *testing.T) {
 		t.Errorf("resolved tokens version = %q, want 3.2.0", out.Resolved.Tokens)
 	}
 }
+
+func TestQueryTokensRejectsInvalidTheme(t *testing.T) {
+	out := fixtureService(t).QueryTokens(context.Background(), QueryTokensInput{
+		Token: "color-brand",
+		Theme: "sepia",
+	})
+	if out.Error == nil || out.Error.Code != "invalid_argument" {
+		t.Fatalf("error = %+v, want invalid_argument", out.Error)
+	}
+}
+
+func TestQueryTokensFullDetailIncludesDescriptionAndDeprecation(t *testing.T) {
+	svc := fixtureService(t)
+	summary := svc.QueryTokens(context.Background(), QueryTokensInput{Token: "color-legacy"})
+	if summary.Error != nil {
+		t.Fatalf("summary error = %+v", summary.Error)
+	}
+	if len(summary.Tokens) != 1 {
+		t.Fatalf("summary tokens = %+v, want one", summary.Tokens)
+	}
+	if summary.Tokens[0].Description != "" {
+		t.Errorf("summary description = %q, want empty", summary.Tokens[0].Description)
+	}
+	if summary.Tokens[0].Deprecation != "" {
+		t.Errorf("summary deprecation = %q, want empty", summary.Tokens[0].Deprecation)
+	}
+
+	full := svc.QueryTokens(context.Background(), QueryTokensInput{
+		Token:  "color-legacy",
+		Detail: "full",
+	})
+	if full.Error != nil {
+		t.Fatalf("full error = %+v", full.Error)
+	}
+	if len(full.Tokens) != 1 {
+		t.Fatalf("full tokens = %+v, want one", full.Tokens)
+	}
+	tok := full.Tokens[0]
+	if tok.Description == "" {
+		t.Error("full detail omitted the description")
+	}
+	if !tok.Deprecated {
+		t.Error("full detail did not mark the token deprecated")
+	}
+	if tok.Deprecation == "" {
+		t.Error("full detail omitted the deprecation message")
+	}
+}

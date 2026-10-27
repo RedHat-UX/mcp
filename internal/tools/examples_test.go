@@ -155,3 +155,26 @@ func TestUsageExamplesRespectsBudget(t *testing.T) {
 		t.Errorf("warnings = %v, want a budget warning", out.Resolved.Warnings)
 	}
 }
+
+func TestGetUsageExamplesDocsTagReturnsFullResolvedBlock(t *testing.T) {
+	out := fixtureService(t).GetUsageExamples(context.Background(), UsageExamplesInput{
+		TagName: "rh-button",
+		Version: "v5.0.0",
+		Kind:    "all",
+	})
+	if out.Error != nil {
+		t.Fatalf("GetUsageExamples() error = %+v", out.Error)
+	}
+	if out.Resolved.Docs != "v5.0.0" {
+		t.Errorf("docs = %q, want v5.0.0", out.Resolved.Docs)
+	}
+	if out.Resolved.Elements != "5.0.0" {
+		t.Errorf("elements = %q, want 5.0.0", out.Resolved.Elements)
+	}
+	if out.Resolved.Tokens != "3.2.0" {
+		t.Errorf("tokens = %q, want 3.2.0", out.Resolved.Tokens)
+	}
+	if len(out.Examples) == 0 {
+		t.Error("examples = 0, want examples")
+	}
+}
