@@ -86,11 +86,30 @@ func (s *Service) GetMigrationGuide(_ context.Context, input MigrationGuideInput
 }
 
 func (s *Service) migrationGuideWithEnv(
-	_ context.Context,
-	_ *mcp.CallToolRequest,
+	ctx context.Context,
+	request *mcp.CallToolRequest,
 	input MigrationGuideInput,
 ) (*mcp.CallToolResult, MigrationGuideOutput) {
-	return nil, s.migrationGuide(input)
+	resolved, required, failure := s.prepareResolution(
+		ctx, newCallEnv(request), input.FromVersion, "", true)
+	if required != nil {
+		return required, MigrationGuideOutput{}
+	}
+	if failure != nil {
+		out := MigrationGuideOutput{
+			Changes:      []MigrationChange{},
+			ReleaseNotes: []ReleaseNoteExample{},
+			TokenChanges: []TokenChange{},
+			Error:        failure,
+		}
+		return nil, fitMigrationGuide(out, defaultResponseBudget)
+	}
+	if resolved.Resolved.Elements != "" {
+		input.FromVersion = resolved.Resolved.Elements
+	}
+	out := s.migrationGuide(input)
+	mergeResolution(&out.Resolved, resolved.Resolved)
+	return nil, out
 }
 
 func (s *Service) migrationGuide(input MigrationGuideInput) MigrationGuideOutput {

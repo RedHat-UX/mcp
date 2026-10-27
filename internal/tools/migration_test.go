@@ -480,3 +480,17 @@ func TestParseReleaseExamplesKeepsMultiplePairs(t *testing.T) {
 		}
 	}
 }
+
+func TestMigrationGuideWithEnvResolvesFromVersion(t *testing.T) {
+	_, out := fixtureService(t).migrationGuideWithEnv(context.Background(), nil, MigrationGuideInput{
+		FromVersion: "v1.0.0",
+		ToVersion:   "v5.0.0",
+	})
+	if out.Error != nil {
+		t.Fatalf("migrationGuideWithEnv() error = %+v", out.Error)
+	}
+	if out.FromVersion != "1.0.0" || out.ToVersion != "5.0.0" {
+		t.Errorf("versions = %q -> %q, want 1.0.0 -> 5.0.0",
+			out.FromVersion, out.ToVersion)
+	}
+}
