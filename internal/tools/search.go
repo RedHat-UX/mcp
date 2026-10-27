@@ -54,11 +54,12 @@ type SearchHit struct {
 
 // SearchOutput is the output for rhds_search.
 type SearchOutput struct {
-	Resolved ResolvedVersion `json:"resolved"`
-	Scope    string          `json:"scope"`
-	Hits     []SearchHit     `json:"hits"`
-	Total    int             `json:"total"`
-	Error    *ToolError      `json:"error,omitempty"`
+	Resolved  ResolvedVersion `json:"resolved"`
+	Scope     string          `json:"scope"`
+	Hits      []SearchHit     `json:"hits"`
+	Total     int             `json:"total"`
+	Truncated bool            `json:"truncated"`
+	Error     *ToolError      `json:"error,omitempty"`
 }
 
 type docRecord struct {

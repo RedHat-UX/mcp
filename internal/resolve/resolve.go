@@ -27,6 +27,9 @@ type Candidate struct {
 	Source     string `json:"source"`
 	Precedence int    `json:"precedence"`
 	Level      string `json:"level"`
+	// Truncated reports that a field was shortened by a fixed cap. Callers
+	// warn when this happens in a response payload.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // Ambiguity reports candidates at the winning precedence level that disagree

@@ -50,6 +50,7 @@ type ListComponentsOutput struct {
 	Components []ComponentSummary `json:"components"`
 	Total      int                `json:"total"`
 	NextCursor string             `json:"nextCursor,omitempty"`
+	Truncated  bool               `json:"truncated"`
 	Error      *ToolError         `json:"error,omitempty"`
 }
 

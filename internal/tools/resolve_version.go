@@ -22,6 +22,7 @@ type ResolveVersionOutput struct {
 	Resolved   ResolvedVersion     `json:"resolved"`
 	Candidates []resolve.Candidate `json:"candidates"`
 	Ambiguity  *resolve.Ambiguity  `json:"ambiguity,omitempty"`
+	Truncated  bool                `json:"truncated"`
 	Error      *ToolError          `json:"error,omitempty"`
 }
 

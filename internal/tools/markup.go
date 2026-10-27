@@ -35,14 +35,18 @@ type MarkupIssue struct {
 	Attribute  string `json:"attribute,omitempty"`
 	Line       int    `json:"line"`
 	Column     int    `json:"column"`
+	// Truncated reports that Message was shortened by a fixed cap. A warning
+	// names the field and its true original length.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // ValidateMarkupOutput is the output for rhds_validate_markup.
 type ValidateMarkupOutput struct {
-	Resolved ResolvedVersion `json:"resolved"`
-	Issues   []MarkupIssue   `json:"issues"`
-	Warnings []string        `json:"warnings,omitempty"`
-	Error    *ToolError      `json:"error,omitempty"`
+	Resolved  ResolvedVersion `json:"resolved"`
+	Issues    []MarkupIssue   `json:"issues"`
+	Warnings  []string        `json:"warnings,omitempty"`
+	Truncated bool            `json:"truncated"`
+	Error     *ToolError      `json:"error,omitempty"`
 }
 
 // globalAttributes may appear on any HTML element and are not declared in CEM.

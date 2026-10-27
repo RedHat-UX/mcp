@@ -127,6 +127,28 @@ func summarizeWarnings(warnings []string) []string {
 	return []string{fmt.Sprintf("%d warnings omitted to fit the response budget", len(warnings))}
 }
 
+// markCandidateTruncation shortens one candidate's fields with the fixed caps
+// and marks it when anything changed.
+func markCandidateTruncation(candidate *resolve.Candidate) bool {
+	truncated := false
+	if after := truncateResponseText(candidate.Version, maxCandidateRunes); after != candidate.Version {
+		candidate.Version = after
+		truncated = true
+	}
+	if after := truncateResponseText(candidate.Spec, maxCandidateRunes); after != candidate.Spec {
+		candidate.Spec = after
+		truncated = true
+	}
+	if after := truncateResponseText(candidate.Source, 300); after != candidate.Source {
+		candidate.Source = after
+		truncated = true
+	}
+	candidate.Truncated = candidate.Truncated || truncated
+	return truncated
+}
+
+// boundedCandidates caps the count and shortens fields for bounded error
+// details. The shortened candidates are marked so the caller can report it.
 func boundedCandidates(candidates []resolve.Candidate, limit int) []resolve.Candidate {
 	if len(candidates) == 0 {
 		return nil
@@ -136,14 +158,14 @@ func boundedCandidates(candidates []resolve.Candidate, limit int) []resolve.Cand
 		if i >= limit {
 			break
 		}
-		candidate.Version = truncateResponseText(candidate.Version, maxCandidateRunes)
-		candidate.Spec = truncateResponseText(candidate.Spec, maxCandidateRunes)
-		candidate.Source = truncateResponseText(candidate.Source, 300)
+		markCandidateTruncation(&candidate)
 		bounded = append(bounded, candidate)
 	}
 	return bounded
 }
 
+// sanitizeCandidates caps the candidate count. Field shortening is a budget
+// measure and happens later, only when the response is actually over budget.
 func sanitizeCandidates(candidates []resolve.Candidate, warnings *[]string) []resolve.Candidate {
 	if len(candidates) == 0 {
 		return nil
@@ -151,13 +173,35 @@ func sanitizeCandidates(candidates []resolve.Candidate, warnings *[]string) []re
 	dropped := 0
 	if len(candidates) > maxOutputCandidates {
 		dropped = len(candidates) - maxOutputCandidates
+		candidates = candidates[:maxOutputCandidates]
 	}
-	bounded := boundedCandidates(candidates, maxOutputCandidates)
 	if dropped > 0 {
 		*warnings = append(*warnings,
 			fmt.Sprintf("%d additional candidates omitted; pass a more specific workspace root or version argument", dropped))
 	}
-	return bounded
+	return candidates
+}
+
+// truncateCandidateFields shortens the surviving candidates and returns how
+// many were changed.
+func truncateCandidateFields(candidates []resolve.Candidate) int {
+	count := 0
+	for i := range candidates {
+		if markCandidateTruncation(&candidates[i]) {
+			count++
+		}
+	}
+	return count
+}
+
+func countTruncatedCandidates(candidates []resolve.Candidate) int {
+	count := 0
+	for _, candidate := range candidates {
+		if candidate.Truncated {
+			count++
+		}
+	}
+	return count
 }
 
 func responseTooLarge(what string, budget int) *ToolError {
@@ -226,11 +270,11 @@ func ambiguityCandidateSummary(candidates []resolve.Candidate) []string {
 		return nil
 	}
 	const limit = 5
-	summary := make([]string, 0, limit+1)
+	summary := make([]string, 0, limit)
 	for i, candidate := range candidates {
-		if i >= limit {
+		if i == limit-1 && len(candidates) > limit {
 			summary = append(summary,
-				fmt.Sprintf("and %d more candidates", len(candidates)-limit))
+				fmt.Sprintf("and %d more candidates", len(candidates)-i))
 			break
 		}
 		summary = append(summary, fmt.Sprintf("%s (%s)",
@@ -249,9 +293,18 @@ func ambiguityCandidateSamples(candidates []resolve.Candidate) []resolve.Candida
 	}
 	samples := make([]resolve.Candidate, 0, limit)
 	for _, candidate := range candidates[:limit] {
-		candidate.Version = truncateResponseText(candidate.Version, 96)
-		candidate.Spec = ""
-		candidate.Source = truncateResponseText(candidate.Source, 160)
+		if after := truncateResponseText(candidate.Version, 96); after != candidate.Version {
+			candidate.Version = after
+			candidate.Truncated = true
+		}
+		if candidate.Spec != "" {
+			candidate.Spec = ""
+			candidate.Truncated = true
+		}
+		if after := truncateResponseText(candidate.Source, 160); after != candidate.Source {
+			candidate.Source = after
+			candidate.Truncated = true
+		}
 		samples = append(samples, candidate)
 	}
 	return samples
@@ -396,6 +449,9 @@ func fitListComponents(
 		states[i] = newFieldTruncation()
 		markComponentTruncation(&out.Components[i], states[i], 100, 500, 300, 300)
 	}
+	if len(truncationNotices(states, len(out.Components))) > 0 {
+		out.Truncated = true
+	}
 	baseWarnings := sanitizeWarnings(out.Resolved.Warnings)
 	if estimatedResponseBytes(out) > budget {
 		baseWarnings = summarizeWarnings(baseWarnings)
@@ -416,6 +472,7 @@ func fitListComponents(
 		setWarnings()
 	}
 	if trimmed > 0 {
+		out.Truncated = true
 		setWarnings(trimWarning)
 		// Re-size with the trim warning and cursor included. The cursor length
 		// depends on the trimmed length, so update it on every iteration.
@@ -435,6 +492,7 @@ func fitListComponents(
 		}
 	}
 	if estimatedResponseBytes(out) > budget && len(out.Components) == 1 {
+		out.Truncated = true
 		markComponentTruncation(&out.Components[0], states[0], 0, 100, 150, 150)
 		if trimmed > 0 {
 			setWarnings(trimWarning)
@@ -445,6 +503,7 @@ func fitListComponents(
 	if estimatedResponseBytes(out) > budget {
 		// A single component cannot be served within the budget. Never return
 		// an empty page with no cursor, because that silently ends pagination.
+		out.Truncated = true
 		out.Components = nil
 		out.NextCursor = ""
 		out.Resolved.Warnings = []string{"response trimmed to fit the budget"}
@@ -466,13 +525,15 @@ func fitSearch(out *SearchOutput, budget int) {
 	for i := range out.Hits {
 		states[i] = newFieldTruncation()
 		markSearchHitTruncation(&out.Hits[i], states[i])
+		if out.Hits[i].Truncated {
+			out.Truncated = true
+		}
 	}
 	baseWarnings := sanitizeWarnings(out.Resolved.Warnings)
 	setWarnings := func(extra ...string) {
-		base := append([]string(nil), baseWarnings...)
-		base = append(base, extra...)
-		out.Resolved.Warnings = sanitizeWarningsWithReserved(
-			base, truncationNotices(states, len(out.Hits)))
+		reserved := truncationNotices(states, len(out.Hits))
+		reserved = append(reserved, extra...)
+		out.Resolved.Warnings = sanitizeWarningsWithReserved(baseWarnings, reserved)
 	}
 	setWarnings()
 	if estimatedResponseBytes(out) > budget {
@@ -487,12 +548,21 @@ func fitSearch(out *SearchOutput, budget int) {
 		setWarnings()
 	}
 	if trimmed > 0 {
-		setWarnings(fmt.Sprintf("results trimmed from %d to %d to fit the response budget",
-			out.Total, len(out.Hits)))
-	}
-	if estimatedResponseBytes(out) > budget {
-		out.Hits = nil
-		out.Resolved.Warnings = []string{"results trimmed to fit the response budget"}
+		out.Truncated = true
+		// The trim notice adds bytes. Keep trimming with it included so the
+		// notice never turns a trimmable page into an empty one.
+		for {
+			setWarnings(fmt.Sprintf("results trimmed from %d to %d to fit the response budget",
+				out.Total, len(out.Hits)))
+			if estimatedResponseBytes(out) <= budget || len(out.Hits) == 0 {
+				break
+			}
+			out.Hits = out.Hits[:len(out.Hits)-1]
+		}
+		if estimatedResponseBytes(out) > budget {
+			out.Hits = nil
+			setWarnings("results trimmed to fit the response budget")
+		}
 	}
 	if estimatedResponseBytes(out) > budget {
 		out.Error = responseTooLarge("the search response", budget)
@@ -514,8 +584,22 @@ func fitResolveVersion(out *ResolveVersionOutput, budget int) {
 	if out.Error != nil {
 		out.Error = boundError(out.Error)
 	}
+
+	baseWarnings := out.Resolved.Warnings
+	setWarnings := func(extra ...string) {
+		out.Resolved.Warnings = sanitizeWarningsWithReserved(baseWarnings, extra)
+	}
+	setWarnings()
 	if estimatedResponseBytes(out) > budget {
-		out.Resolved.Warnings = summarizeWarnings(out.Resolved.Warnings)
+		baseWarnings = summarizeWarnings(baseWarnings)
+		setWarnings()
+	}
+
+	// Field shortening is itself a budget measure: apply it only when over.
+	if estimatedResponseBytes(out) > budget {
+		if changed := truncateCandidateFields(out.Candidates); changed > 0 {
+			out.Truncated = true
+		}
 	}
 
 	trimmed := 0
@@ -524,9 +608,27 @@ func fitResolveVersion(out *ResolveVersionOutput, budget int) {
 		trimmed++
 	}
 	if trimmed > 0 {
-		out.Resolved.Warnings = sanitizeWarnings(append(out.Resolved.Warnings,
-			fmt.Sprintf("%d candidates omitted to fit the response budget", trimmed)))
+		out.Truncated = true
 	}
+	// Recompute notices and re-trim if they push the payload over the cap.
+	for {
+		var extra []string
+		if shortened := countTruncatedCandidates(out.Candidates); shortened > 0 {
+			extra = append(extra, fmt.Sprintf(
+				"%d candidates had fields shortened to fit the response budget", shortened))
+		}
+		if trimmed > 0 {
+			extra = append(extra, fmt.Sprintf(
+				"%d candidates omitted to fit the response budget", trimmed))
+		}
+		setWarnings(extra...)
+		if estimatedResponseBytes(out) <= budget || len(out.Candidates) == 0 {
+			break
+		}
+		out.Candidates = out.Candidates[:len(out.Candidates)-1]
+		trimmed++
+	}
+
 	// Details and the ambiguity block are secondary to the resolved version.
 	// Drop them before replacing the whole response with an error.
 	if estimatedResponseBytes(out) > budget {
@@ -547,9 +649,6 @@ func fitResolveVersion(out *ResolveVersionOutput, budget int) {
 		}
 	}
 	if estimatedResponseBytes(out) > budget {
-		out.Resolved.Warnings = []string{"response trimmed to fit the budget"}
-	}
-	if estimatedResponseBytes(out) > budget {
 		out.Ambiguity = nil
 	}
 	if estimatedResponseBytes(out) > budget {
@@ -557,7 +656,6 @@ func fitResolveVersion(out *ResolveVersionOutput, budget int) {
 		out.Ambiguity = nil
 		out.Error = responseTooLarge("the resolve_version response", budget)
 	}
-	out.Resolved.Warnings = sanitizeWarnings(out.Resolved.Warnings)
 }
 
 func fitComponentAPI(out ComponentAPIOutput, budget int, summary bool) ComponentAPIOutput {
@@ -705,25 +803,55 @@ func fitValidateMarkup(out ValidateMarkupOutput, budget int) ValidateMarkupOutpu
 		}
 		return out
 	}
-	if estimatedResponseBytes(out) > budget {
-		out.Resolved.Warnings = summarizeWarnings(out.Resolved.Warnings)
-		out.Warnings = summarizeWarnings(out.Warnings)
-	}
+	states := make([]*fieldTruncation, len(out.Issues))
 	for i := range out.Issues {
-		out.Issues[i].Message = truncateResponseText(out.Issues[i].Message, 500)
+		states[i] = newFieldTruncation()
+		issue := &out.Issues[i]
+		before := utf8.RuneCountInString(issue.Message)
+		after := truncateResponseText(issue.Message, 500)
+		if after == issue.Message {
+			continue
+		}
+		issue.Message = after
+		issue.Truncated = true
+		out.Truncated = true
+		states[i].record("markup issue "+issue.Rule, "message", before, utf8.RuneCountInString(after))
 	}
+	baseWarnings := out.Warnings
+	baseResolved := out.Resolved.Warnings
+	setWarnings := func(extra ...string) {
+		reserved := truncationNotices(states, len(out.Issues))
+		reserved = append(reserved, extra...)
+		out.Warnings = sanitizeWarningsWithReserved(baseWarnings, reserved)
+		out.Resolved.Warnings = sanitizeWarningsWithReserved(baseResolved, nil)
+	}
+	setWarnings()
+	if estimatedResponseBytes(out) > budget {
+		baseWarnings = summarizeWarnings(baseWarnings)
+		baseResolved = summarizeWarnings(baseResolved)
+		setWarnings()
+	}
+
 	trimmed := 0
 	for estimatedResponseBytes(out) > budget && len(out.Issues) > 0 {
 		out.Issues = out.Issues[:len(out.Issues)-1]
 		trimmed++
+		setWarnings()
 	}
 	if trimmed > 0 {
-		out.Warnings = sanitizeWarnings(append(out.Warnings,
-			fmt.Sprintf("%d issues omitted to fit the response budget", trimmed)))
-	}
-	if estimatedResponseBytes(out) > budget {
-		out.Issues = nil
-		out.Warnings = []string{"issues trimmed to fit the response budget"}
+		out.Truncated = true
+		for {
+			setWarnings(fmt.Sprintf("%d issues omitted to fit the response budget", trimmed))
+			if estimatedResponseBytes(out) <= budget || len(out.Issues) == 0 {
+				break
+			}
+			out.Issues = out.Issues[:len(out.Issues)-1]
+			trimmed++
+		}
+		if estimatedResponseBytes(out) > budget {
+			out.Issues = nil
+			setWarnings("issues trimmed to fit the response budget")
+		}
 	}
 	if estimatedResponseBytes(out) > budget {
 		out.Error = responseTooLarge("the markup validation response", budget)
