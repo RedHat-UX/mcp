@@ -797,3 +797,19 @@ func containsDiffSource(candidates []Candidate, source string) bool {
 	}
 	return false
 }
+
+func TestUnparseableLockfileFallsBackToPackageJSON(t *testing.T) {
+	root := t.TempDir()
+	writeFiles(t, root, map[string]string{
+		"package-lock.json": `{"lockfileVersion":3,"packages":{` +
+			`"node_modules/@rhds/elements":{"version":"not-a-version"}}}`,
+		"package.json": `{"dependencies":{"@rhds/elements":"^4.0.0"}}`,
+	})
+	result := resolveIn(t, root, "")
+	if result.Elements != "4.2.2" {
+		t.Errorf("elements = %q, want 4.2.2 from package.json", result.Elements)
+	}
+	if result.Source != "package.json" {
+		t.Errorf("source = %q, want package.json", result.Source)
+	}
+}
