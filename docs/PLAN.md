@@ -709,9 +709,11 @@ and a narrower version range are the follow-up controls.
 
 ### `rhds_get_usage_examples`
 
-Input: `tagName`, `version?`, `kind?` (`demo`, `docs`, `pattern`, `twig`).
-Output: CEM `demos`, docs snippets, pattern HTML from the docs snapshot, generic Twig
-slot markup. Do not claim a Drupal library key.
+Input: `tagName`, `version?`, `kind?` (`demo`, `docs`, `pattern`, `twig`),
+`detail?` (`summary` default, `full`). Output: CEM `demos`, docs snippets, pattern
+HTML from the docs snapshot, generic Twig slot markup. Do not claim a Drupal library
+key. `summary` uses the 8k budget and `full` may use the 32k cap, so a single pattern
+larger than the summary budget stays reachable.
 
 ### Out of scope for v1
 
