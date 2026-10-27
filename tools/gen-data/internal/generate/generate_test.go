@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/redhat-ux/mcp/internal/data"
@@ -266,10 +267,10 @@ func TestGenerateRejectsDocTagTraversal(t *testing.T) {
 	}
 }
 
-func TestGenerateRejectsUnsafeOutputDirectory(t *testing.T) {
+func TestValidateOutputDirRejectsUnsafePaths(t *testing.T) {
 	for _, out := range []string{".", "..", "/", "internal/data"} {
-		if _, err := Generate(testInputs(), out); err == nil {
-			t.Errorf("Generate(out=%q) accepted an unsafe output directory", out)
+		if err := validateOutputDir(out); err == nil {
+			t.Errorf("validateOutputDir(%q) accepted an unsafe output directory", out)
 		}
 	}
 }
@@ -279,9 +280,18 @@ func TestValidateOutputDirRejectsProtectedRoots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, out := range []string{os.TempDir(), home, string(filepath.Separator)} {
-		if err := validateOutputDir(out); err == nil {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, out := range []string{os.TempDir(), home, cwd} {
+		err := validateOutputDir(out)
+		if err == nil {
 			t.Errorf("validateOutputDir(%q) accepted a protected directory", out)
+			continue
+		}
+		if !strings.Contains(err.Error(), "protected directory") {
+			t.Errorf("validateOutputDir(%q) error = %v, want a protected-directory refusal", out, err)
 		}
 	}
 }
@@ -295,11 +305,213 @@ func TestValidateOutputDirRejectsRepositoryRoot(t *testing.T) {
 	if repoRoot == "" {
 		t.Fatal("findRepositoryRoot() did not find the module root")
 	}
-	if err := validateOutputDir(repoRoot); err == nil {
+	err = validateOutputDir(repoRoot)
+	if err == nil {
 		t.Fatalf("validateOutputDir(%q) accepted the repository root", repoRoot)
+	}
+	if !strings.Contains(err.Error(), "contains the repository") {
+		t.Fatalf("validateOutputDir(%q) error = %v, want a repository-ancestor refusal", repoRoot, err)
 	}
 	if _, err := os.Stat(filepath.Join(repoRoot, "go.mod")); err != nil {
 		t.Fatalf("repository go.mod is missing after validation: %v", err)
+	}
+}
+
+func TestValidateOutputDirFindsRepositoryRootFromOutput(t *testing.T) {
+	parent := t.TempDir()
+	repo := filepath.Join(parent, "repo")
+	if err := os.Mkdir(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	t.Chdir(outside)
+
+	err := validateOutputDir(repo)
+	if err == nil {
+		t.Fatalf("validateOutputDir(%q) accepted a repository root found from the output path", repo)
+	}
+	if !strings.Contains(err.Error(), "contains the repository") {
+		t.Fatalf("validateOutputDir(%q) error = %v, want a repository-ancestor refusal", repo, err)
+	}
+}
+
+func TestIsInternalDataDistAnchoredToActiveRepository(t *testing.T) {
+	active := t.TempDir()
+	activeDist := filepath.Join(active, "internal", "data", "dist")
+	if !isInternalDataDist(activeDist, active) {
+		t.Error("isInternalDataDist() rejected the active repository's dist")
+	}
+	other := filepath.Join(t.TempDir(), "internal", "data", "dist")
+	if isInternalDataDist(other, active) {
+		t.Error("isInternalDataDist() accepted another repository's dist")
+	}
+	if isInternalDataDist(activeDist, "") {
+		t.Error("isInternalDataDist() accepted a dist without a repository root")
+	}
+}
+
+func TestGenerateAcceptsGitkeepOnlyDirectory(t *testing.T) {
+	out, err := os.MkdirTemp("", "rhds-gen-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(out) }()
+	if err := os.WriteFile(filepath.Join(out, ".gitkeep"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Generate(testInputs(), out); err != nil {
+		t.Fatalf("Generate() rejected a clean-checkout .gitkeep directory: %v", err)
+	}
+}
+
+func TestGenerateRefusesNameCollisionWithoutMarker(t *testing.T) {
+	out, err := os.MkdirTemp("", "rhds-gen-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(out) }()
+
+	files := map[string]string{
+		filepath.Join("docs", "user.md"):     "user docs",
+		filepath.Join("tokens", "user.json"): "user tokens",
+	}
+	for name, content := range files {
+		full := filepath.Join(out, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Generate(testInputs(), out); err == nil {
+		t.Fatal("Generate() accepted name-colliding user directories without a marker")
+	}
+	for name, want := range files {
+		content, err := os.ReadFile(filepath.Join(out, name))
+		if err != nil {
+			t.Fatalf("Generate() removed %s: %v", name, err)
+		}
+		if string(content) != want {
+			t.Errorf("%s content = %q, want %q", name, content, want)
+		}
+	}
+}
+
+func TestGenerateRefusesSymlinkOutput(t *testing.T) {
+	target, err := os.MkdirTemp("", "rhds-gen-target-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(target) }()
+	linkDir, err := os.MkdirTemp("", "rhds-gen-link-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(linkDir) }()
+	link := filepath.Join(linkDir, "output")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Generate(testInputs(), link); err == nil {
+		t.Fatal("Generate() accepted an output path that is a symlink")
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("symlink target was removed: %v", err)
+	}
+}
+
+func TestGenerateDoesNotFollowOutputEntrySymlink(t *testing.T) {
+	out, err := os.MkdirTemp("", "rhds-gen-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(out) }()
+	if _, err := Generate(testInputs(), out); err != nil {
+		t.Fatalf("first Generate() = %v", err)
+	}
+	outside, err := os.MkdirTemp("", "rhds-gen-outside-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(outside) }()
+	userFile := filepath.Join(outside, "keep.txt")
+	if err := os.WriteFile(userFile, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	elements := filepath.Join(out, "elements")
+	if err := os.RemoveAll(elements); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, elements); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Generate(testInputs(), out); err != nil {
+		t.Fatalf("Generate() with an entry symlink = %v", err)
+	}
+	content, err := os.ReadFile(userFile)
+	if err != nil {
+		t.Fatalf("Generate() followed the entry symlink: %v", err)
+	}
+	if string(content) != "keep" {
+		t.Fatalf("outside file content = %q, want %q", content, "keep")
+	}
+}
+
+func TestGenerateRefusesUnexpectedEntryAfterValidMarker(t *testing.T) {
+	out, err := os.MkdirTemp("", "rhds-gen-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(out) }()
+	if _, err := Generate(testInputs(), out); err != nil {
+		t.Fatalf("first Generate() = %v", err)
+	}
+	unexpected := filepath.Join(out, "unrelated.txt")
+	if err := os.WriteFile(unexpected, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Generate(testInputs(), out)
+	if err == nil {
+		t.Fatal("Generate() accepted an unexpected top-level entry")
+	}
+	if !strings.Contains(err.Error(), "unrelated.txt") {
+		t.Errorf("Generate() error = %v, want the unexpected entry name", err)
+	}
+	if _, err := os.Stat(unexpected); err != nil {
+		t.Fatalf("unexpected entry was removed: %v", err)
+	}
+}
+
+func TestGenerateRefusesNestedSourceFiles(t *testing.T) {
+	out, err := os.MkdirTemp("", "rhds-gen-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(out) }()
+	if _, err := Generate(testInputs(), out); err != nil {
+		t.Fatalf("first Generate() = %v", err)
+	}
+	nested := filepath.Join(out, "elements", "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sourceFile := filepath.Join(nested, "go.mod")
+	if err := os.WriteFile(sourceFile, []byte("module example.test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Generate(testInputs(), out)
+	if err == nil {
+		t.Fatal("Generate() accepted a nested go.mod under an output entry")
+	}
+	if !strings.Contains(err.Error(), "elements/nested/go.mod") {
+		t.Errorf("Generate() error = %v, want the nested go.mod path", err)
+	}
+	if _, err := os.Stat(sourceFile); err != nil {
+		t.Fatalf("nested go.mod was removed: %v", err)
 	}
 }
 

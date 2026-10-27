@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -125,14 +126,14 @@ func Generate(inputs *Inputs, outDir string) (*data.Index, error) {
 	if err != nil {
 		return nil, err
 	}
-	resolvedOut, err := prepareOutputDir(absoluteOut)
+	root, err := prepareOutputDir(absoluteOut)
 	if err != nil {
 		return nil, err
 	}
-	outDir = resolvedOut
+	defer func() { _ = root.Close() }()
 	// Keep the embed pattern valid even if the tree is later cleaned of
 	// generated artifacts.
-	if err := os.WriteFile(filepath.Join(outDir, ".gitkeep"), nil, 0o644); err != nil {
+	if err := root.WriteFile(".gitkeep", nil, 0o644); err != nil {
 		return nil, err
 	}
 
@@ -144,13 +145,13 @@ func Generate(inputs *Inputs, outDir string) (*data.Index, error) {
 	}
 	tokensVersions := sortedKeys(inputs.Tokens)
 
-	if err := generateElements(inputs, tokensVersions, outDir, index); err != nil {
+	if err := generateElements(inputs, tokensVersions, root, index); err != nil {
 		return nil, err
 	}
-	if err := generateTokens(inputs, tokensVersions, outDir, index); err != nil {
+	if err := generateTokens(inputs, tokensVersions, root, index); err != nil {
 		return nil, err
 	}
-	if err := generateDocs(inputs.Docs, outDir, index); err != nil {
+	if err := generateDocs(inputs.Docs, root, index); err != nil {
 		return nil, err
 	}
 
@@ -159,88 +160,279 @@ func Generate(inputs *Inputs, outDir string) (*data.Index, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(outDir, data.IndexPath), encoded, 0o644); err != nil {
+	if err := root.WriteFile(data.IndexPath, encoded, 0o644); err != nil {
 		return nil, err
 	}
 	return index, nil
 }
 
-// outputTreeEntries are the only top-level names gen-data writes. Clearing is
-// limited to these names, so an output directory can never lose unrelated
-// files even when it was accepted.
-var outputTreeEntries = map[string]bool{
-	".gitkeep":      true,
-	data.IndexPath:  true,
-	"elements":      true,
-	"tokens":        true,
-	"docs":          true,
-	"release-notes": true,
-}
-
-// prepareOutputDir validates outDir, refuses directories that contain anything
-// other than a previous gen-data tree, and removes only gen-data's own
-// top-level entries. It returns the resolved path to write to.
-func prepareOutputDir(absolute string) (string, error) {
-	resolved, err := resolveExisting(absolute)
+// prepareOutputDir validates outDir, requires positive gen-data provenance
+// before clearing a non-empty directory, and removes only a prior gen-data
+// tree. The returned Root binds all later reads, removals, and writes to the
+// same opened directory descriptor.
+func prepareOutputDir(absolute string) (*os.Root, error) {
+	resolved, err := resolveOutputPath(absolute)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	if err := validateOutputDir(absolute); err != nil {
-		return "", err
+	if err := validateOutputPath(absolute, resolved); err != nil {
+		return nil, err
 	}
-	entries, err := os.ReadDir(resolved)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-	case err != nil:
-		return "", fmt.Errorf("generate: cannot inspect output %q: %w", absolute, err)
-	default:
-		for _, entry := range entries {
-			if !outputTreeEntries[entry.Name()] {
-				return "", fmt.Errorf(
-					"generate: refusing to clear %q: it is not a gen-data output directory; use a dedicated output directory",
-					absolute)
-			}
-		}
-		for _, entry := range entries {
-			if err := os.RemoveAll(filepath.Join(resolved, entry.Name())); err != nil {
-				return "", fmt.Errorf("clearing %s: %w", filepath.Join(absolute, entry.Name()), err)
-			}
-		}
+	before, beforeErr := os.Stat(resolved)
+	if beforeErr != nil && !errors.Is(beforeErr, os.ErrNotExist) {
+		return nil, fmt.Errorf("generate: inspecting output %q: %w", resolved, beforeErr)
 	}
+	// A parent component can still change before the directory exists. For an
+	// existing directory, compare the inode captured here with the opened
+	// root. For a new directory the final creation window remains; all later
+	// reads, removals, and writes use the opened root descriptor.
 	if err := os.MkdirAll(resolved, 0o755); err != nil {
-		return "", fmt.Errorf("creating %s: %w", absolute, err)
+		return nil, fmt.Errorf("creating %s: %w", absolute, err)
 	}
-	return resolved, nil
+	root, err := os.OpenRoot(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("opening %s: %w", absolute, err)
+	}
+	if beforeErr == nil {
+		rootInfo, err := root.Stat(".")
+		if err != nil || !os.SameFile(before, rootInfo) {
+			_ = root.Close()
+			return nil, fmt.Errorf("generate: refusing output %q because it changed while opening", resolved)
+		}
+	}
+	if err := confirmSameDirectory(resolved, root); err != nil {
+		_ = root.Close()
+		return nil, err
+	}
+	if err := validateOutputContents(root, absolute); err != nil {
+		_ = root.Close()
+		return nil, err
+	}
+	entries, err := fs.ReadDir(root.FS(), ".")
+	if err != nil {
+		_ = root.Close()
+		return nil, fmt.Errorf("generate: cannot inspect output %q: %w", absolute, err)
+	}
+	if isEmptyOutput(entries) {
+		return root, nil
+	}
+	if err := checkProvenance(root, entries, absolute); err != nil {
+		_ = root.Close()
+		return nil, err
+	}
+	sources, err := findSourceFiles(root, entries)
+	if err != nil {
+		_ = root.Close()
+		return nil, fmt.Errorf("generate: scanning output %q: %w", absolute, err)
+	}
+	if len(sources) > 0 {
+		_ = root.Close()
+		return nil, fmt.Errorf(
+			"generate: refusing to clear %q because it contains %s",
+			absolute, strings.Join(sources, ", "))
+	}
+	for _, entry := range entries {
+		if err := root.RemoveAll(entry.Name()); err != nil {
+			_ = root.Close()
+			return nil, fmt.Errorf("clearing %s: %w", filepath.Join(absolute, entry.Name()), err)
+		}
+	}
+	return root, nil
 }
 
-// validateOutputDir refuses paths whose contents or removal could destroy the
-// checkout, the user's home, or a shared temporary root. Generated data
-// belongs under internal/data/dist, or in a dedicated temporary subdirectory.
+func confirmSameDirectory(resolved string, root *os.Root) error {
+	pathInfo, err := os.Stat(resolved)
+	if err != nil {
+		return fmt.Errorf("generate: inspecting output %q: %w", resolved, err)
+	}
+	rootInfo, err := root.Stat(".")
+	if err != nil {
+		return fmt.Errorf("generate: inspecting output %q: %w", resolved, err)
+	}
+	if !os.SameFile(pathInfo, rootInfo) {
+		return fmt.Errorf("generate: refusing output %q because it changed while opening", resolved)
+	}
+	return nil
+}
+
+func isEmptyOutput(entries []fs.DirEntry) bool {
+	return len(entries) == 0 ||
+		(len(entries) == 1 && entries[0].Name() == ".gitkeep" && !entries[0].IsDir())
+}
+
+// checkProvenance accepts a non-empty directory only when index.json carries a
+// gen-data index for this schema and every top-level entry is expected from
+// that index.
+func checkProvenance(root *os.Root, entries []fs.DirEntry, absolute string) error {
+	encoded, err := root.ReadFile(data.IndexPath)
+	if err != nil {
+		return fmt.Errorf(
+			"generate: refusing to clear %q: not a gen-data output directory (missing or unreadable %s; found: %s)",
+			absolute, data.IndexPath, strings.Join(entryNames(entries), ", "))
+	}
+	var index data.Index
+	if err := json.Unmarshal(encoded, &index); err != nil ||
+		index.SchemaVersion != data.SchemaVersion ||
+		index.GeneratorVersion <= 0 ||
+		!isLowerHexDigest(index.LockSHA256) {
+		return fmt.Errorf(
+			"generate: refusing to clear %q: not a gen-data output directory (invalid %s; found: %s)",
+			absolute, data.IndexPath, strings.Join(entryNames(entries), ", "))
+	}
+	expected := map[string]bool{
+		".gitkeep":     true,
+		data.IndexPath: true,
+	}
+	for _, artifact := range index.Artifacts {
+		if top, _, _ := strings.Cut(artifact.Path, "/"); top != "" {
+			expected[top] = true
+		}
+	}
+	var unexpected []string
+	for _, entry := range entries {
+		if !expected[entry.Name()] {
+			unexpected = append(unexpected, entry.Name())
+		}
+	}
+	if len(unexpected) > 0 {
+		return fmt.Errorf(
+			"generate: refusing to clear %q: not a gen-data output directory (unexpected entries: %s)",
+			absolute, strings.Join(unexpected, ", "))
+	}
+	return nil
+}
+
+func entryNames(entries []fs.DirEntry) []string {
+	names := make([]string, len(entries))
+	for i, entry := range entries {
+		names[i] = entry.Name()
+	}
+	return names
+}
+
+// findSourceFiles refuses a tree that contains a checkout or lock at any
+// depth under an entry that would be deleted.
+func findSourceFiles(root *os.Root, entries []fs.DirEntry) ([]string, error) {
+	isSource := func(name string) bool {
+		base := filepath.Base(name)
+		return base == "go.mod" || base == "sources.lock.json"
+	}
+	var found []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			if isSource(entry.Name()) {
+				found = append(found, entry.Name())
+			}
+			continue
+		}
+		err := fs.WalkDir(root.FS(), entry.Name(), func(name string, item fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if !item.IsDir() && isSource(name) {
+				found = append(found, filepath.ToSlash(name))
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return found, nil
+}
+
+// resolveOutputPath refuses an output path that is itself a symlink, then
+// resolves parent symlinks once. Callers must use the returned path for both
+// validation and directory access.
+func resolveOutputPath(absolute string) (string, error) {
+	info, err := os.Lstat(absolute)
+	switch {
+	case err == nil && info.Mode()&os.ModeSymlink != 0:
+		return "", fmt.Errorf("generate: refusing output %q because it is a symlink", absolute)
+	case err != nil && !errors.Is(err, os.ErrNotExist):
+		return "", err
+	}
+	return resolveExisting(absolute)
+}
+
+// validateOutputDir is the standalone validator used by tests. It performs the
+// path checks and, when the directory exists, the contents checks through an
+// opened root.
 func validateOutputDir(absolute string) error {
-	resolved, err := resolveExisting(absolute)
+	resolved, err := resolveOutputPath(absolute)
 	if err != nil {
 		return err
 	}
+	if err := validateOutputPath(absolute, resolved); err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(resolved)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	if err := confirmSameDirectory(resolved, root); err != nil {
+		return err
+	}
+	return validateOutputContents(root, absolute)
+}
+
+// validateOutputPath refuses protected paths. It uses the already resolved
+// path so later directory access refers to the same location.
+func validateOutputPath(absolute, resolved string) error {
 	if isFilesystemRoot(absolute) || isFilesystemRoot(resolved) {
 		return fmt.Errorf("generate: refusing to clear filesystem root")
 	}
-	if protected := protectedPaths(); protected != nil {
-		for _, path := range protected {
-			if resolved == path {
-				return fmt.Errorf("generate: refusing to clear protected directory %q", path)
-			}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	cwd, err = resolveExisting(cwd)
+	if err != nil {
+		return err
+	}
+	temp, err := resolveExisting(os.TempDir())
+	if err != nil {
+		return err
+	}
+	home := ""
+	if value, err := os.UserHomeDir(); err == nil {
+		home, _ = resolveExisting(value)
+	}
+	for _, protected := range []struct {
+		name string
+		path string
+	}{
+		{"temporary root", temp},
+		{"home directory", home},
+		{"current directory", cwd},
+	} {
+		if protected.path != "" && resolved == protected.path {
+			return fmt.Errorf("generate: refusing to clear protected directory %q (%s)", protected.path, protected.name)
 		}
-		if repoRoot := protected["repo"]; repoRoot != "" && isAncestorOrSelf(resolved, repoRoot) {
+	}
+	roots := repositoryRoots(resolved, cwd)
+	for _, root := range roots {
+		if isAncestorOrSelf(resolved, root) {
 			return fmt.Errorf("generate: refusing to clear %q because it contains the repository", absolute)
 		}
 	}
-	if !isTempPath(resolved) && !isInternalDataDist(resolved) {
+	if !isTempPath(resolved, temp) && !isInternalDataDist(resolved, findRepositoryRoot(cwd)) {
 		return fmt.Errorf(
 			"generate: output %q is not under internal/data/dist or a temporary directory",
 			absolute)
 	}
+	return nil
+}
+
+// validateOutputContents checks direct children through an opened root so the
+// check cannot race with a path replacement.
+func validateOutputContents(root *os.Root, absolute string) error {
 	for _, name := range []string{"go.mod", "sources.lock.json"} {
-		if _, err := os.Stat(filepath.Join(resolved, name)); err == nil {
+		if _, err := root.Stat(name); err == nil {
 			return fmt.Errorf(
 				"generate: refusing to clear %q because it contains %s", absolute, name)
 		}
@@ -248,37 +440,38 @@ func validateOutputDir(absolute string) error {
 	return nil
 }
 
-// protectedPaths returns resolved paths that must never be cleared: the temp
-// root, the user's home, the current directory, and the repository root. The
-// "repo" key is empty when no go.mod is found above the current directory.
-func protectedPaths() map[string]string {
-	paths := map[string]string{}
-	add := func(key, value string) {
-		if value == "" {
-			return
-		}
-		if resolved, err := resolveExisting(value); err == nil {
-			paths[key] = resolved
-		} else {
-			paths[key] = filepath.Clean(value)
+// repositoryRoots finds repository roots by walking up from the output and
+// from the current directory. Both matter when gen-data runs outside the
+// module but targets a directory inside one.
+func repositoryRoots(output, cwd string) []string {
+	var roots []string
+	seen := map[string]bool{}
+	for _, start := range []string{output, cwd} {
+		root := findRepositoryRoot(start)
+		if root != "" && !seen[root] {
+			seen[root] = true
+			roots = append(roots, root)
 		}
 	}
-	add("temp", os.TempDir())
-	if home, err := os.UserHomeDir(); err == nil {
-		add("home", home)
-	}
-	if cwd, err := os.Getwd(); err == nil {
-		add("cwd", cwd)
-		add("repo", findRepositoryRoot(cwd))
-	}
-	return paths
+	return roots
 }
 
+// findRepositoryRoot walks up from start looking for a repository marker. The
+// internal/data/dist exception is anchored to the root discovered from cwd,
+// so another checkout's dist directory is not accepted.
 func findRepositoryRoot(start string) string {
 	dir := filepath.Clean(start)
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		dir = filepath.Dir(dir)
+	}
 	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
+		for _, marker := range []string{".git", "go.mod"} {
+			if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
+				if resolved, err := resolveExisting(dir); err == nil {
+					return resolved
+				}
+				return dir
+			}
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -298,15 +491,27 @@ func isAncestorOrSelf(ancestor, target string) bool {
 	return ancestor == target || strings.HasPrefix(target, ancestor+string(filepath.Separator))
 }
 
-func isTempPath(resolved string) bool {
-	temp := filepath.Clean(os.TempDir())
-	return strings.HasPrefix(resolved, temp+string(filepath.Separator))
+func isLowerHexDigest(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, r := range value {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
-func isInternalDataDist(resolved string) bool {
-	slash := filepath.ToSlash(resolved)
-	return slash == "internal/data/dist" ||
-		strings.HasSuffix(slash, "/internal/data/dist")
+func isTempPath(resolved, temp string) bool {
+	return strings.HasPrefix(resolved, filepath.Clean(temp)+string(filepath.Separator))
+}
+
+func isInternalDataDist(resolved, repoRoot string) bool {
+	if repoRoot == "" {
+		return false
+	}
+	return resolved == filepath.Join(repoRoot, "internal", "data", "dist")
 }
 
 // resolveExisting resolves symlinks for the nearest existing ancestor and
@@ -331,7 +536,7 @@ func resolveExisting(path string) (string, error) {
 	}
 }
 
-func generateElements(inputs *Inputs, tokensVersions []string, outDir string, index *data.Index) error {
+func generateElements(inputs *Inputs, tokensVersions []string, root *os.Root, index *data.Index) error {
 	versions := sortedKeys(inputs.Elements)
 	for _, version := range versions {
 		input := inputs.Elements[version]
@@ -358,7 +563,7 @@ func generateElements(inputs *Inputs, tokensVersions []string, outDir string, in
 		index.ElementsTokens[version] = tokensVersion
 
 		artifact, err := writeGzipArtifact(
-			outDir,
+			root,
 			path.Join(PackageElements, version, "custom-elements.json.gz"),
 			PackageElements, version, KindManifest, input.Manifest,
 		)
@@ -370,7 +575,7 @@ func generateElements(inputs *Inputs, tokensVersions []string, outDir string, in
 	return nil
 }
 
-func generateTokens(inputs *Inputs, versions []string, outDir string, index *data.Index) error {
+func generateTokens(inputs *Inputs, versions []string, root *os.Root, index *data.Index) error {
 	for _, version := range versions {
 		input := inputs.Tokens[version]
 		result, err := normalize.NormalizeTokens(input.JSON)
@@ -396,7 +601,7 @@ func generateTokens(inputs *Inputs, versions []string, outDir string, index *dat
 		}
 
 		artifact, err := writeGzipArtifact(
-			outDir,
+			root,
 			path.Join(PackageTokens, version, "rhds.tokens.json.gz"),
 			PackageTokens, version, KindTokens, result.Document,
 		)
@@ -424,7 +629,7 @@ func generateTokens(inputs *Inputs, versions []string, outDir string, index *dat
 			return err
 		}
 		artifact, err = writeGzipArtifact(
-			outDir,
+			root,
 			path.Join(PackageTokens, version, "themes.json.gz"),
 			PackageTokens, version, KindThemes, themesJSON,
 		)
@@ -436,7 +641,7 @@ func generateTokens(inputs *Inputs, versions []string, outDir string, index *dat
 	return nil
 }
 
-func generateDocs(snapshots []DocsInput, outDir string, index *data.Index) error {
+func generateDocs(snapshots []DocsInput, root *os.Root, index *data.Index) error {
 	sorted := append([]DocsInput(nil), snapshots...)
 	sort.Slice(sorted, func(i, j int) bool {
 		return compareVersions(sorted[i].Tag, sorted[j].Tag) < 0
@@ -447,7 +652,7 @@ func generateDocs(snapshots []DocsInput, outDir string, index *data.Index) error
 		if len(snapshot.Changelog) > 0 {
 			changelog = snapshot
 		}
-		if err := writeDocsSnapshot(snapshot, outDir, index); err != nil {
+		if err := writeDocsSnapshot(snapshot, root, index); err != nil {
 			return err
 		}
 	}
@@ -455,7 +660,7 @@ func generateDocs(snapshots []DocsInput, outDir string, index *data.Index) error
 		source := "RedHat-UX/red-hat-design-system@" + changelog.Tag + " CHANGELOG.md"
 		processed := normalize.ProcessMarkdown(changelog.Changelog, source)
 		artifact, err := writeGzipArtifact(
-			outDir,
+			root,
 			path.Join(PackageReleaseNotes, "latest", "CHANGELOG.md.gz"),
 			PackageReleaseNotes, "latest", KindChangelog, processed.Content,
 		)
@@ -467,7 +672,7 @@ func generateDocs(snapshots []DocsInput, outDir string, index *data.Index) error
 	return nil
 }
 
-func writeDocsSnapshot(snapshot DocsInput, outDir string, index *data.Index) error {
+func writeDocsSnapshot(snapshot DocsInput, root *os.Root, index *data.Index) error {
 	tag, err := cleanDocTag(snapshot.Tag)
 	if err != nil {
 		return err
@@ -492,7 +697,7 @@ func writeDocsSnapshot(snapshot DocsInput, outDir string, index *data.Index) err
 		kind := "doc:" + cleaned
 		artifactPath := path.Join(PackageDocs, tag, cleaned+".gz")
 		artifact, err := writeGzipArtifact(
-			outDir, artifactPath, PackageDocs, tag, kind, processed.Content)
+			root, artifactPath, PackageDocs, tag, kind, processed.Content)
 		if err != nil {
 			return err
 		}
@@ -512,7 +717,7 @@ func writeDocsSnapshot(snapshot DocsInput, outDir string, index *data.Index) err
 		return err
 	}
 	artifact, err := writeGzipArtifact(
-		outDir,
+		root,
 		path.Join(PackageDocs, tag, "index.json.gz"),
 		PackageDocs, tag, KindDocs, manifest)
 	if err != nil {
@@ -540,7 +745,7 @@ func writeDocsSnapshot(snapshot DocsInput, outDir string, index *data.Index) err
 			return err
 		}
 		artifact, err := writeGzipArtifact(
-			outDir,
+			root,
 			path.Join(PackageDocs, tag, "patterns.json.gz"),
 			PackageDocs, tag, KindPatterns, encoded)
 		if err != nil {
@@ -551,16 +756,16 @@ func writeDocsSnapshot(snapshot DocsInput, outDir string, index *data.Index) err
 	return nil
 }
 
-func writeGzipArtifact(outDir, artifactPath, pkg, version, kind string, payload []byte) (data.Artifact, error) {
+func writeGzipArtifact(root *os.Root, artifactPath, pkg, version, kind string, payload []byte) (data.Artifact, error) {
 	compressed, err := gzipBytes(payload)
 	if err != nil {
 		return data.Artifact{}, err
 	}
-	fullPath := filepath.Join(outDir, filepath.FromSlash(artifactPath))
-	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+	relative := filepath.FromSlash(artifactPath)
+	if err := root.MkdirAll(filepath.Dir(relative), 0o755); err != nil {
 		return data.Artifact{}, err
 	}
-	if err := os.WriteFile(fullPath, compressed, 0o644); err != nil {
+	if err := root.WriteFile(relative, compressed, 0o644); err != nil {
 		return data.Artifact{}, err
 	}
 	sum := sha256.Sum256(compressed)
