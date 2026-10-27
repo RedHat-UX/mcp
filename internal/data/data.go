@@ -29,6 +29,12 @@ import (
 //go:embed all:dist
 var embedded embed.FS
 
+// Generate the dist tree from the committed lock. Run from the repository
+// root with `make data`. It is a no-op when dist/index.json already matches
+// the lock digest.
+//
+//go:generate go run ../../tools/gen-data -lock sources.lock.json -out dist
+
 const (
 	// IndexPath is the path of the data index inside the embedded dist tree.
 	IndexPath = "index.json"
@@ -64,8 +70,14 @@ func artifactKeyOf(pkg, version, kind string) artifactKey {
 
 // Index is the startup manifest of the embedded data tree.
 type Index struct {
-	SchemaVersion int        `json:"schemaVersion"`
-	Artifacts     []Artifact `json:"artifacts"`
+	SchemaVersion int `json:"schemaVersion"`
+	// LockSHA256 is the digest of internal/data/sources.lock.json that
+	// produced this tree. It lets `make data` decide whether it is stale.
+	LockSHA256 string `json:"lockSHA256,omitempty"`
+	// ElementsTokens maps an elements version to the highest bundled tokens
+	// version that satisfies that release's own dependency range.
+	ElementsTokens map[string]string `json:"elementsTokens,omitempty"`
+	Artifacts      []Artifact        `json:"artifacts"`
 
 	byKey map[artifactKey]Artifact
 }
@@ -120,6 +132,13 @@ func (i *Index) Artifact(pkg, version, kind string) (Artifact, bool) {
 func (i *Index) Has(pkg, version, kind string) bool {
 	_, ok := i.Artifact(pkg, version, kind)
 	return ok
+}
+
+// TokensForElements returns the tokens version coupled to an elements
+// release, as generated from that release's package.json dependency range.
+func (i *Index) TokensForElements(elementsVersion string) (string, bool) {
+	version, ok := i.ElementsTokens[elementsVersion]
+	return version, ok
 }
 
 // Versions returns the versions that have an artifact of the given kind,

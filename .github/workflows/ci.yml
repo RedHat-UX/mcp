@@ -27,10 +27,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Clean checkout has no generated data
+        run: test ! -e internal/data/dist/index.json
       - name: Vet
         run: go vet ./...
       - name: Test
         run: go test ./... -count=1
+      - name: Data generation determinism (fixtures)
+        run: go test ./tools/gen-data/internal/generate -run TestGenerateIsDeterministic -count=1
+      - name: Token normalization fixtures
+        run: go test ./tools/gen-data/internal/normalize -count=1
       - name: Staticcheck
         uses: dominikh/staticcheck-action@v1.4.1
         with:
@@ -66,3 +72,27 @@ jobs:
     uses: bennypowers/go-release-workflows/.github/workflows/build-binaries.yml@v1.4
     with:
       binary-name: rhds-mcp
+
+  size:
+    name: Binary and tarball size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build with generated data and check NFR-06
+        run: make size-check
+
+  license:
+    name: Dependency license check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Check licenses against the PLAN section 9.3 allowlist
+        run: make license-check

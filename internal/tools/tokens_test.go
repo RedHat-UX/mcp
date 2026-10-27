@@ -13,6 +13,8 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"bennypowers.dev/asimonim/token"
+
 	"github.com/redhat-ux/mcp/internal/data"
 )
 
@@ -329,6 +331,40 @@ func TestQueryTokensRejectsUnknownFormat(t *testing.T) {
 	})
 	if out.Error == nil || out.Error.Code != "invalid_argument" {
 		t.Fatalf("error = %+v, want invalid_argument", out.Error)
+	}
+}
+
+func TestAddThemeTokens(t *testing.T) {
+	tokens := []*token.Token{{
+		Name:  "color-brand",
+		Value: "#ff0000",
+		Type:  token.TypeColor,
+	}}
+	themes := map[string]map[string]string{
+		"light": {
+			"--rh-color-brand":       "#ff0000",
+			"--rh-color-accent-base": "#0066cc",
+		},
+		"dark": {
+			"--rh-color-brand":       "#ff6666",
+			"--rh-color-accent-base": "#92c5f9",
+		},
+	}
+	got := addThemeTokens(tokens, themes)
+	if len(got) != 2 {
+		t.Fatalf("addThemeTokens() = %d tokens, want 2", len(got))
+	}
+	if got[0].Name != "color-brand" {
+		t.Errorf("existing token was replaced: %q", got[0].Name)
+	}
+	if got[1].Name != "color-accent-base" {
+		t.Errorf("synthesized token = %q", got[1].Name)
+	}
+	if got[1].Value != "#0066cc" {
+		t.Errorf("synthesized value = %q", got[1].Value)
+	}
+	if got[1].CSSVariableName() != "--rh-color-accent-base" {
+		t.Errorf("synthesized CSS variable = %q", got[1].CSSVariableName())
 	}
 }
 

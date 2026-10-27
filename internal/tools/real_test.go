@@ -1,0 +1,83 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright 2026 Red Hat, Inc.
+
+package tools
+
+import (
+	"context"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/redhat-ux/mcp/internal/data"
+)
+
+// TestRealEmbeddedData exercises the Phase B tools against `make data`
+// output. It is skipped on a clean checkout.
+func TestRealEmbeddedData(t *testing.T) {
+	if _, err := os.Stat(filepath.Join("..", "data", "dist", data.IndexPath)); err != nil {
+		t.Skip("generated data is absent; run make data")
+	}
+	dist, err := fs.Sub(data.Embedded(), "dist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := data.Open(dist)
+	if err != nil {
+		t.Fatalf("data.Open() = %v", err)
+	}
+	service := New(store, nil)
+
+	components := service.ListComponents(context.Background(), ListComponentsInput{
+		Version: "5.0.0",
+	})
+	if components.Error != nil {
+		t.Fatalf("ListComponents() error = %+v", components.Error)
+	}
+	if components.Total == 0 {
+		t.Fatal("ListComponents() returned no components for 5.0.0")
+	}
+
+	tokens := service.QueryTokens(context.Background(), QueryTokensInput{
+		Token:   "color-accent-base",
+		Version: "3.2.0",
+		Theme:   "dark",
+	})
+	if tokens.Error != nil {
+		t.Fatalf("QueryTokens() error = %+v", tokens.Error)
+	}
+	if len(tokens.Tokens) != 1 {
+		t.Fatalf("tokens = %+v", tokens.Tokens)
+	}
+	accent := tokens.Tokens[0]
+	if accent.CSSVariable != "--rh-color-accent-base" {
+		t.Errorf("CSS variable = %q", accent.CSSVariable)
+	}
+	if accent.ThemeValue != "#92c5f9" {
+		t.Errorf("dark theme value = %q", accent.ThemeValue)
+	}
+
+	subtle := service.QueryTokens(context.Background(), QueryTokensInput{
+		Token:   "color-icon-subtle",
+		Version: "3.2.0",
+	})
+	if subtle.Error != nil {
+		t.Fatalf("QueryTokens(color-icon-subtle) error = %+v", subtle.Error)
+	}
+	if subtle.Tokens[0].CSSVariable != "--rh-color-icon-subtle" {
+		t.Errorf("group-marker CSS variable = %q", subtle.Tokens[0].CSSVariable)
+	}
+
+	maxWidthToken := "breakpoint-" + "2xs" + "-max"
+	breakpoint := service.QueryTokens(context.Background(), QueryTokensInput{
+		Token:   maxWidthToken,
+		Version: "3.2.0",
+	})
+	if breakpoint.Error != nil {
+		t.Fatalf("QueryTokens(%s) error = %+v", maxWidthToken, breakpoint.Error)
+	}
+	if breakpoint.Tokens[0].CSSVariable != "--rh-breakpoint-2xs-max" {
+		t.Errorf("camelCase CSS variable = %q", breakpoint.Tokens[0].CSSVariable)
+	}
+}

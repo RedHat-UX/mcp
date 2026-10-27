@@ -336,6 +336,10 @@ Generated data is not committed. It is a codegen step:
   versions with integrity hashes, git tags with commit SHAs, and the `ai-guidelines`
   submodule commit per tag. `make data-update` refreshes the lock (new RHDS release);
   `make data` only reads it. Same lock gives byte-identical output (NFR-05).
+- `index.json` records the sha256 of the canonical lock. `make data` compares it with
+  the committed lock and is a scoped no-op when every artifact named by the index still
+  exists with its recorded size. A missing or stale index regenerates; a no-op makes no
+  network requests.
 - Generation needs network (npm registry, GitHub). Building from an existing `dist/`
   does not.
 - Each GitHub release attaches the generated `dist/` archive with a checksum, so
@@ -470,6 +474,24 @@ Normalization contract:
 
 The normalization code lives in `tools/gen-data`, not in the parser. Upstream issue
 #64 locks the contract with a fixture.
+
+Implementation notes from Phase C:
+
+- #64 was still open when this landed. Our fixtures are committed per tokens major
+  under `tools/gen-data/testdata/tokens/{1.x,2.x,3.x}/` (input and normalized golden).
+  Adopt the upstream fixture once #64 merges and keep our goldens as regression tests.
+- Style Dictionary's draft group-marker convention (`foo._` with sibling tokens under
+  `foo`) is flattened: the marker becomes the token at `foo` and siblings become
+  `foo-bar`. This keeps published CSS names such as `--rh-color-icon-subtle` and
+  `--rh-color-icon-subtle-hover` intact, because asimonim derives names from JSON keys
+  and would otherwise emit a trailing `-_`.
+- Keys that Style Dictionary left in camelCase (`2xsMax`) are rewritten from the token's
+  published `name` to kebab case (`2xs-max`), so CSS names match the generated CSS.
+- The generated `css/default-theme.css` is authoritative for the theme map. At least one
+  release's token JSON disagrees with its own CSS for `rh-surface`, so a disagreement is
+  not fatal. Theme-map entries that have no DTCG token are added back at load time as
+  lookup tokens, so `rhds_query_tokens` can find `color-accent-base` and report its
+  light/dark values.
 
 All embedded token data is normalized DTCG, produced at `@rhds/mcp` development time.
 The runtime never sees Style Dictionary output. It parses normalized DTCG with asimonim

@@ -64,7 +64,6 @@ type Service struct {
 	documents     cemtypes.Manager
 	documentsErr  error
 	docSeq        atomic.Int64
-
 	manifestMu sync.Mutex
 	manifests  map[string]*manifest.Package
 	tokenMu    sync.Mutex
@@ -228,10 +227,53 @@ func (s *Service) loadTokens(version string) ([]*token.Token, *token.Map, *ToolE
 		}
 	}
 
+	// Light-dark() composites are generated into the theme map instead of the
+	// DTCG document. Add them back as lookup tokens so rhds_query_tokens can
+	// find them and report their theme value.
+	themes, themeErr := s.loadThemes(version)
+	if themeErr != nil {
+		return nil, nil, themeErr
+	}
+	if themes != nil {
+		tokens = addThemeTokens(tokens, themes)
+	}
+
 	set := &tokenSet{tokens: tokens, byName: token.NewMap(tokens, "rh")}
 	s.tokenParses.Add(1)
 	s.tokenSets[version] = set
 	return set.tokens, set.byName, nil
+}
+
+// addThemeTokens synthesizes tokens for theme-map entries that are not in the
+// DTCG document. The light value is the token's base value; the dark value is
+// reported through TokenResult.ThemeValue.
+func addThemeTokens(tokens []*token.Token, themes map[string]map[string]string) []*token.Token {
+	existing := make(map[string]bool, len(tokens))
+	for _, tok := range tokens {
+		existing[tok.Name] = true
+	}
+	result := tokens
+	for _, cssName := range sortedKeys(themes["light"]) {
+		name := strings.TrimPrefix(strings.TrimPrefix(cssName, "--rh-"), "--")
+		if name == "" || existing[name] {
+			continue
+		}
+		value := themes["light"][cssName]
+		result = append(result, &token.Token{
+			Name:          name,
+			Value:         value,
+			RawValue:      value,
+			ResolvedValue: value,
+			IsResolved:    true,
+			Type:          token.TypeColor,
+			Prefix:        "rh",
+			Extensions: map[string]any{
+				"com.redhat.ux": map[string]any{"themeComposite": true},
+			},
+		})
+		existing[name] = true
+	}
+	return result
 }
 
 func (s *Service) loadThemes(version string) (map[string]map[string]string, *ToolError) {

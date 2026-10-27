@@ -16,26 +16,45 @@ WINDOWS_IMAGE ?= grw-windows-cross
 
 .DEFAULT_GOAL := build
 
-.PHONY: data data-update build linux-x64 linux-arm64 darwin-x64 darwin-arm64 win32-x64 win32-arm64 clean
+.PHONY: data data-update data-force data-determinism build size-check license-check linux-x64 linux-arm64 darwin-x64 darwin-arm64 win32-x64 win32-arm64 clean
 
-# Generated data is optional until tools/gen-data lands in Phase C. On a clean
-# checkout there is nothing to do, so `make data` succeeds without network. The
-# scoped no-op check that compares internal/data/dist/index.json with
-# sources.lock.json (PLAN section 4.3) arrives with the generator in Phase C.
+# Generated data is not committed. `make data` reads the committed lock and
+# regenerates only when internal/data/dist/index.json is missing, stale, or was
+# produced by an older generator version. Network access happens only inside
+# tools/gen-data, never at runtime.
 data:
-	@if [ -d tools/gen-data ] && [ -d internal/data ]; then \
-		go generate ./internal/data; \
-	else \
-		echo "make data: tools/gen-data is not present yet; skipping generated data"; \
-	fi
+	go generate ./internal/data
 
+# Resolve current npm and GitHub inputs and rewrite the lock. Run this when a
+# new RHDS release should be bundled, then commit the lock.
 data-update:
-	@echo "make data-update: not implemented yet; this will refresh internal/data/sources.lock.json from npm and GitHub (Phase C)" >&2
-	@exit 1
+	go run ./tools/gen-data -update -lock internal/data/sources.lock.json
+
+# Regenerate unconditionally (used by the determinism check).
+data-force:
+	go run ./tools/gen-data -force -lock internal/data/sources.lock.json -out internal/data/dist
+
+# Two forced runs with the same lock must be byte-identical (NFR-05).
+data-determinism: data
+	@tmp=$$(mktemp -d); \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	cp -a internal/data/dist "$$tmp/first"; \
+	$(MAKE) -s data-force >/dev/null; \
+	diff -r "$$tmp/first" internal/data/dist
 
 build: data
 	@mkdir -p $(DIST_DIR)
 	CGO_ENABLED=1 go build $(GO_BUILD_FLAGS) -o $(DIST_DIR)/$(BINARY_NAME) $(GO_PACKAGE)
+
+# NFR-06: stripped binary 40 MB or less, npm tarball 16 MB or less.
+size-check: build
+	./hack/check-size.sh $(DIST_DIR)/$(BINARY_NAME)
+
+# Allowlist from docs/PLAN.md section 9.3: GPL-3.0, MIT, Apache-2.0, BSD.
+LICENSE_ALLOWLIST := MIT,Apache-2.0,BSD-2-Clause,BSD-3-Clause,GPL-3.0
+license-check:
+	go run github.com/google/go-licenses@v1.6.0 check ./... \
+		--allowed_licenses=$(LICENSE_ALLOWLIST)
 
 linux-x64: data
 	@mkdir -p $(DIST_DIR)
