@@ -90,10 +90,9 @@ Who carries obligations:
 Legal: Red Hat already ships GPL software routinely. Ask legal to confirm, but this does
 not block the spike.
 
-License variant: cem headers say GPL version 3 or later. asimonim PR #63 relicenses the
-project to `GPL-3.0-or-later`. `@rhds/mcp` targets `GPL-3.0-or-later`; until #63 merges,
-asimonim is GPL-3.0-only and the combined binary is effectively GPL-3.0-only at
-distribution time.
+License variant: cem headers say GPL version 3 or later. asimonim PR #63 relicensed the
+project to `GPL-3.0-or-later`, so the combined binary is distributed under
+`GPL-3.0-or-later`.
 
 ## 3. Upstream prerequisites
 

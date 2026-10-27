@@ -114,10 +114,43 @@ func exitCode(err error) int {
 	return 1
 }
 
+// cleanShutdownHandler demotes the SDK's cancellation error to INFO. The SDK
+// logs "server run cancelled" at ERROR when the signal context fires, but an
+// interrupt or SIGTERM is the normal shutdown path and must not look like a
+// failure to log collectors.
+type cleanShutdownHandler struct {
+	slog.Handler
+}
+
+func (h cleanShutdownHandler) Handle(ctx context.Context, record slog.Record) error {
+	if record.Level == slog.LevelError && record.Message == "server run cancelled" {
+		var err error
+		record.Attrs(func(attribute slog.Attr) bool {
+			if attribute.Key == "error" {
+				err, _ = attribute.Value.Any().(error)
+				return false
+			}
+			return true
+		})
+		if errors.Is(err, context.Canceled) {
+			record.Level = slog.LevelInfo
+		}
+	}
+	return h.Handler.Handle(ctx, record)
+}
+
+func (h cleanShutdownHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return cleanShutdownHandler{h.Handler.WithAttrs(attrs)}
+}
+
+func (h cleanShutdownHandler) WithGroup(name string) slog.Handler {
+	return cleanShutdownHandler{h.Handler.WithGroup(name)}
+}
+
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+	logger := slog.New(cleanShutdownHandler{slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
-	}))
+	})})
 	slog.SetDefault(logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
