@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -41,10 +43,41 @@ func checkJSONRPCLine(t *testing.T, line string) rpcMessage {
 	return message
 }
 
+func initializeRequest(protocolVersion string) string {
+	return fmt.Sprintf(
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":%q,"clientInfo":{"name":"rhds-mcp-test","version":"0.0.0"},"capabilities":{}}}`,
+		protocolVersion,
+	)
+}
+
+func buildServerBinary(t *testing.T) string {
+	t.Helper()
+	binaryName := "rhds-mcp"
+	if runtime.GOOS == "windows" {
+		binaryName += ".exe"
+	}
+	binary := filepath.Join(t.TempDir(), binaryName)
+	build := exec.Command("go", "build", "-trimpath", "-o", binary, ".")
+	build.Stderr = os.Stderr
+	if err := build.Run(); err != nil {
+		t.Fatalf("building binary: %v", err)
+	}
+	return binary
+}
+
 func TestAdvertisedProtocolVersionsAreNewestFirst(t *testing.T) {
 	want := []string{"2026-07-28", "2025-11-25", "2025-06-18"}
 	if got := supportedProtocolVersions; !slices.Equal(got, want) {
 		t.Fatalf("supportedProtocolVersions = %v, want %v", got, want)
+	}
+}
+
+func TestInstructionsListEverySupportedVersion(t *testing.T) {
+	instructions := serverInstructions()
+	for _, version := range supportedProtocolVersions {
+		if !strings.Contains(instructions, version) {
+			t.Errorf("instructions do not list supported version %q", version)
+		}
 	}
 }
 
@@ -87,8 +120,32 @@ func TestInitializeAtEachAdvertisedVersion(t *testing.T) {
 			if result.ServerInfo.Name != serverName {
 				t.Errorf("server name = %q, want %q", result.ServerInfo.Name, serverName)
 			}
+			if result.ServerInfo.Version != serverVersion {
+				t.Errorf("server version = %q, want %q", result.ServerInfo.Version, serverVersion)
+			}
 			if result.Instructions == "" {
 				t.Error("initialize result has no instructions")
+			}
+		})
+	}
+}
+
+func TestExitCode(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "nil", err: nil, want: 0},
+		{name: "canceled", err: context.Canceled, want: 0},
+		{name: "wrapped canceled", err: fmt.Errorf("run: %w", context.Canceled), want: 0},
+		{name: "deadline exceeded", err: context.DeadlineExceeded, want: 1},
+		{name: "other error", err: errors.New("boom"), want: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := exitCode(tt.err); got != tt.want {
+				t.Errorf("exitCode(%v) = %d, want %d", tt.err, got, tt.want)
 			}
 		})
 	}
@@ -99,16 +156,8 @@ func TestInitializeAtEachAdvertisedVersion(t *testing.T) {
 // stderr. The fake method call provokes an error log so the assertion covers a
 // failing request as well as successful ones.
 func TestStdoutCarriesOnlyJSONRPC(t *testing.T) {
-	binaryName := "rhds-mcp"
-	if runtime.GOOS == "windows" {
-		binaryName += ".exe"
-	}
-	binary := filepath.Join(t.TempDir(), binaryName)
-	build := exec.Command("go", "build", "-trimpath", "-o", binary, ".")
-	build.Stderr = os.Stderr
-	if err := build.Run(); err != nil {
-		t.Fatalf("building binary: %v", err)
-	}
+	binary := buildServerBinary(t)
+	protocolVersion := supportedProtocolVersions[1]
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -130,7 +179,7 @@ func TestStdoutCarriesOnlyJSONRPC(t *testing.T) {
 	}
 
 	requests := []string{
-		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"stdout-test","version":"0.0.0"},"capabilities":{}}}`,
+		initializeRequest(protocolVersion),
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
 		`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`,
 		`{"jsonrpc":"2.0","id":3,"method":"rhds/does-not-exist","params":{}}`,
@@ -164,9 +213,9 @@ func TestStdoutCarriesOnlyJSONRPC(t *testing.T) {
 			seen[string(message.ID)] = true
 		}
 	}
-	if initializeVersion != "2025-11-25" {
+	if initializeVersion != protocolVersion {
 		t.Errorf("initialize response protocol version = %q, want %q",
-			initializeVersion, "2025-11-25")
+			initializeVersion, protocolVersion)
 	}
 
 	if err := stdin.Close(); err != nil {
@@ -192,5 +241,69 @@ func TestStdoutCarriesOnlyJSONRPC(t *testing.T) {
 
 	if stderr.Len() == 0 {
 		t.Error("expected diagnostic logs on stderr")
+	}
+}
+
+// TestSIGTERMExitsCleanly asserts that an interrupt-style shutdown maps to exit
+// code 0 rather than logging an error and failing.
+func TestSIGTERMExitsCleanly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SIGTERM delivery differs on Windows")
+	}
+
+	binary := buildServerBinary(t)
+	protocolVersion := supportedProtocolVersions[1]
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, binary)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("opening stdin: %v", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("opening stdout: %v", err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting server: %v", err)
+	}
+	if _, err := fmt.Fprintln(stdin, initializeRequest(protocolVersion)); err != nil {
+		t.Fatalf("writing initialize: %v", err)
+	}
+
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	if !scanner.Scan() {
+		t.Fatalf("no initialize response before signal: %v (stderr: %s)",
+			scanner.Err(), stderr.String())
+	}
+	checkJSONRPCLine(t, scanner.Text())
+
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("sending SIGTERM: %v", err)
+	}
+
+	// The process closes stdout when it exits; drain it before calling Wait.
+	for scanner.Scan() {
+		checkJSONRPCLine(t, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("reading stdout: %v", err)
+	}
+
+	waitErr := cmd.Wait()
+	if ctx.Err() != nil {
+		t.Fatalf("server did not exit after SIGTERM: %v", ctx.Err())
+	}
+	if waitErr != nil {
+		t.Fatalf("server exit after SIGTERM: %v (stderr: %s)", waitErr, stderr.String())
+	}
+	if code := cmd.ProcessState.ExitCode(); code != 0 {
+		t.Errorf("exit code after SIGTERM = %d, want 0 (stderr: %s)", code, stderr.String())
 	}
 }
