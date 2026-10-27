@@ -381,11 +381,27 @@ func TestNormalizeShadowValue(t *testing.T) {
 	if value["offsetX"] != "0px" {
 		t.Errorf("offsetX = %#v, want 0px", value["offsetX"])
 	}
-	if value["offsetY"] != "{length.3xs}" {
-		t.Errorf("offsetY = %#v, want the original alias", value["offsetY"])
+	if value["offsetY"] != "2px" {
+		t.Errorf("offsetY = %#v, want the resolved dimension 2px", value["offsetY"])
+	}
+	if value["blur"] != "4px" {
+		t.Errorf("blur = %#v, want the resolved dimension 4px", value["blur"])
 	}
 	if value["color"] != "#15151533" {
 		t.Errorf("color = %#v, want #15151533", value["color"])
+	}
+}
+
+func TestCanonicalDimensionUnitlessZeroString(t *testing.T) {
+	for _, input := range []any{"0", " 0 ", json.Number("0"), float64(0)} {
+		got, err := canonicalDimension(input)
+		if err != nil {
+			t.Errorf("canonicalDimension(%#v) error = %v", input, err)
+			continue
+		}
+		if got != "0px" {
+			t.Errorf("canonicalDimension(%#v) = %#v, want 0px", input, got)
+		}
 	}
 }
 

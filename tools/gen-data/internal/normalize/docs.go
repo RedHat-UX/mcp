@@ -81,6 +81,7 @@ func ProcessMarkdown(input []byte, source string) MarkdownResult {
 
 	var openFence *fenceRun
 	htmlCodeDepth := 0
+	htmlScriptOpen := false
 	for _, line := range body {
 		if openFence != nil {
 			flushProse()
@@ -106,9 +107,14 @@ func ProcessMarkdown(input []byte, source string) MarkdownResult {
 		if htmlCodeDepth > 0 || startsHTMLCodeBlock(line) {
 			flushProse()
 			processed = append(processed, line)
-			htmlCodeDepth += htmlCodeDelta(line)
+			delta, scriptOpen := htmlCodeDelta(line, htmlScriptOpen)
+			htmlScriptOpen = scriptOpen
+			htmlCodeDepth += delta
 			if htmlCodeDepth < 0 {
 				htmlCodeDepth = 0
+			}
+			if htmlCodeDepth == 0 {
+				htmlScriptOpen = false
 			}
 			continue
 		}
@@ -348,13 +354,57 @@ func hasTagPrefix(line, tag string) bool {
 	}
 }
 
-func htmlCodeDelta(line string) int {
+// htmlCodeDelta returns the change in HTML code-block depth for one line and
+// whether the line leaves a script element open. A script element's content is
+// raw text, so tags inside it (including a literal <script>) do not change the
+// depth; only </script> closes it. Counting raw substrings gets this wrong when
+// docs embed script samples that themselves contain script markup.
+func htmlCodeDelta(line string, inScript bool) (int, bool) {
 	lower := strings.ToLower(line)
 	delta := 0
-	for _, tag := range []string{"rh-code-block", "pre", "code", "script"} {
-		delta += strings.Count(lower, "<"+tag) - strings.Count(lower, "</"+tag)
+	for i := 0; i < len(lower); {
+		next := strings.IndexByte(lower[i:], '<')
+		if next < 0 {
+			break
+		}
+		i += next
+		rest := lower[i:]
+		if inScript {
+			if hasTagPrefix(rest, "</script") {
+				delta--
+				inScript = false
+				i += len("</script")
+				continue
+			}
+			i++
+			continue
+		}
+		if hasTagPrefix(rest, "<script") {
+			delta++
+			inScript = true
+			i += len("<script")
+			continue
+		}
+		matched := false
+		for _, tag := range []string{"rh-code-block", "pre", "code"} {
+			if hasTagPrefix(rest, "<"+tag) {
+				delta++
+				i += len(tag) + 1
+				matched = true
+				break
+			}
+			if hasTagPrefix(rest, "</"+tag) {
+				delta--
+				i += len(tag) + 2
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			i++
+		}
 	}
-	return delta
+	return delta, inScript
 }
 
 // mapOutsideInlineCode applies fn to text outside Markdown code spans. Code
@@ -483,17 +533,16 @@ func stripHTMLImages(line string) string {
 			break
 		}
 		token := tokenizer.Token()
-		if token.Data == "img" {
-			switch tokenType {
-			case html.StartTagToken, html.SelfClosingTagToken:
-				for _, attribute := range token.Attr {
-					if attribute.Key == "alt" {
-						builder.WriteString(attribute.Val)
-						break
-					}
+		if token.Data == "img" && tokenType == html.EndTagToken {
+			// Drop the closing tag.
+			continue
+		}
+		if token.Data == "img" && (tokenType == html.StartTagToken || tokenType == html.SelfClosingTagToken) {
+			for _, attribute := range token.Attr {
+				if attribute.Key == "alt" {
+					builder.WriteString(attribute.Val)
+					break
 				}
-			case html.EndTagToken:
-				// Drop the closing tag.
 			}
 			continue
 		}

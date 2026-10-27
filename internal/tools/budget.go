@@ -446,6 +446,12 @@ func fitListComponents(
 		out.Error = boundError(out.Error)
 		out.Resolved.Warnings = sanitizeWarnings(out.Resolved.Warnings)
 		if estimatedResponseBytes(out) > budget {
+			out.Resolved.Warnings = summarizeWarnings(out.Resolved.Warnings)
+		}
+		if estimatedResponseBytes(out) > budget {
+			out.Resolved.Warnings = nil
+		}
+		if estimatedResponseBytes(out) > budget {
 			out.Error = responseTooLarge("the component page", budget)
 		}
 		return
@@ -521,6 +527,12 @@ func fitSearch(out *SearchOutput, budget int) {
 	if out.Error != nil {
 		out.Error = boundError(out.Error)
 		out.Resolved.Warnings = sanitizeWarnings(out.Resolved.Warnings)
+		if estimatedResponseBytes(out) > budget {
+			out.Resolved.Warnings = summarizeWarnings(out.Resolved.Warnings)
+		}
+		if estimatedResponseBytes(out) > budget {
+			out.Resolved.Warnings = nil
+		}
 		if estimatedResponseBytes(out) > budget {
 			out.Error = responseTooLarge("the search response", budget)
 			out.Hits = nil
@@ -669,6 +681,12 @@ func fitComponentAPI(out ComponentAPIOutput, budget int, summary bool) Component
 	if out.Error != nil {
 		out.Error = boundError(out.Error)
 		if estimatedResponseBytes(out) > budget {
+			out.Resolved.Warnings = summarizeWarnings(out.Resolved.Warnings)
+		}
+		if estimatedResponseBytes(out) > budget {
+			out.Resolved.Warnings = nil
+		}
+		if estimatedResponseBytes(out) > budget {
 			return ComponentAPIOutput{
 				Resolved: out.Resolved,
 				Error:    responseTooLarge("the component API response", budget),
@@ -750,11 +768,100 @@ func componentAPIResponseBytes(out ComponentAPIOutput, pending []string) int {
 	return size
 }
 
+func fitQueryTokens(out QueryTokensOutput, budget int) QueryTokensOutput {
+	out.Resolved.Warnings = sanitizeWarnings(out.Resolved.Warnings)
+	if out.Error != nil {
+		out.Error = boundError(out.Error)
+		if estimatedResponseBytes(out) > budget {
+			out.Resolved.Warnings = summarizeWarnings(out.Resolved.Warnings)
+		}
+		if estimatedResponseBytes(out) > budget {
+			out.Resolved.Warnings = nil
+		}
+		if estimatedResponseBytes(out) > budget {
+			out.Error = responseTooLarge("the token response", budget)
+			out.Tokens = nil
+		}
+		return out
+	}
+	if estimatedResponseBytes(out) > budget {
+		out.Resolved.Warnings = summarizeWarnings(out.Resolved.Warnings)
+	}
+	shortened := false
+	for i := range out.Tokens {
+		result := &out.Tokens[i]
+		shortened = shortenToken(result) || shortened
+	}
+	if shortened {
+		out.Truncated = true
+		out.Resolved.Warnings = sanitizeWarnings(append(out.Resolved.Warnings,
+			"some token fields were shortened to fit the response budget"))
+	}
+	trimmed := 0
+	for estimatedResponseBytes(out) > budget && len(out.Tokens) > 0 {
+		out.Tokens = out.Tokens[:len(out.Tokens)-1]
+		trimmed++
+	}
+	if trimmed > 0 {
+		out.Truncated = true
+		out.Resolved.Warnings = sanitizeWarnings(append(out.Resolved.Warnings,
+			fmt.Sprintf("results trimmed from %d to %d to fit the response budget",
+				out.Total, len(out.Tokens))))
+		// The notice itself counts toward the budget; trim again if it pushed
+		// the response back over.
+		for estimatedResponseBytes(out) > budget && len(out.Tokens) > 0 {
+			out.Tokens = out.Tokens[:len(out.Tokens)-1]
+		}
+	}
+	if estimatedResponseBytes(out) > budget {
+		out.Tokens = nil
+		out.Resolved.Warnings = []string{"results were trimmed to fit the response budget"}
+	}
+	if estimatedResponseBytes(out) > budget {
+		out.Error = responseTooLarge("the token response", budget)
+	}
+	return out
+}
+
+// shortenToken applies the fixed field caps and reports whether anything was
+// changed.
+func shortenToken(result *TokenResult) bool {
+	shortened := false
+	shorten := func(value *string, limit int) {
+		if after := truncateResponseText(*value, limit); after != *value {
+			*value = after
+			shortened = true
+		}
+	}
+	shorten(&result.Name, 300)
+	shorten(&result.CSSVariable, 300)
+	shorten(&result.Value, 500)
+	shorten(&result.RawValue, 500)
+	shorten(&result.Description, 500)
+	shorten(&result.ThemeValue, 300)
+	if len(result.AliasChain) > 20 {
+		result.AliasChain = result.AliasChain[:20]
+		shortened = true
+	}
+	for j := range result.AliasChain {
+		shorten(&result.AliasChain[j], 200)
+	}
+	return shortened
+}
+
 func fitValidateMarkup(out ValidateMarkupOutput, budget int) ValidateMarkupOutput {
 	out.Resolved.Warnings = sanitizeWarnings(out.Resolved.Warnings)
 	out.Warnings = sanitizeWarnings(out.Warnings)
 	if out.Error != nil {
 		out.Error = boundError(out.Error)
+		if estimatedResponseBytes(out) > budget {
+			out.Resolved.Warnings = summarizeWarnings(out.Resolved.Warnings)
+			out.Warnings = summarizeWarnings(out.Warnings)
+		}
+		if estimatedResponseBytes(out) > budget {
+			out.Resolved.Warnings = nil
+			out.Warnings = nil
+		}
 		if estimatedResponseBytes(out) > budget {
 			out.Error = responseTooLarge("the markup validation response", budget)
 			out.Issues = nil

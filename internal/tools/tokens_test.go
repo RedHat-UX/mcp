@@ -5,8 +5,14 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
+	"testing/fstest"
 
 	"bennypowers.dev/asimonim/token"
 
@@ -250,5 +256,92 @@ func TestAddThemeTokensIteratesAllThemes(t *testing.T) {
 	}
 	if !names["color-dark-only"] || !names["color-sepia-only"] {
 		t.Errorf("names = %v, want dark-only and sepia-only", names)
+	}
+}
+
+// serviceWithThemes builds a store from the fixture tree, replacing the theme
+// artifact contents with themesJSON.
+func serviceWithThemes(t *testing.T, themesJSON []byte) *Service {
+	t.Helper()
+	indexBytes, err := os.ReadFile("testdata/index.json")
+	if err != nil {
+		t.Fatalf("reading fixture index: %v", err)
+	}
+	var index data.Index
+	if err := json.Unmarshal(indexBytes, &index); err != nil {
+		t.Fatalf("decoding fixture index: %v", err)
+	}
+
+	fsys := fstest.MapFS{}
+	for i := range index.Artifacts {
+		artifact := &index.Artifacts[i]
+		content, err := os.ReadFile(filepath.Join("testdata", filepath.FromSlash(artifact.Path)))
+		if err != nil {
+			t.Fatalf("reading %s: %v", artifact.Path, err)
+		}
+		if artifact.Kind == kindThemes {
+			content = themesJSON
+			sum := sha256.Sum256(content)
+			artifact.SHA256 = hex.EncodeToString(sum[:])
+			artifact.Bytes = int64(len(content))
+		}
+		fsys[artifact.Path] = &fstest.MapFile{Data: content}
+	}
+	index.SchemaVersion = data.SchemaVersion
+	encoded, err := json.Marshal(index)
+	if err != nil {
+		t.Fatalf("marshaling fixture index: %v", err)
+	}
+	fsys["index.json"] = &fstest.MapFile{Data: encoded}
+
+	store, err := data.Open(fsys)
+	if err != nil {
+		t.Fatalf("opening fixture store: %v", err)
+	}
+	return New(store, nil)
+}
+
+// Phase C loads the theme map while building the token set so light-dark()
+// composites can be synthesized. It must still parse the map once per version.
+func TestQueryTokensParsesThemesOnce(t *testing.T) {
+	svc := fixtureService(t)
+	for range 2 {
+		out := svc.QueryTokens(context.Background(), QueryTokensInput{Token: "color-brand"})
+		if out.Error != nil {
+			t.Fatalf("QueryTokens() error = %+v", out.Error)
+		}
+	}
+	if got := svc.themeParses.Load(); got != 1 {
+		t.Errorf("theme parses = %d, want 1", got)
+	}
+}
+
+func TestQueryTokensIgnoresMalformedThemesWhenNotRequested(t *testing.T) {
+	svc := serviceWithThemes(t, []byte(`{"not":"a theme map"}`))
+
+	out := svc.QueryTokens(context.Background(), QueryTokensInput{Token: "color-brand"})
+	if out.Error != nil {
+		t.Fatalf("QueryTokens() without theme error = %+v, want none", out.Error)
+	}
+
+	out = svc.QueryTokens(context.Background(), QueryTokensInput{
+		Token: "color-brand",
+		Theme: "light",
+	})
+	if out.Error == nil || out.Error.Code != "invalid_themes" {
+		t.Fatalf("QueryTokens() with malformed themes error = %+v, want invalid_themes", out.Error)
+	}
+}
+
+func TestQueryTokensAcceptsVPrefixedVersion(t *testing.T) {
+	out := fixtureService(t).QueryTokens(context.Background(), QueryTokensInput{
+		Token:   "color-brand",
+		Version: "v3.2.0",
+	})
+	if out.Error != nil {
+		t.Fatalf("QueryTokens() error = %+v", out.Error)
+	}
+	if out.Resolved.Tokens != "3.2.0" {
+		t.Errorf("resolved tokens version = %q, want 3.2.0", out.Resolved.Tokens)
 	}
 }

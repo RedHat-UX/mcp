@@ -261,7 +261,7 @@ func resolveCatalogReferences(
 ) {
 	for _, reference := range references {
 		var matched bool
-		if reference.Name == "" {
+		if reference.Name == "" || reference.Name == "default" {
 			for _, definition := range definitions.Defaults {
 				if spec, ok := definition.Values["@rhds/elements"]; ok {
 					addPackageSpec(spec, definition.Source, set, warnings)

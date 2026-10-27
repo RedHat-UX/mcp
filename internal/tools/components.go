@@ -132,8 +132,14 @@ func (s *Service) listComponentsWithEnv(
 		if payload.IncludeDeprecated != input.IncludeDeprecated {
 			return fail(cursorOptionsMismatch())
 		}
-		if input.Version != "" && input.Version != payload.Version {
-			return fail(cursorVersionMismatch(payload.Version, input.Version))
+		if input.Version != "" {
+			requested, failure := s.bundledResolution(input.Version, "")
+			if failure != nil {
+				return fail(failure)
+			}
+			if requested.Resolved.Elements != payload.Version {
+				return fail(cursorVersionMismatch(payload.Version, input.Version))
+			}
 		}
 		resolved, failure := s.resolutionForBundledVersion(payload.Version)
 		if failure != nil {

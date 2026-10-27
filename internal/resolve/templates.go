@@ -47,6 +47,11 @@ func collectTemplateCandidates(
 	stoppedByFiles := false
 	stoppedByEntries := false
 
+	// WalkDir does not descend when the root itself is a symlink.
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil

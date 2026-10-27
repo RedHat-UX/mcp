@@ -246,6 +246,16 @@ func selectCandidate(result Result, bundled []string) (Result, error) {
 		if !parsed.OK {
 			parsed = ParseVersionSpec(candidate.Spec)
 		}
+		// A package.json spec can carry a range operator while the candidate
+		// version is the bare version extracted from it. Honor the operator so
+		// ^4.2.0 resolves to the highest 4.x rather than pinning 4.2.0. A
+		// lockfile or installed package records an exact resolved version, so
+		// its version wins over the range key.
+		if candidate.Level != LevelLockfile && candidate.Level != LevelInstalled {
+			if spec := ParseVersionSpec(candidate.Spec); spec.OK && spec.Operator != "" {
+				parsed = spec
+			}
+		}
 		if !parsed.OK {
 			result.Warnings = append(result.Warnings,
 				fmt.Sprintf("could not parse a version from %q in %s",
@@ -314,16 +324,14 @@ func selectCandidate(result Result, bundled []string) (Result, error) {
 }
 
 // highestBundledFor maps a partial range to the highest bundled version that
-// satisfies its major, and minor when one was given.
+// satisfies it. Ranges honor their operator; a bare partial ("4" or "4.2")
+// means the highest bundled version in that major or major.minor line.
 func highestBundledFor(parsed ParsedVersion, bundled []string) (string, bool) {
 	best := ""
 	var bestParsed ParsedVersion
 	for _, version := range bundled {
 		candidate := ParseVersionSpec(version)
-		if !candidate.OK || candidate.Partial || candidate.Major != parsed.Major {
-			continue
-		}
-		if parsed.HasMinor && candidate.Minor != parsed.Minor {
+		if !candidate.OK || candidate.Partial || !satisfiesOperator(candidate, parsed) {
 			continue
 		}
 		if best == "" || CompareParsed(candidate, bestParsed) > 0 {
@@ -332,6 +340,38 @@ func highestBundledFor(parsed ParsedVersion, bundled []string) (string, bool) {
 		}
 	}
 	return best, best != ""
+}
+
+func satisfiesOperator(available, target ParsedVersion) bool {
+	order := CompareParsed(available, target)
+	switch target.Operator {
+	case "", "=":
+		if target.Partial {
+			if available.Major != target.Major {
+				return false
+			}
+			return !target.HasMinor || available.Minor == target.Minor
+		}
+		return order == 0
+	case "^":
+		return available.Major == target.Major && order >= 0
+	case "~":
+		if available.Major != target.Major || order < 0 {
+			return false
+		}
+		// ~4 means the whole 4.x line; ~4.2 means only 4.2.x.
+		return !target.HasMinor || available.Minor == target.Minor
+	case ">=":
+		return order >= 0
+	case ">":
+		return order > 0
+	case "<=":
+		return order <= 0
+	case "<":
+		return order < 0
+	default:
+		return false
+	}
 }
 
 func addLowerPrecedenceWarning(result *Result, chosen ParsedVersion, chosenText string, winning int) {

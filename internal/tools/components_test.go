@@ -368,3 +368,110 @@ func TestListComponentsMaxPageSize(t *testing.T) {
 		t.Errorf("warnings = %v, want the pageSize cap", out.Resolved.Warnings)
 	}
 }
+
+func TestListComponentsAcceptsVPrefixedVersion(t *testing.T) {
+	out := fixtureService(t).ListComponents(context.Background(), ListComponentsInput{
+		Version: "v5.0.0",
+	})
+	if out.Error != nil {
+		t.Fatalf("ListComponents() error = %+v", out.Error)
+	}
+	if out.Resolved.Elements != "5.0.0" {
+		t.Errorf("resolved version = %q, want 5.0.0", out.Resolved.Elements)
+	}
+	if out.Total == 0 {
+		t.Error("total = 0, want components")
+	}
+}
+
+func TestListComponentsReportsDocsForMajorSnapshot(t *testing.T) {
+	manifestJSON, err := os.ReadFile("testdata/elements/custom-elements.json")
+	if err != nil {
+		t.Fatalf("reading fixture manifest: %v", err)
+	}
+	manifestSum := sha256.Sum256(manifestJSON)
+	docsJSON := []byte(`[{"path":"elements/rh-button/docs/00-overview.md","kind":"docs","artifact":"docs/v4.2.2/elements/rh-button/docs/00-overview.md.gz"}]`)
+	docsSum := sha256.Sum256(docsJSON)
+	index := data.Index{
+		SchemaVersion: data.SchemaVersion,
+		Artifacts: []data.Artifact{
+			{
+				Package: "elements",
+				Version: "4.1.5",
+				Kind:    "manifest",
+				Path:    "elements/custom-elements.json",
+				SHA256:  hex.EncodeToString(manifestSum[:]),
+				Bytes:   int64(len(manifestJSON)),
+			},
+			{
+				Package: "docs",
+				Version: "v4.2.2",
+				Kind:    "docs",
+				Path:    "docs/v4.2.2.json",
+				SHA256:  hex.EncodeToString(docsSum[:]),
+				Bytes:   int64(len(docsJSON)),
+			},
+		},
+	}
+	indexJSON, err := json.Marshal(index)
+	if err != nil {
+		t.Fatalf("marshaling index: %v", err)
+	}
+	store, err := data.Open(fstest.MapFS{
+		"index.json":                    &fstest.MapFile{Data: indexJSON},
+		"elements/custom-elements.json": &fstest.MapFile{Data: manifestJSON},
+		"docs/v4.2.2.json":              &fstest.MapFile{Data: docsJSON},
+	})
+	if err != nil {
+		t.Fatalf("opening memory store: %v", err)
+	}
+
+	out := New(store, nil).ListComponents(context.Background(), ListComponentsInput{
+		Version: "4.1.5",
+	})
+	if out.Error != nil {
+		t.Fatalf("ListComponents() error = %+v", out.Error)
+	}
+	if len(out.Components) == 0 {
+		t.Fatal("components = 0, want components")
+	}
+	button, ok := findComponent(out.Components, "rh-button")
+	if !ok {
+		t.Fatal("rh-button not listed")
+	}
+	if !button.DocsAvailable {
+		t.Error("rh-button docsAvailable = false, want true for the v4.2.2 snapshot")
+	}
+	card, ok := findComponent(out.Components, "rh-card")
+	if !ok {
+		t.Fatal("rh-card not listed")
+	}
+	if card.DocsAvailable {
+		t.Error("rh-card docsAvailable = true, want false: the snapshot has no rh-card page")
+	}
+}
+
+func TestListComponentsCursorAcceptsEquivalentVersionSpelling(t *testing.T) {
+	svc := fixtureService(t)
+	_, first := svc.listComponentsWithEnv(context.Background(), nil, ListComponentsInput{
+		Version:  "v5.0.0",
+		PageSize: 2,
+	})
+	if first.Error != nil {
+		t.Fatalf("first page error = %+v", first.Error)
+	}
+	if first.NextCursor == "" {
+		t.Fatal("first page has no cursor")
+	}
+	_, second := svc.listComponentsWithEnv(context.Background(), nil, ListComponentsInput{
+		Version:  "v5.0.0",
+		PageSize: 2,
+		Cursor:   first.NextCursor,
+	})
+	if second.Error != nil {
+		t.Fatalf("second page error = %+v", second.Error)
+	}
+	if len(second.Components) == 0 {
+		t.Error("second page has no components")
+	}
+}
