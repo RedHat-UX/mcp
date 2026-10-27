@@ -734,3 +734,36 @@ func listFiles(t *testing.T, root string) []string {
 	}
 	return files
 }
+
+// GeneratorVersion is omitempty, so trees written before it existed have no
+// value. They are still gen-data output and must be regenerated, not treated
+// as foreign directories.
+func TestGenerateAcceptsLegacyIndexWithoutGeneratorVersion(t *testing.T) {
+	out := t.TempDir()
+	if _, err := Generate(testInputs(), out); err != nil {
+		t.Fatalf("Generate() = %v", err)
+	}
+	indexPath := filepath.Join(out, data.IndexPath)
+	raw, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var index data.Index
+	if err := json.Unmarshal(raw, &index); err != nil {
+		t.Fatal(err)
+	}
+	index.GeneratorVersion = 0
+	encoded, err := marshalJSON(&index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(indexPath, encoded, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if upToDate, err := IsUpToDate(out, lockDigest); err != nil || upToDate {
+		t.Fatalf("IsUpToDate(legacy) = %v, %v; want false", upToDate, err)
+	}
+	if _, err := Generate(testInputs(), out); err != nil {
+		t.Fatalf("Generate() over legacy output = %v, want regeneration", err)
+	}
+}

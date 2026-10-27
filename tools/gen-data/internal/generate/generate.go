@@ -304,9 +304,12 @@ func checkProvenance(root *os.Root, entries []fs.DirEntry, absolute string) erro
 			absolute, data.IndexPath, strings.Join(entryNames(entries), ", "))
 	}
 	var index data.Index
+	// GeneratorVersion is omitempty: trees written before it was introduced
+	// carry 0 and are still gen-data output. The schema version and lock
+	// digest identify the tree; a stale generator version triggers regeneration
+	// after the directory is cleared.
 	if err := json.Unmarshal(encoded, &index); err != nil ||
 		index.SchemaVersion != data.SchemaVersion ||
-		index.GeneratorVersion <= 0 ||
 		!isLowerHexDigest(index.LockSHA256) {
 		return fmt.Errorf(
 			"generate: refusing to clear %q: not a gen-data output directory (invalid %s; found: %s)",
