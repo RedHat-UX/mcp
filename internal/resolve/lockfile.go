@@ -20,80 +20,146 @@ const maxDepth = 100
 
 // maxCandidates bounds candidate collection from one workspace. A hostile or
 // corrupt lockfile must not grow memory without limit.
-const maxCandidates = 512
+const maxCandidates = 4096
+
+// maxCandidateRunes bounds a candidate's version and spec strings. Lockfiles
+// are untrusted input and can contain multi-megabyte values.
+const maxCandidateRunes = 256
 
 // candidateSet deduplicates candidates from one source while preserving a
 // deterministic order.
 type candidateSet struct {
-	seen      map[string]bool
+	seen      map[string]int
 	items     []Candidate
 	truncated bool
 }
 
 func newCandidateSet() *candidateSet {
-	return &candidateSet{seen: make(map[string]bool)}
+	return &candidateSet{seen: make(map[string]int)}
 }
 
 func (s *candidateSet) add(version, spec, source string, precedence int) {
-	version = strings.TrimSpace(version)
+	version = truncateRunes(strings.TrimSpace(version), maxCandidateRunes)
+	spec = truncateRunes(strings.TrimSpace(spec), maxCandidateRunes)
 	if version == "" {
 		return
 	}
 	key := source + "\x00" + version
-	if s.seen[key] {
+	if index, ok := s.seen[key]; ok {
+		// A map traversal can reach the same version through different
+		// specifiers. Keep the lexicographically smallest so output does not
+		// depend on map iteration order.
+		if spec != "" && (s.items[index].Spec == "" || spec < s.items[index].Spec) {
+			s.items[index].Spec = spec
+		}
 		return
 	}
-	if len(s.items) >= maxCandidates {
-		s.truncated = true
-		return
-	}
-	s.seen[key] = true
-	s.items = append(s.items, Candidate{
+	candidate := Candidate{
 		Version:    version,
 		Spec:       spec,
 		Source:     source,
 		Precedence: precedence,
 		Level:      LevelForPrecedence(precedence),
-	})
+	}
+	if len(s.items) < maxCandidates {
+		s.seen[key] = len(s.items)
+		s.items = append(s.items, candidate)
+		return
+	}
+	s.truncated = true
+	worst := s.worstIndex()
+	if worst >= 0 && candidateBetter(candidate, s.items[worst]) {
+		delete(s.seen, s.items[worst].Source+"\x00"+s.items[worst].Version)
+		s.items[worst] = candidate
+		s.seen[key] = worst
+	}
+}
+
+func (s *candidateSet) worstIndex() int {
+	if len(s.items) == 0 {
+		return -1
+	}
+	worst := 0
+	for i := 1; i < len(s.items); i++ {
+		if candidateBetter(s.items[worst], s.items[i]) {
+			worst = i
+		}
+	}
+	return worst
+}
+
+// candidateBetter orders candidates for deterministic retention under the
+// cap: higher precedence first (lower number), then higher version, then
+// lexical source and spec.
+func candidateBetter(a, b Candidate) bool {
+	if a.Precedence != b.Precedence {
+		return a.Precedence < b.Precedence
+	}
+	left := ParseVersionSpec(a.Version)
+	right := ParseVersionSpec(b.Version)
+	if left.OK && right.OK {
+		if order := CompareParsed(left, right); order != 0 {
+			return order > 0
+		}
+	} else if left.OK != right.OK {
+		return left.OK
+	}
+	if a.Source != b.Source {
+		return a.Source < b.Source
+	}
+	return a.Spec < b.Spec
 }
 
 func (s *candidateSet) sorted() []Candidate {
 	sort.SliceStable(s.items, func(i, j int) bool {
-		if s.items[i].Version != s.items[j].Version {
-			return s.items[i].Version < s.items[j].Version
+		if s.items[i].Precedence != s.items[j].Precedence {
+			return s.items[i].Precedence < s.items[j].Precedence
 		}
-		return s.items[i].Source < s.items[j].Source
+		left := ParseVersionSpec(s.items[i].Version)
+		right := ParseVersionSpec(s.items[j].Version)
+		if left.OK && right.OK {
+			if order := CompareParsed(left, right); order != 0 {
+				return order > 0
+			}
+		} else if left.OK != right.OK {
+			return left.OK
+		}
+		if s.items[i].Source != s.items[j].Source {
+			return s.items[i].Source < s.items[j].Source
+		}
+		return s.items[i].Version < s.items[j].Version
 	})
 	return s.items
 }
 
 // parseLockfileData parses one supported lockfile. The name selects the
-// parser; callers pass a base name such as "package-lock.json".
-func parseLockfileData(name string, data []byte, limits Limits) ([]Candidate, error) {
+// parser; callers pass a base name such as "package-lock.json". The bool
+// reports that the candidate cap was reached.
+func parseLockfileData(name string, data []byte, limits Limits) ([]Candidate, bool, error) {
 	limits = limits.withDefaults()
 	if int64(len(data)) > limits.MaxFileBytes {
-		return nil, fmt.Errorf("%w: %s is %d bytes", errTooLarge, name, len(data))
+		return nil, false, fmt.Errorf("%w: %s is %d bytes", errTooLarge, name, len(data))
 	}
 	set := newCandidateSet()
 	switch filepath.Base(name) {
 	case "package-lock.json":
 		if err := parsePackageLock(data, name, set); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	case "pnpm-lock.yaml":
 		if err := parsePNPMLock(data, name, set); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	case "yarn.lock":
 		parseYarnLock(data, name, set)
 	case "bun.lock":
 		if err := parseBunLock(data, name, set); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	default:
-		return nil, fmt.Errorf("unsupported lockfile %q", name)
+		return nil, false, fmt.Errorf("unsupported lockfile %q", name)
 	}
-	return set.sorted(), nil
+	return set.sorted(), set.truncated, nil
 }
 
 type packageLockDependency struct {
@@ -109,14 +175,15 @@ func parsePackageLock(data []byte, source string, set *candidateSet) error {
 	if err := json.Unmarshal(data, &lock); err != nil {
 		return err
 	}
-	for key, entry := range lock.Packages {
+	for _, key := range sortedStringKeys(lock.Packages) {
+		entry := lock.Packages[key]
 		if !packageLockKeyIsElements(key) {
 			continue
 		}
-		version, parsed := exactVersion(entry.Version)
-		if !parsed.OK && entry.Version == "" {
+		if entry.Version == "" {
 			continue
 		}
+		version, _ := exactVersion(entry.Version)
 		set.add(version, entry.Version, source, PrecedenceLockfile)
 	}
 	var walk func(map[string]packageLockDependency, int)
@@ -124,7 +191,8 @@ func parsePackageLock(data []byte, source string, set *candidateSet) error {
 		if depth > maxDepth {
 			return
 		}
-		for name, dependency := range dependencies {
+		for _, name := range sortedStringKeys(dependencies) {
+			dependency := dependencies[name]
 			if name == "@rhds/elements" {
 				version, _ := exactVersion(dependency.Version)
 				set.add(version, dependency.Version, source, PrecedenceLockfile)
@@ -144,64 +212,81 @@ func packageLockKeyIsElements(key string) bool {
 		strings.HasSuffix(key, "/node_modules/@rhds/elements")
 }
 
+// parsePNPMLock reads only resolved versions. Importers contribute
+// dependencies, devDependencies, and optionalDependencies version fields;
+// packages and snapshots contribute package IDs. peerDependencies ranges are
+// deliberately ignored: they are constraints, not pins.
 func parsePNPMLock(data []byte, source string, set *candidateSet) error {
 	var document any
 	if err := yaml.Unmarshal(data, &document); err != nil {
 		return err
 	}
-	walkDocument(document, func(key string, value any) {
-		switch {
-		case key == "@rhds/elements":
-			addSpecValue(value, source, set)
-		case strings.HasPrefix(key, "@rhds/elements@"):
-			spec := strings.TrimPrefix(key, "@rhds/elements@")
-			if index := strings.IndexByte(spec, '('); index >= 0 {
-				spec = spec[:index]
-			}
-			spec = strings.TrimPrefix(spec, "npm:")
-			version, parsed := exactVersion(spec)
-			if parsed.OK {
-				set.add(version, spec, source, PrecedenceLockfile)
+	top := stringMap(document)
+	if top == nil {
+		return nil
+	}
+	importers := stringMap(top["importers"])
+	for _, name := range sortedAnyMapKeys(importers) {
+		importer := stringMap(importers[name])
+		for _, section := range []string{"dependencies", "devDependencies", "optionalDependencies"} {
+			dependencies := stringMap(importer[section])
+			if dependency, ok := dependencies["@rhds/elements"]; ok {
+				addPNPMResolved(dependency, source, set)
 			}
 		}
-	})
+	}
+	for _, section := range []string{"packages", "snapshots"} {
+		packages := stringMap(top[section])
+		for _, key := range sortedAnyMapKeys(packages) {
+			if version, ok := versionFromPNPMKey(key); ok {
+				set.add(version, key, source, PrecedenceLockfile)
+			}
+		}
+	}
 	return nil
 }
 
-func addSpecValue(value any, source string, set *candidateSet) {
-	switch typed := value.(type) {
-	case string:
-		version, parsed := exactVersion(typed)
-		if parsed.OK {
-			set.add(version, typed, source, PrecedenceLockfile)
-		}
-	case map[string]any:
-		addSpecFromMap(typed, source, set)
-	case map[any]any:
-		converted := make(map[string]any, len(typed))
-		for key, item := range typed {
-			if text, ok := key.(string); ok {
-				converted[text] = item
-			}
-		}
-		addSpecFromMap(converted, source, set)
-	case []any:
-		if len(typed) > 0 {
-			addSpecValue(typed[0], source, set)
-		}
+func addPNPMResolved(value any, source string, set *candidateSet) {
+	values := stringMap(value)
+	if values == nil {
+		// A string here is a range, not a resolved version.
+		return
+	}
+	spec, ok := values["version"].(string)
+	if !ok {
+		return
+	}
+	version, parsed := exactVersion(spec)
+	if parsed.OK {
+		set.add(version, spec, source, PrecedenceLockfile)
 	}
 }
 
-func addSpecFromMap(values map[string]any, source string, set *candidateSet) {
-	for _, field := range []string{"version", "specifier"} {
-		if spec, ok := values[field].(string); ok {
-			version, parsed := exactVersion(spec)
-			if parsed.OK {
-				set.add(version, spec, source, PrecedenceLockfile)
-				return
-			}
-		}
+// versionFromPNPMKey understands the package ID forms used by pnpm majors:
+//
+//	/@rhds/elements/4.2.2        (v5)
+//	/@rhds/elements@4.2.2        (v6+)
+//	@rhds/elements@4.2.2(peer@1) (v7+)
+func versionFromPNPMKey(key string) (string, bool) {
+	trimmed := strings.TrimPrefix(key, "/")
+	var rest string
+	switch {
+	case strings.HasPrefix(trimmed, "@rhds/elements@"):
+		rest = trimmed[len("@rhds/elements@"):]
+	case strings.HasPrefix(trimmed, "@rhds/elements/"):
+		rest = trimmed[len("@rhds/elements/"):]
+	default:
+		return "", false
 	}
+	rest = strings.TrimPrefix(rest, "npm:")
+	if index := strings.IndexAny(rest, "(_"); index >= 0 {
+		rest = rest[:index]
+	}
+	parsed := ParseVersionSpecLeading(rest)
+	if !parsed.OK || parsed.Partial {
+		return "", false
+	}
+	return parsed.Text, true
 }
 
 func parseYarnLock(data []byte, source string, set *candidateSet) {
@@ -279,19 +364,25 @@ func yarnValue(line, field string) (string, bool) {
 	return rest, rest != ""
 }
 
+// parseBunLock reads only resolved package entries. Workspace dependency
+// ranges are not pins and are ignored.
 func parseBunLock(data []byte, source string, set *candidateSet) error {
 	converted := jsonc.ToJSON(data)
 	var document any
 	if err := json.Unmarshal(converted, &document); err != nil {
 		return err
 	}
-	walkDocument(document, func(key string, value any) {
-		switch {
-		case key == "@rhds/elements":
+	top := stringMap(document)
+	if top == nil {
+		return nil
+	}
+	packages := stringMap(top["packages"])
+	for _, key := range sortedAnyMapKeys(packages) {
+		value := packages[key]
+		if key == "@rhds/elements" {
 			switch typed := value.(type) {
 			case string:
-				version, parsed := exactVersion(typed)
-				if parsed.OK {
+				if version, ok := versionFromBunSpec(typed); ok {
 					set.add(version, typed, source, PrecedenceLockfile)
 				}
 			case []any:
@@ -300,57 +391,54 @@ func parseBunLock(data []byte, source string, set *candidateSet) error {
 					if !ok {
 						continue
 					}
-					version, parsed := exactVersion(spec)
-					if parsed.OK {
+					if version, ok := versionFromBunSpec(spec); ok {
 						set.add(version, spec, source, PrecedenceLockfile)
 						break
 					}
 				}
 			case map[string]any:
-				addSpecValue(typed, source, set)
+				addSpecFromMap(typed, source, set)
 			}
-		case strings.HasPrefix(key, "@rhds/elements@"):
-			spec := strings.TrimPrefix(key, "@rhds/elements@")
-			spec = strings.TrimPrefix(spec, "npm:")
-			version, parsed := exactVersion(spec)
-			if parsed.OK {
-				set.add(version, spec, source, PrecedenceLockfile)
-			}
+			continue
 		}
-	})
+		if version, ok := versionFromBunKey(key); ok {
+			set.add(version, key, source, PrecedenceLockfile)
+		}
+	}
 	return nil
 }
 
-// walkDocument visits every key/value pair in a decoded JSON or YAML
-// document with a bounded, iterative walk.
-func walkDocument(document any, visit func(key string, value any)) {
-	type item struct {
-		value any
-		depth int
+func versionFromBunSpec(spec string) (string, bool) {
+	index := strings.LastIndex(spec, "@")
+	if index < 0 {
+		return "", false
 	}
-	stack := []item{{value: document}}
-	for len(stack) > 0 {
-		current := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if current.depth > maxDepth {
-			continue
-		}
-		switch typed := current.value.(type) {
-		case map[string]any:
-			for key, value := range typed {
-				visit(key, value)
-				stack = append(stack, item{value: value, depth: current.depth + 1})
-			}
-		case map[any]any:
-			for key, value := range typed {
-				if text, ok := key.(string); ok {
-					visit(text, value)
-				}
-				stack = append(stack, item{value: value, depth: current.depth + 1})
-			}
-		case []any:
-			for _, value := range typed {
-				stack = append(stack, item{value: value, depth: current.depth + 1})
+	parsed := ParseVersionSpecLeading(spec[index+1:])
+	if !parsed.OK || parsed.Partial {
+		return "", false
+	}
+	return parsed.Text, true
+}
+
+func versionFromBunKey(key string) (string, bool) {
+	trimmed := strings.TrimPrefix(key, "/")
+	if !strings.HasPrefix(trimmed, "@rhds/elements@") {
+		return "", false
+	}
+	parsed := ParseVersionSpecLeading(strings.TrimPrefix(trimmed, "@rhds/elements@"))
+	if !parsed.OK || parsed.Partial {
+		return "", false
+	}
+	return parsed.Text, true
+}
+
+func addSpecFromMap(values map[string]any, source string, set *candidateSet) {
+	for _, field := range []string{"version", "specifier"} {
+		if spec, ok := values[field].(string); ok {
+			version, parsed := exactVersion(spec)
+			if parsed.OK {
+				set.add(version, spec, source, PrecedenceLockfile)
+				return
 			}
 		}
 	}

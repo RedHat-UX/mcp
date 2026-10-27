@@ -14,23 +14,33 @@ func TestParseVersionSpec(t *testing.T) {
 		major     int
 		minor     int
 		patch     int
+		partial   bool
+		hasMinor  bool
 		parseable bool
 	}{
-		{"5.0.0", "5.0.0", 5, 0, 0, true},
-		{"^5.0.0", "5.0.0", 5, 0, 0, true},
-		{"~4.2.2", "4.2.2", 4, 2, 2, true},
-		{">=3.1.0 <4", "3.1.0", 3, 1, 0, true},
-		{"v5.0.0", "5.0.0", 5, 0, 0, true},
-		{"npm:@rhds/elements@5.0.0", "5.0.0", 5, 0, 0, true},
-		{"workspace:^5.0.0", "5.0.0", 5, 0, 0, true},
-		{"https://cdn.jsdelivr.net/npm/@rhds/elements@5.0.0/+esm", "5.0.0", 5, 0, 0, true},
-		{"5.0.0-beta.1", "5.0.0-beta.1", 5, 0, 0, true},
-		{"latest", "", 0, 0, 0, false},
-		{"*", "", 0, 0, 0, false},
-		{"file:../elements", "", 0, 0, 0, false},
-		{"catalog:", "", 0, 0, 0, false},
-		{"workspace:*", "", 0, 0, 0, false},
-		{"", "", 0, 0, 0, false},
+		{"5.0.0", "5.0.0", 5, 0, 0, false, true, true},
+		{"^5.0.0", "5.0.0", 5, 0, 0, false, true, true},
+		{"~4.2.2", "4.2.2", 4, 2, 2, false, true, true},
+		{">=3.1.0 <4", "3.1.0", 3, 1, 0, false, true, true},
+		{"v5.0.0", "5.0.0", 5, 0, 0, false, true, true},
+		{"npm:@rhds/elements@5.0.0", "5.0.0", 5, 0, 0, false, true, true},
+		{"workspace:^5.0.0", "5.0.0", 5, 0, 0, false, true, true},
+		{"https://cdn.jsdelivr.net/npm/@rhds/elements@5.0.0/+esm", "5.0.0", 5, 0, 0, false, true, true},
+		{"5.0.0-beta.1", "5.0.0-beta.1", 5, 0, 0, false, true, true},
+		{"^4", "4", 4, 0, 0, true, false, true},
+		{"4", "4", 4, 0, 0, true, false, true},
+		{"4.x", "4", 4, 0, 0, true, false, true},
+		{"4.*", "4", 4, 0, 0, true, false, true},
+		{"~4", "4", 4, 0, 0, true, false, true},
+		{"~4.2", "4.2", 4, 2, 0, true, true, true},
+		{"4.2", "4.2", 4, 2, 0, true, true, true},
+		{"npm:@rhds/elements@^4", "4", 4, 0, 0, true, false, true},
+		{"latest", "", 0, 0, 0, false, false, false},
+		{"*", "", 0, 0, 0, false, false, false},
+		{"file:../elements", "", 0, 0, 0, false, false, false},
+		{"catalog:", "", 0, 0, 0, false, false, false},
+		{"workspace:*", "", 0, 0, 0, false, false, false},
+		{"", "", 0, 0, 0, false, false, false},
 	}
 	for _, test := range tests {
 		t.Run(test.spec, func(t *testing.T) {
@@ -48,6 +58,12 @@ func TestParseVersionSpec(t *testing.T) {
 				t.Errorf("version = %d.%d.%d, want %d.%d.%d",
 					parsed.Major, parsed.Minor, parsed.Patch, test.major, test.minor, test.patch)
 			}
+			if parsed.Partial != test.partial {
+				t.Errorf("partial = %v, want %v", parsed.Partial, test.partial)
+			}
+			if parsed.HasMinor != test.hasMinor {
+				t.Errorf("hasMinor = %v, want %v", parsed.HasMinor, test.hasMinor)
+			}
 		})
 	}
 }
@@ -62,6 +78,10 @@ func TestCompareParsed(t *testing.T) {
 	if CompareParsed(patch, high) <= 0 {
 		t.Errorf("CompareParsed(%s, %s) = %d, want 1", patch.Text, high.Text, CompareParsed(patch, high))
 	}
+	rangeMajor := ParseVersionSpec("^5")
+	if CompareParsed(rangeMajor, ParseVersionSpec("5.0.0")) != 0 {
+		t.Errorf("partial major should compare equal to its zero components")
+	}
 }
 
 func FuzzParseVersionSpec(f *testing.F) {
@@ -69,6 +89,7 @@ func FuzzParseVersionSpec(f *testing.F) {
 		"5.0.0", "^5.0.0", "workspace:*", "npm:@rhds/elements@5.0.0",
 		"https://example.test/@rhds/elements@4.2.2/x.js", "",
 		"999999999999999999999999999999.0.0", "..", "@@@",
+		"^4", "4.x", "~4.2", "npm:@rhds/elements@^3",
 	} {
 		f.Add(seed)
 	}

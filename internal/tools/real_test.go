@@ -30,13 +30,34 @@ func TestRealEmbeddedData(t *testing.T) {
 	service := New(store, nil)
 
 	components := service.ListComponents(context.Background(), ListComponentsInput{
-		Version: "5.0.0",
+		Version:           "5.0.0",
+		IncludeDeprecated: true,
+		PageSize:          100,
 	})
 	if components.Error != nil {
 		t.Fatalf("ListComponents() error = %+v", components.Error)
 	}
 	if components.Total == 0 {
 		t.Fatal("ListComponents() returned no components for 5.0.0")
+	}
+	withDocs := 0
+	withoutDocs := 0
+	for _, component := range components.Components {
+		if component.DocsAvailable {
+			withDocs++
+		} else {
+			withoutDocs++
+		}
+	}
+	if withDocs == 0 || withoutDocs == 0 {
+		t.Fatalf("docsAvailable is not per component: %d with docs, %d without", withDocs, withoutDocs)
+	}
+	button, ok := findComponent(components.Components, "rh-button")
+	if !ok {
+		t.Fatal("rh-button missing from the 5.0.0 listing")
+	}
+	if !button.DocsAvailable {
+		t.Error("rh-button should have docs in the 5.0.0 snapshot")
 	}
 
 	tokens := service.QueryTokens(context.Background(), QueryTokensInput{
@@ -111,12 +132,21 @@ func TestRealManifestNormalization(t *testing.T) {
 		}
 	}
 
-	api := service.GetComponentAPI(context.Background(), GetComponentAPIInput{
+	// A real component can exceed the 8k summary budget when every section is
+	// requested. The tool must ask for a follow-up rather than truncate.
+	if api := service.GetComponentAPI(context.Background(), GetComponentAPIInput{
 		TagName: "rh-button",
 		Version: "5.0.0",
+	}); api.Error != nil && api.Error.Code != "response_too_large" {
+		t.Fatalf("GetComponentAPI() error = %+v", api.Error)
+	}
+	api := service.GetComponentAPI(context.Background(), GetComponentAPIInput{
+		TagName:  "rh-button",
+		Version:  "5.0.0",
+		Sections: []string{"attributes"},
 	})
 	if api.Error != nil {
-		t.Fatalf("GetComponentAPI() error = %+v", api.Error)
+		t.Fatalf("GetComponentAPI(attributes) error = %+v", api.Error)
 	}
 	if len(api.Attributes) == 0 {
 		t.Error("rh-button has no attributes in the real manifest")

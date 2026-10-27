@@ -74,19 +74,34 @@ func Resolve(options Options) (Result, error) {
 	var result Result
 
 	if options.Explicit != "" {
-		version, parsed := exactVersion(options.Explicit)
+		version := options.Explicit
+		parsed := ParseVersionSpec(options.Explicit)
+		switch {
+		case !parsed.OK:
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("the version argument %q is not a semantic version", truncateRunes(options.Explicit, maxCandidateRunes)))
+		case parsed.Partial:
+			if resolved, ok := highestBundledFor(parsed, options.BundledElements); ok {
+				version = resolved
+				result.Warnings = append(result.Warnings,
+					fmt.Sprintf("version argument %q resolved to the highest bundled matching version %s",
+						truncateRunes(options.Explicit, maxCandidateRunes), resolved))
+			} else {
+				result.Warnings = append(result.Warnings,
+					fmt.Sprintf("no bundled elements version matches the version argument %q",
+						truncateRunes(options.Explicit, maxCandidateRunes)))
+			}
+		default:
+			version = parsed.Text
+		}
 		candidate := Candidate{
-			Version:    version,
-			Spec:       options.Explicit,
+			Version:    truncateRunes(version, maxCandidateRunes),
+			Spec:       truncateRunes(options.Explicit, maxCandidateRunes),
 			Source:     "version argument",
 			Precedence: PrecedenceExplicit,
 			Level:      LevelExplicit,
 		}
-		if !parsed.OK {
-			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("the version argument %q is not a semantic version", options.Explicit))
-		}
-		result.Elements = options.Explicit
+		result.Elements = candidate.Version
 		result.Source = "version argument"
 		result.Candidates = []Candidate{candidate}
 		return result, nil
@@ -126,11 +141,15 @@ func Resolve(options Options) (Result, error) {
 				fmt.Sprintf("could not read %s: %v", name, err))
 			continue
 		}
-		candidates, err := parseLockfileData(name, payload, limits)
+		candidates, truncated, err := parseLockfileData(name, payload, limits)
 		if err != nil {
 			result.Warnings = append(result.Warnings,
 				fmt.Sprintf("could not parse %s: %v", name, err))
 			continue
+		}
+		if truncated {
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("candidate collection for %s stopped at %d entries", name, maxCandidates))
 		}
 		mergeCandidates(set, candidates)
 	}
@@ -211,8 +230,9 @@ func selectCandidate(result Result, bundled []string) (Result, error) {
 
 	majors := make(map[int]bool)
 	type parsedCandidate struct {
-		candidate Candidate
-		parsed    ParsedVersion
+		candidate    Candidate
+		parsed       ParsedVersion
+		resolvedText string
 	}
 	parsedTop := make([]parsedCandidate, 0, len(top))
 	for _, candidate := range top {
@@ -222,11 +242,27 @@ func selectCandidate(result Result, bundled []string) (Result, error) {
 		}
 		if !parsed.OK {
 			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("could not parse a version from %q in %s", candidate.Version, candidate.Source))
+				fmt.Sprintf("could not parse a version from %q in %s",
+					truncateRunes(candidate.Version, maxCandidateRunes), candidate.Source))
 			continue
 		}
 		majors[parsed.Major] = true
-		parsedTop = append(parsedTop, parsedCandidate{candidate: candidate, parsed: parsed})
+		resolvedText := parsed.Text
+		if parsed.Partial {
+			var ok bool
+			resolvedText, ok = highestBundledFor(parsed, bundled)
+			if !ok {
+				result.Warnings = append(result.Warnings,
+					fmt.Sprintf("no bundled elements version matches %q in %s",
+						truncateRunes(candidate.Spec, maxCandidateRunes), candidate.Source))
+				continue
+			}
+		}
+		parsedTop = append(parsedTop, parsedCandidate{
+			candidate:    candidate,
+			parsed:       parsed,
+			resolvedText: resolvedText,
+		})
 	}
 
 	if len(majors) > 1 {
@@ -244,42 +280,71 @@ func selectCandidate(result Result, bundled []string) (Result, error) {
 	}
 
 	sort.Slice(parsedTop, func(i, j int) bool {
-		if order := CompareParsed(parsedTop[i].parsed, parsedTop[j].parsed); order != 0 {
+		left := ParseVersionSpec(parsedTop[i].resolvedText)
+		right := ParseVersionSpec(parsedTop[j].resolvedText)
+		if order := CompareParsed(left, right); order != 0 {
 			return order > 0
 		}
-		return parsedTop[i].candidate.Source < parsedTop[j].candidate.Source
+		if parsedTop[i].candidate.Source != parsedTop[j].candidate.Source {
+			return parsedTop[i].candidate.Source < parsedTop[j].candidate.Source
+		}
+		return parsedTop[i].candidate.Spec < parsedTop[j].candidate.Spec
 	})
 	chosen := parsedTop[0]
-	result.Elements = chosen.parsed.Text
+	result.Elements = chosen.resolvedText
 	result.Source = chosen.candidate.Source
 
 	distinct := make(map[string]bool)
 	for _, item := range parsedTop {
-		distinct[item.parsed.Text] = true
+		distinct[item.resolvedText] = true
 	}
 	if len(distinct) > 1 {
 		result.Warnings = append(result.Warnings,
 			fmt.Sprintf("workspace sources disagree on a minor or patch version; using highest %s from %s",
-				chosen.parsed.Text, chosen.candidate.Source))
+				chosen.resolvedText, chosen.candidate.Source))
 	}
-	addLowerPrecedenceWarning(&result, chosen.parsed, winning)
+	addLowerPrecedenceWarning(&result, chosen.parsed, chosen.resolvedText, winning)
 	return result, nil
 }
 
-func addLowerPrecedenceWarning(result *Result, chosen ParsedVersion, winning int) {
+// highestBundledFor maps a partial range to the highest bundled version that
+// satisfies its major, and minor when one was given.
+func highestBundledFor(parsed ParsedVersion, bundled []string) (string, bool) {
+	best := ""
+	var bestParsed ParsedVersion
+	for _, version := range bundled {
+		candidate := ParseVersionSpec(version)
+		if !candidate.OK || candidate.Partial || candidate.Major != parsed.Major {
+			continue
+		}
+		if parsed.HasMinor && candidate.Minor != parsed.Minor {
+			continue
+		}
+		if best == "" || CompareParsed(candidate, bestParsed) > 0 {
+			best = candidate.Text
+			bestParsed = candidate
+		}
+	}
+	return best, best != ""
+}
+
+func addLowerPrecedenceWarning(result *Result, chosen ParsedVersion, chosenText string, winning int) {
 	seen := make(map[string]bool)
 	for _, candidate := range result.Candidates {
 		if candidate.Precedence <= winning || seen[candidate.Source] {
 			continue
 		}
 		parsed := ParseVersionSpec(candidate.Version)
+		if !parsed.OK {
+			parsed = ParseVersionSpec(candidate.Spec)
+		}
 		if !parsed.OK || parsed.Major == chosen.Major {
 			continue
 		}
 		seen[candidate.Source] = true
 		result.Warnings = append(result.Warnings,
 			fmt.Sprintf("ignored %s in %s because a higher-precedence source selected elements@%s",
-				candidate.Version, candidate.Source, chosen.Text))
+				truncateRunes(candidate.Version, maxCandidateRunes), candidate.Source, chosenText))
 	}
 }
 

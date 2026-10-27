@@ -337,9 +337,16 @@ func invalidElicitationResponse(offered []string) *ToolError {
 }
 
 func ambiguityError(ambiguity *resolve.Ambiguity, versionArgument string) *ToolError {
-	sources := make([]string, 0, len(ambiguity.Candidates))
-	for _, candidate := range ambiguity.Candidates {
-		sources = append(sources, fmt.Sprintf("%s from %s", candidate.Version, candidate.Source))
+	sources := make([]string, 0, min(len(ambiguity.Candidates), 5))
+	for i, candidate := range ambiguity.Candidates {
+		if i >= 5 {
+			sources = append(sources,
+				fmt.Sprintf("and %d more candidates", len(ambiguity.Candidates)-5))
+			break
+		}
+		sources = append(sources, fmt.Sprintf("%s from %s",
+			truncateResponseText(candidate.Version, maxCandidateRunes),
+			truncateResponseText(candidate.Source, 300)))
 	}
 	return &ToolError{
 		Code: "ambiguous_version",
@@ -355,7 +362,7 @@ func ambiguityError(ambiguity *resolve.Ambiguity, versionArgument string) *ToolE
 
 func ambiguityDetails(ambiguity *resolve.Ambiguity, versionArgument string) map[string]any {
 	return map[string]any{
-		"candidates":      ambiguity.Candidates,
+		"candidates":      boundedCandidates(ambiguity.Candidates, maxOutputCandidates),
 		"majors":          ambiguity.Majors,
 		"versionArgument": versionArgument,
 		"configOptions": []string{

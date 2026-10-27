@@ -419,7 +419,7 @@ func (s *Service) ValidateMarkup(_ context.Context, input ValidateMarkupInput) V
 		}
 		return a.Message < b.Message
 	})
-	return out
+	return fitValidateMarkup(out, defaultResponseBudget)
 }
 
 func declarationsByTag(pkg *manifest.Package) map[string]*manifest.CustomElementDeclaration {

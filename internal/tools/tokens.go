@@ -172,7 +172,7 @@ func (s *Service) QueryTokens(_ context.Context, input QueryTokensInput) QueryTo
 		}
 		out.Tokens = append(out.Tokens, result)
 	}
-	return out
+	return fitQueryTokens(out, defaultResponseBudget)
 }
 
 func tokenMatches(tok *token.Token, needle string) bool {

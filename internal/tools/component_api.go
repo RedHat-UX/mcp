@@ -5,7 +5,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -168,22 +167,7 @@ func (s *Service) componentAPI(resolved resolution, input GetComponentAPIInput) 
 	if s.maxResponseBytes > 0 && s.maxResponseBytes < budget {
 		budget = s.maxResponseBytes
 	}
-	if encoded, err := json.Marshal(out); err == nil && len(encoded) > budget {
-		return ComponentAPIOutput{
-			Resolved: resolved.Resolved,
-			TagName:  component.TagName,
-			Sections: sectionList(sections),
-			Error: &ToolError{
-				Code: "response_too_large",
-				Message: fmt.Sprintf(
-					"the %s response for %s is %d bytes, over the %d byte cap",
-					detail, component.TagName, len(encoded), budget),
-				Hint: "call this tool again with a subset of sections and detail=summary; " +
-					"there is no silent truncation",
-			},
-		}
-	}
-	return out
+	return fitComponentAPI(out, budget)
 }
 
 func normalizeSections(requested []string) (map[string]bool, *ToolError) {

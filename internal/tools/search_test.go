@@ -7,6 +7,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestSearchComponents(t *testing.T) {
@@ -150,5 +151,16 @@ func TestSearchLimitIsCapped(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(out.Resolved.Warnings, " "), "capped") {
 		t.Errorf("warnings = %v", out.Resolved.Warnings)
+	}
+}
+
+func TestExcerptTextHandlesMultibytePrefix(t *testing.T) {
+	text := "İstanbul café " + strings.Repeat("x", 200) + " accessibility guidance"
+	got := excerptText(text, "accessibility", 40)
+	if !strings.Contains(strings.ToLower(got), "accessibility") {
+		t.Errorf("excerpt = %q, want the query at a valid rune boundary", got)
+	}
+	if !utf8.ValidString(got) {
+		t.Errorf("excerpt is not valid UTF-8: %q", got)
 	}
 }

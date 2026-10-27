@@ -350,6 +350,17 @@ func TestProtocolMatrixCWDFallback(t *testing.T) {
 		}
 	})
 
+	t.Run("2025-06-18 without capabilities", func(t *testing.T) {
+		session := connectProtocolClient(t, "2025-06-18", clientConfig{})
+		result, out := callResolveVersion(t, session, nil)
+		if !result.IsError {
+			t.Fatal("IsError = false, want ambiguous_version")
+		}
+		if out.Error == nil || out.Error.Code != "ambiguous_version" {
+			t.Fatalf("error = %+v", out.Error)
+		}
+	})
+
 	t.Run("2026-07-28 without elicitation", func(t *testing.T) {
 		session := connectProtocolClient(t, "2026-07-28", clientConfig{})
 		result, out := callResolveVersion(t, session, nil)
@@ -362,8 +373,76 @@ func TestProtocolMatrixCWDFallback(t *testing.T) {
 	})
 }
 
-// TestProtocolExplicitVersionSkipsRoots shows that an explicit version does
-// not ask for roots or elicitation at any advertised protocol version.
+func callListComponents(
+	t *testing.T,
+	session *mcp.ClientSession,
+	arguments map[string]any,
+) (*mcp.CallToolResult, tools.ListComponentsOutput) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "rhds_list_components",
+		Arguments: arguments,
+	})
+	if err != nil {
+		t.Fatalf("CallTool(rhds_list_components) error = %v", err)
+	}
+	encoded, err := json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshaling structured content: %v", err)
+	}
+	var output tools.ListComponentsOutput
+	if len(encoded) > 0 && string(encoded) != "null" {
+		if err := json.Unmarshal(encoded, &output); err != nil {
+			t.Fatalf("decoding structured content %s: %v", encoded, err)
+		}
+	}
+	return result, output
+}
+
+// TestPaginationUsesCursorVersionBeforeResolution proves that page two uses
+// the cursor-bound version instead of re-running the ambiguous workspace
+// resolution.
+func TestPaginationUsesCursorVersionBeforeResolution(t *testing.T) {
+	workspace := ambiguousWorkspace(t)
+	t.Chdir(workspace)
+	session := connectProtocolClient(t, "2026-07-28", clientConfig{})
+
+	_, first := callListComponents(t, session, map[string]any{
+		"version":  "5.0.0",
+		"pageSize": 2,
+	})
+	if first.Error != nil {
+		t.Fatalf("page 1 error = %+v", first.Error)
+	}
+	if first.NextCursor == "" {
+		t.Fatal("page 1 has no next cursor")
+	}
+
+	_, second := callListComponents(t, session, map[string]any{
+		"cursor":   first.NextCursor,
+		"pageSize": 2,
+	})
+	if second.Error != nil {
+		t.Fatalf("page 2 error = %+v; resolution should not run for a cursor", second.Error)
+	}
+	if second.Resolved.Elements != "5.0.0" {
+		t.Errorf("page 2 elements = %q, want the cursor-bound 5.0.0", second.Resolved.Elements)
+	}
+	if second.Resolved.Source != "cursor" {
+		t.Errorf("page 2 source = %q, want cursor", second.Resolved.Source)
+	}
+
+	_, changed := callListComponents(t, session, map[string]any{
+		"cursor":            first.NextCursor,
+		"includeDeprecated": true,
+	})
+	if changed.Error == nil || changed.Error.Code != "cursor_options_mismatch" {
+		t.Fatalf("changed includeDeprecated error = %+v, want cursor_options_mismatch", changed.Error)
+	}
+}
+
 func TestProtocolExplicitVersionSkipsRoots(t *testing.T) {
 	for _, version := range []string{"2025-06-18", "2025-11-25", "2026-07-28"} {
 		t.Run(version, func(t *testing.T) {

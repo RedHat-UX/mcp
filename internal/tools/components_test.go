@@ -136,6 +136,13 @@ func TestListComponentsDefaultPage(t *testing.T) {
 	if button.Deprecated {
 		t.Error("rh-button should not be deprecated")
 	}
+	card, ok := findComponent(out.Components, "rh-card")
+	if !ok {
+		t.Fatal("rh-card missing from results")
+	}
+	if card.DocsAvailable {
+		t.Error("rh-card should not report docs; only rh-button has a docs page in the fixture")
+	}
 }
 
 func TestListComponentsPaginatesWithOpaqueCursor(t *testing.T) {
@@ -276,6 +283,35 @@ func TestListComponentsExplicitOlderVersion(t *testing.T) {
 	}
 	if out.Total != 1 || len(out.Components) != 1 || out.Components[0].TagName != "rh-card" {
 		t.Errorf("components = %+v, want only rh-card", out.Components)
+	}
+}
+
+func TestListComponentsRejectsChangedIncludeDeprecated(t *testing.T) {
+	out := fixtureService(t).ListComponents(context.Background(), ListComponentsInput{
+		Cursor:            encodeCursor("5.0.0", 0, false),
+		IncludeDeprecated: true,
+	})
+	if out.Error == nil {
+		t.Fatal("error = nil, want cursor_options_mismatch")
+	}
+	if out.Error.Code != "cursor_options_mismatch" {
+		t.Errorf("error code = %q, want cursor_options_mismatch", out.Error.Code)
+	}
+}
+
+func TestListComponentsCursorSkipsResolution(t *testing.T) {
+	out := fixtureService(t).ListComponents(context.Background(), ListComponentsInput{
+		Cursor:   encodeCursor("4.0.0", 0, false),
+		PageSize: 2,
+	})
+	if out.Error != nil {
+		t.Fatalf("ListComponents() error = %+v", out.Error)
+	}
+	if out.Resolved.Elements != "4.0.0" {
+		t.Errorf("elements = %q, want the cursor-bound 4.0.0", out.Resolved.Elements)
+	}
+	if out.Resolved.Source != "cursor" {
+		t.Errorf("source = %q, want cursor", out.Resolved.Source)
 	}
 }
 

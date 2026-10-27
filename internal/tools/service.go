@@ -89,7 +89,8 @@ type Service struct {
 	tokenParses    atomic.Int64
 	themeParses    atomic.Int64
 
-	models sync.Map // elements version -> *cem.Model
+	models   sync.Map // elements version -> *cem.Model
+	docsTags sync.Map // docs tag -> map[tagName]bool
 
 	// maxResponseBytes is the NFR-03 hard cap. Tests set a smaller value to
 	// exercise the follow-up-call path.
@@ -185,12 +186,6 @@ func (s *Service) resolveVersion(pkg, kind, requested string) (string, *ToolErro
 	}
 	return versions[0], nil
 }
-
-// NFR-03 response budgets.
-const (
-	defaultResponseBudget = 8 * 1024
-	hardResponseBudget    = 32 * 1024
-)
 
 func (s *Service) loadModel(version string) (*cem.Model, *ToolError) {
 	if cached, ok := s.models.Load(version); ok {
@@ -327,7 +322,7 @@ func (s *Service) resolutionFrom(
 				Hint: "pass a bundled version with the version argument; " +
 					"call rhds_resolve_version to list candidates and bundled versions",
 				Details: map[string]any{
-					"candidates": result.Candidates,
+					"candidates": boundedCandidates(result.Candidates, maxOutputCandidates),
 					"source":     result.Source,
 				},
 			}
@@ -422,6 +417,13 @@ func (s *Service) prepareResolution(
 		Limits:          resolve.DefaultLimits(),
 	})
 	if err != nil {
+		if errors.Is(err, resolve.ErrNoBundledElements) {
+			return resolution{}, nil, &ToolError{
+				Code:    "artifact_not_found",
+				Message: "no bundled elements data",
+				Hint:    "build with generated data: make data build",
+			}
+		}
 		return resolution{}, nil, &ToolError{
 			Code:    "workspace_unavailable",
 			Message: "could not inspect the workspace for an @rhds/elements version",

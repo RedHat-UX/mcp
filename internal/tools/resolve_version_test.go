@@ -6,11 +6,14 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 
+	"github.com/redhat-ux/mcp/internal/data"
 	"github.com/redhat-ux/mcp/internal/resolve"
 )
 
@@ -183,5 +186,72 @@ func TestResolveVersionJSONIncludesCandidates(t *testing.T) {
 	}
 	if decoded.Candidates[0].Source != "package.json" || decoded.Candidates[0].Precedence == 0 {
 		t.Errorf("candidate = %+v", decoded.Candidates[0])
+	}
+}
+
+func TestPrepareResolutionMapsNoBundledElements(t *testing.T) {
+	index := `{"schemaVersion":1,"artifacts":[{"package":"tokens","version":"3.2.0","kind":"tokens","path":"tokens.json"}]}`
+	store, err := data.Open(fstest.MapFS{
+		"index.json": {Data: []byte(index)},
+	})
+	if err != nil {
+		t.Fatalf("data.Open() error = %v", err)
+	}
+	service := New(store, nil)
+	_, required, failure := service.prepareResolution(context.Background(), &callEnv{}, "", "", true)
+	if required != nil {
+		t.Fatalf("required = %+v, want a failure", required)
+	}
+	if failure == nil || failure.Code != "artifact_not_found" {
+		t.Fatalf("failure = %+v, want artifact_not_found", failure)
+	}
+}
+
+func TestResolveVersionBoundsHugeLockfileVersion(t *testing.T) {
+	huge := strings.Repeat("9", 1_000_000)
+	root := writeWorkspace(t, map[string]string{
+		"package-lock.json": `{"lockfileVersion":3,"packages":{"node_modules/@rhds/elements":{"version":"` + huge + `"}}}`,
+	})
+	out := fixtureService(t).ResolveVersionInWorkspace(root, ResolveVersionInput{})
+	if out.Error != nil {
+		t.Fatalf("ResolveVersion() error = %+v", out.Error)
+	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if size := estimatedResponseBytes(out); size > defaultResponseBudget {
+		t.Fatalf("estimated response = %d bytes, want <= %d (raw %d)", size, defaultResponseBudget, len(encoded))
+	}
+	for _, candidate := range out.Candidates {
+		if len(candidate.Version) > maxCandidateRunes+3 {
+			t.Errorf("candidate version was not truncated: %d bytes", len(candidate.Version))
+		}
+		if len(candidate.Spec) > maxCandidateRunes+3 {
+			t.Errorf("candidate spec was not truncated: %d bytes", len(candidate.Spec))
+		}
+	}
+}
+
+func TestResolveVersionCapsWarningCount(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"package.json": `{"private":true,"workspaces":["packages/*"]}`,
+	}
+	for i := 0; i < 40; i++ {
+		files[fmt.Sprintf("packages/pkg%02d/package.json", i)] =
+			fmt.Sprintf(`{"dependencies":{"@rhds/elements":"file:../missing-%d"}}`, i)
+	}
+	writeWorkspace(t, files)
+	out := fixtureService(t).ResolveVersionInWorkspace(root, ResolveVersionInput{})
+	if out.Error != nil {
+		t.Fatalf("ResolveVersion() error = %+v", out.Error)
+	}
+	if len(out.Resolved.Warnings) > maxResponseWarnings+1 {
+		t.Errorf("warnings = %d, want at most %d", len(out.Resolved.Warnings), maxResponseWarnings+1)
+	}
+	if estimatedResponseBytes(out) > defaultResponseBudget {
+		t.Errorf("estimated response = %d, want <= %d",
+			estimatedResponseBytes(out), defaultResponseBudget)
 	}
 }

@@ -83,6 +83,14 @@
       "path": "tokens/themes.json",
       "sha256": "2b108af2c2e80823cd555dec857a898bce9a794481140fd154fc4fe3db7f3012",
       "bytes": 216
+    },
+    {
+      "package": "docs",
+      "version": "v5.0.0",
+      "kind": "doc:elements/rh-button/docs/00-overview.md",
+      "path": "docs/v5.0.0/elements/rh-button/docs/00-overview.md",
+      "sha256": "36ed3b370ac555870b69f52609bc965b7e6a5010eb3b7028c1e90cf1559a0dbc",
+      "bytes": 89
     }
   ]
 }

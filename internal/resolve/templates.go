@@ -41,11 +41,20 @@ func collectTemplateCandidates(
 	warnings *[]string,
 ) {
 	scanned := 0
-	stopped := false
+	visited := 0
+	skipped := 0
+	failed := 0
+	stoppedByFiles := false
+	stoppedByEntries := false
 
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil
+		}
+		visited++
+		if visited > reader.limits.MaxScanEntries {
+			stoppedByEntries = true
+			return fs.SkipAll
 		}
 		relative, err := filepath.Rel(root, path)
 		if err != nil {
@@ -71,33 +80,41 @@ func collectTemplateCandidates(
 		if depth > reader.limits.MaxScanDepth {
 			return nil
 		}
+		if scanned >= reader.limits.MaxScanFiles {
+			stoppedByFiles = true
+			return fs.SkipAll
+		}
 		if !templateExtensions[strings.ToLower(filepath.Ext(entry.Name()))] {
 			return nil
-		}
-		if scanned >= reader.limits.MaxScanFiles {
-			if !stopped {
-				*warnings = append(*warnings,
-					fmt.Sprintf("template scan stopped after %d files", reader.limits.MaxScanFiles))
-				stopped = true
-			}
-			return fs.SkipAll
 		}
 		scanned++
 		payload, err := reader.read(relative)
 		if err != nil {
-			if errors.Is(err, errTooLarge) {
-				*warnings = append(*warnings, fmt.Sprintf("skipped oversized template %s", relative))
-				return nil
-			}
+			skipped++
 			return nil
 		}
 		if err := scanTemplate(relative, payload, set); err != nil {
-			*warnings = append(*warnings, fmt.Sprintf("could not parse %s: %v", relative, err))
+			failed++
 		}
 		return nil
 	})
 	if err != nil && !errors.Is(err, fs.SkipAll) {
 		*warnings = append(*warnings, fmt.Sprintf("template scan failed: %v", err))
+	}
+	if stoppedByFiles {
+		*warnings = append(*warnings,
+			fmt.Sprintf("template scan stopped after %d files", reader.limits.MaxScanFiles))
+	}
+	if stoppedByEntries {
+		*warnings = append(*warnings,
+			fmt.Sprintf("template scan stopped after visiting %d entries", reader.limits.MaxScanEntries))
+	}
+	if skipped > 0 {
+		*warnings = append(*warnings,
+			fmt.Sprintf("skipped %d templates that could not be read within the size limit", skipped))
+	}
+	if failed > 0 {
+		*warnings = append(*warnings, fmt.Sprintf("could not parse %d templates", failed))
 	}
 }
 

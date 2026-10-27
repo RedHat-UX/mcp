@@ -35,6 +35,27 @@ type packageJSON struct {
 	} `json:"pnpm"`
 }
 
+// catalogReference records a dependency that points at a pnpm catalog. Only
+// referenced catalogs contribute candidates.
+type catalogReference struct {
+	Name   string
+	Source string
+}
+
+type catalogDefinition struct {
+	Source string
+	Values map[string]string
+}
+
+type catalogDefinitions struct {
+	Defaults []catalogDefinition
+	Named    map[string][]catalogDefinition
+}
+
+func newCatalogDefinitions() *catalogDefinitions {
+	return &catalogDefinitions{Named: make(map[string][]catalogDefinition)}
+}
+
 // collectPackageJSON reads the root package.json, its workspace manifests,
 // and pnpm catalog definitions.
 func collectPackageJSON(
@@ -44,27 +65,35 @@ func collectPackageJSON(
 	warnings *[]string,
 ) []string {
 	var manifest packageJSON
+	catalogRefs := make([]catalogReference, 0)
+	definitions := newCatalogDefinitions()
+
 	payload, err := reader.read("package.json")
 	switch {
 	case err == nil:
 		if unmarshalErr := json.Unmarshal(payload, &manifest); unmarshalErr != nil {
 			*warnings = append(*warnings, fmt.Sprintf("could not parse package.json: %v", unmarshalErr))
 		} else {
-			addDependencyMaps(manifest, "package.json", set, warnings)
-			addOverrideCandidates(manifest.Overrides, "package.json", set)
-			addOverrideCandidates(manifest.Resolutions, "package.json", set)
-			addOverrideCandidates(manifest.Pnpm.Overrides, "package.json", set)
-			addCatalogCandidates(manifest.Pnpm.Catalog, "package.json", set)
-			addCatalogCandidates(manifest.Pnpm.Catalogs, "package.json", set)
+			addDependencyMaps(manifest, "package.json", set, &catalogRefs, warnings)
+			addOverrideCandidates(manifest.Overrides, "package.json", set, warnings)
+			addOverrideCandidates(manifest.Resolutions, "package.json", set, warnings)
+			addOverrideCandidates(manifest.Pnpm.Overrides, "package.json", set, warnings)
+			addCatalogDefinitions(manifest.Pnpm.Catalog, "package.json", true, definitions)
+			addCatalogDefinitions(manifest.Pnpm.Catalogs, "package.json", false, definitions)
 		}
 	case !errors.Is(err, fs.ErrNotExist):
 		*warnings = append(*warnings, fmt.Sprintf("could not read package.json: %v", err))
 	}
 
 	patterns := workspacePatterns(manifest.Workspaces)
-	patterns = append(patterns, collectPNPMWorkspace(root, reader, set, warnings)...)
+	pnpmPatterns, pnpmDefinitions := collectPNPMWorkspace(reader, warnings)
+	patterns = append(patterns, pnpmPatterns...)
+	definitions.Defaults = append(definitions.Defaults, pnpmDefinitions.Defaults...)
+	for name, values := range pnpmDefinitions.Named {
+		definitions.Named[name] = append(definitions.Named[name], values...)
+	}
 
-	directories := workspaceDirectories(root, patterns, warnings)
+	directories := workspaceDirectories(root, reader, patterns, warnings)
 	for _, directory := range directories {
 		relative := filepath.ToSlash(filepath.Join(directory, "package.json"))
 		workspacePayload, err := reader.read(relative)
@@ -79,21 +108,36 @@ func collectPackageJSON(
 			*warnings = append(*warnings, fmt.Sprintf("could not parse %s: %v", relative, err))
 			continue
 		}
-		addDependencyMaps(workspace, relative, set, warnings)
-		addOverrideCandidates(workspace.Overrides, relative, set)
-		addOverrideCandidates(workspace.Resolutions, relative, set)
+		addDependencyMaps(workspace, relative, set, &catalogRefs, warnings)
+		addOverrideCandidates(workspace.Overrides, relative, set, warnings)
+		addOverrideCandidates(workspace.Resolutions, relative, set, warnings)
 	}
+	resolveCatalogReferences(catalogRefs, definitions, set, warnings)
 	return directories
 }
 
-func addDependencyMaps(manifest packageJSON, source string, set *candidateSet, warnings *[]string) {
+func addDependencyMaps(
+	manifest packageJSON,
+	source string,
+	set *candidateSet,
+	catalogRefs *[]catalogReference,
+	warnings *[]string,
+) {
 	for _, dependencies := range []map[string]string{
 		manifest.Dependencies,
 		manifest.DevDependencies,
 		manifest.OptionalDependencies,
 	} {
-		for name, spec := range dependencies {
+		for _, name := range sortedStringKeys(dependencies) {
 			if name != "@rhds/elements" {
+				continue
+			}
+			spec := dependencies[name]
+			if strings.HasPrefix(spec, "catalog:") {
+				*catalogRefs = append(*catalogRefs, catalogReference{
+					Name:   strings.TrimPrefix(spec, "catalog:"),
+					Source: source,
+				})
 				continue
 			}
 			addPackageSpec(spec, source, set, warnings)
@@ -106,11 +150,6 @@ func addPackageSpec(spec, source string, set *candidateSet, warnings *[]string) 
 	if spec == "" {
 		return
 	}
-	// Catalogs contribute their own candidates, so an indirection here is not
-	// itself evidence of a version.
-	if strings.HasPrefix(spec, "catalog:") {
-		return
-	}
 	spec = strings.TrimPrefix(spec, "workspace:")
 	version, parsed := exactVersion(spec)
 	if !parsed.OK {
@@ -121,49 +160,128 @@ func addPackageSpec(spec, source string, set *candidateSet, warnings *[]string) 
 	set.add(version, spec, source, PrecedencePackageJSON)
 }
 
-func addOverrideCandidates(value any, source string, set *candidateSet) {
-	addOverrideCandidatesAt(value, source, set, 0)
+// isElementsSelector matches npm, yarn, and pnpm override keys such as
+// "@rhds/elements", "**/@rhds/elements", and "@rhds/elements@^5.0.0".
+func isElementsSelector(key string) bool {
+	return key == "@rhds/elements" ||
+		strings.HasSuffix(key, "/@rhds/elements") ||
+		strings.HasPrefix(key, "@rhds/elements@") ||
+		strings.Contains(key, "@rhds/elements@")
 }
 
-func addOverrideCandidatesAt(value any, source string, set *candidateSet, depth int) {
+func addOverrideCandidates(value any, source string, set *candidateSet, warnings *[]string) {
+	addOverrideCandidatesAt(value, source, set, warnings, 0)
+}
+
+func addOverrideCandidatesAt(value any, source string, set *candidateSet, warnings *[]string, depth int) {
 	if depth > maxDepth {
 		return
 	}
 	switch typed := value.(type) {
 	case map[string]any:
-		for key, item := range typed {
-			if key == "@rhds/elements" {
-				if spec, ok := item.(string); ok {
-					version, parsed := exactVersion(spec)
-					if parsed.OK {
-						set.add(version, spec, source, PrecedencePackageJSON)
-					}
-				}
+		for _, key := range sortedAnyMapKeys(typed) {
+			item := typed[key]
+			if isElementsSelector(key) {
+				addOverrideValue(item, source, set, warnings)
 			}
-			addOverrideCandidatesAt(item, source, set, depth+1)
+			addOverrideCandidatesAt(item, source, set, warnings, depth+1)
 		}
 	case map[any]any:
-		for key, item := range typed {
-			if text, ok := key.(string); ok && text == "@rhds/elements" {
-				if spec, ok := item.(string); ok {
-					version, parsed := exactVersion(spec)
-					if parsed.OK {
-						set.add(version, spec, source, PrecedencePackageJSON)
-					}
-				}
+		for _, key := range sortedAnyKeys(typed) {
+			item := typed[key]
+			if text, ok := key.(string); ok && isElementsSelector(text) {
+				addOverrideValue(item, source, set, warnings)
 			}
-			addOverrideCandidatesAt(item, source, set, depth+1)
+			addOverrideCandidatesAt(item, source, set, warnings, depth+1)
 		}
 	}
 }
 
-// addCatalogCandidates walks pnpm catalog structures, which may be a single
-// dependency map or a map of named catalogs.
-func addCatalogCandidates(value any, source string, set *candidateSet) {
-	addOverrideCandidates(value, source, set)
+// addOverrideValue handles a string version and npm's nested override form,
+// {"@rhds/elements": {".": "4.2.2"}}.
+func addOverrideValue(value any, source string, set *candidateSet, warnings *[]string) {
+	switch typed := value.(type) {
+	case string:
+		addPackageSpec(typed, source, set, warnings)
+	case map[string]any:
+		if spec, ok := typed["."].(string); ok {
+			addPackageSpec(spec, source, set, warnings)
+		}
+	case map[any]any:
+		if spec, ok := typed["."].(string); ok {
+			addPackageSpec(spec, source, set, warnings)
+		}
+	}
 }
 
-func workspaceDirectories(root string, patterns []string, warnings *[]string) []string {
+func addCatalogDefinitions(value any, source string, defaultCatalog bool, definitions *catalogDefinitions) {
+	if value == nil {
+		return
+	}
+	if defaultCatalog {
+		definitions.Defaults = append(definitions.Defaults, catalogDefinition{
+			Source: source,
+			Values: catalogValues(value),
+		})
+		return
+	}
+	named := stringMap(value)
+	for _, name := range sortedAnyMapKeys(named) {
+		definitions.Named[name] = append(definitions.Named[name], catalogDefinition{
+			Source: source,
+			Values: catalogValues(named[name]),
+		})
+	}
+}
+
+func catalogValues(value any) map[string]string {
+	values := stringMap(value)
+	result := make(map[string]string)
+	for _, name := range sortedAnyMapKeys(values) {
+		if spec, ok := values[name].(string); ok {
+			result[name] = spec
+		}
+	}
+	return result
+}
+
+func resolveCatalogReferences(
+	references []catalogReference,
+	definitions *catalogDefinitions,
+	set *candidateSet,
+	warnings *[]string,
+) {
+	for _, reference := range references {
+		var matched bool
+		if reference.Name == "" {
+			for _, definition := range definitions.Defaults {
+				if spec, ok := definition.Values["@rhds/elements"]; ok {
+					addPackageSpec(spec, definition.Source, set, warnings)
+					matched = true
+				}
+			}
+		} else {
+			for _, definition := range definitions.Named[reference.Name] {
+				if spec, ok := definition.Values["@rhds/elements"]; ok {
+					addPackageSpec(spec, definition.Source, set, warnings)
+					matched = true
+				}
+			}
+		}
+		if !matched {
+			*warnings = append(*warnings, fmt.Sprintf(
+				"@rhds/elements in %s uses catalog:%s but no matching catalog entry was found",
+				reference.Source, reference.Name))
+		}
+	}
+}
+
+func workspaceDirectories(
+	root string,
+	reader *workspaceReader,
+	patterns []string,
+	warnings *[]string,
+) []string {
 	if len(patterns) == 0 {
 		return nil
 	}
@@ -180,24 +298,22 @@ func workspaceDirectories(root string, patterns []string, warnings *[]string) []
 		}
 		sort.Strings(matches)
 		for _, match := range matches {
-			if !withinRoot(root, match) {
-				continue
-			}
-			info, err := os.Lstat(match)
+			realMatch, err := reader.resolveWithin(match)
 			if err != nil {
 				continue
 			}
-			if info.Mode()&os.ModeSymlink != 0 {
+			info, err := os.Lstat(realMatch)
+			if err != nil {
 				continue
 			}
-			directory := match
-			if info.Mode().IsRegular() && filepath.Base(match) == "package.json" {
-				directory = filepath.Dir(match)
+			directory := realMatch
+			if info.Mode().IsRegular() && filepath.Base(realMatch) == "package.json" {
+				directory = filepath.Dir(realMatch)
 			} else if !info.IsDir() {
 				continue
 			}
 			relative, err := filepath.Rel(root, directory)
-			if err != nil {
+			if err != nil || !withinRoot(root, directory) {
 				continue
 			}
 			relative = filepath.ToSlash(relative)
@@ -241,30 +357,29 @@ func workspacePatterns(value any) []string {
 // collectPNPMWorkspace reads pnpm workspace packages and catalog definitions.
 // pnpm keeps both in pnpm-workspace.yaml rather than package.json.
 func collectPNPMWorkspace(
-	root string,
 	reader *workspaceReader,
-	set *candidateSet,
 	warnings *[]string,
-) []string {
+) ([]string, *catalogDefinitions) {
+	definitions := newCatalogDefinitions()
 	payload, err := reader.read("pnpm-workspace.yaml")
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			*warnings = append(*warnings, fmt.Sprintf("could not read pnpm-workspace.yaml: %v", err))
 		}
-		return nil
+		return nil, definitions
 	}
 	var document any
 	if err := yaml.Unmarshal(payload, &document); err != nil {
 		*warnings = append(*warnings, fmt.Sprintf("could not parse pnpm-workspace.yaml: %v", err))
-		return nil
+		return nil, definitions
 	}
 	values := stringMap(document)
 	if values == nil {
-		return nil
+		return nil, definitions
 	}
-	addOverrideCandidates(values["catalog"], "pnpm-workspace.yaml", set)
-	addOverrideCandidates(values["catalogs"], "pnpm-workspace.yaml", set)
-	return workspacePatterns(values["packages"])
+	addCatalogDefinitions(values["catalog"], "pnpm-workspace.yaml", true, definitions)
+	addCatalogDefinitions(values["catalogs"], "pnpm-workspace.yaml", false, definitions)
+	return workspacePatterns(values["packages"]), definitions
 }
 
 func stringMap(value any) map[string]any {
@@ -298,7 +413,7 @@ func collectInstalledPackages(
 		candidates = append(candidates,
 			filepath.ToSlash(filepath.Join(directory, "node_modules/@rhds/elements/package.json")))
 	}
-	candidates = append(candidates, pnpmStorePackages(root, warnings)...)
+	candidates = append(candidates, pnpmStorePackages(reader, warnings)...)
 
 	for _, relative := range candidates {
 		payload, err := reader.read(relative)
@@ -326,10 +441,10 @@ func collectInstalledPackages(
 }
 
 // pnpmStorePackages lists the @rhds/elements package manifests inside a pnpm
-// content-addressed store. The directory names embed the resolved version.
-func pnpmStorePackages(root string, warnings *[]string) []string {
-	storeDirectory := filepath.Join(root, "node_modules", ".pnpm")
-	entries, err := os.ReadDir(storeDirectory)
+// content-addressed store. Directory reads go through the containment-checked
+// workspace reader.
+func pnpmStorePackages(reader *workspaceReader, warnings *[]string) []string {
+	entries, err := reader.readDir("node_modules/.pnpm")
 	if err != nil {
 		return nil
 	}
@@ -348,4 +463,28 @@ func pnpmStorePackages(root string, warnings *[]string) []string {
 	}
 	sort.Strings(packages)
 	return packages
+}
+
+func sortedStringKeys[V any](values map[string]V) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func sortedAnyMapKeys(values map[string]any) []string {
+	return sortedStringKeys(values)
+}
+
+func sortedAnyKeys(values map[any]any) []any {
+	keys := make([]any, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return fmt.Sprint(keys[i]) < fmt.Sprint(keys[j])
+	})
+	return keys
 }

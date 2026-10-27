@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"unicode/utf8"
+	"unicode"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/net/html"
@@ -176,6 +176,7 @@ func (s *Service) search(resolved resolution, input SearchInput) SearchOutput {
 		hits = hits[:limit]
 	}
 	out.Hits = hits
+	fitSearch(&out, defaultResponseBudget)
 	return out
 }
 
@@ -420,12 +421,10 @@ func excerptText(text, needle string, maxRunes int) string {
 	if len(runes) <= maxRunes {
 		return text
 	}
-	lower := strings.ToLower(text)
-	index := strings.Index(lower, needle)
-	if index < 0 {
+	center := findRuneIndex(runes, []rune(strings.ToLower(needle)))
+	if center < 0 {
 		return string(runes[:maxRunes]) + "..."
 	}
-	center := utf8.RuneCountInString(text[:index])
 	start := max(0, center-maxRunes/3)
 	end := min(len(runes), start+maxRunes)
 	if end-start < maxRunes {
@@ -439,6 +438,28 @@ func excerptText(text, needle string, maxRunes int) string {
 		excerpt += "..."
 	}
 	return excerpt
+}
+
+// findRuneIndex performs a case-insensitive rune search without converting the
+// whole document to lower case. Lower-casing can change byte and rune lengths
+// (for example, U+0130), so a byte index from strings.Index is not safe.
+func findRuneIndex(text, query []rune) int {
+	if len(query) == 0 {
+		return -1
+	}
+	for i := 0; i+len(query) <= len(text); i++ {
+		matched := true
+		for j := range query {
+			if unicode.ToLower(text[i+j]) != query[j] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return i
+		}
+	}
+	return -1
 }
 
 func collapseWhitespace(text string) string {

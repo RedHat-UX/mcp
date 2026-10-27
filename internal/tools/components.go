@@ -9,10 +9,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/redhat-ux/mcp/internal/cem"
+	"github.com/redhat-ux/mcp/internal/resolve"
 )
 
 const (
@@ -95,20 +97,45 @@ type componentEntry struct {
 
 // ListComponents implements rhds_list_components for direct service calls.
 func (s *Service) ListComponents(_ context.Context, input ListComponentsInput) ListComponentsOutput {
-	resolved, failure := s.bundledResolution(input.Version, "")
+	resolved, failure := s.resolutionForListInput(input)
 	if failure != nil {
 		return ListComponentsOutput{Components: []ComponentSummary{}, Error: failure}
 	}
 	return s.listComponents(resolved, input)
 }
 
-// listComponentsWithEnv implements rhds_list_components for an MCP call,
-// including workspace resolution and elicitation.
+// listComponentsWithEnv implements rhds_list_components for an MCP call.
+// A cursor is decoded before resolution so page two uses the cursor-bound
+// version and never re-runs the cascade or prompts again.
 func (s *Service) listComponentsWithEnv(
 	ctx context.Context,
 	request *mcp.CallToolRequest,
 	input ListComponentsInput,
 ) (*mcp.CallToolResult, ListComponentsOutput) {
+	if input.Cursor != "" {
+		payload, cursorErr := decodeCursor(input.Cursor)
+		if cursorErr != nil {
+			return nil, ListComponentsOutput{Components: []ComponentSummary{}, Error: cursorErr}
+		}
+		if payload.IncludeDeprecated != input.IncludeDeprecated {
+			return nil, ListComponentsOutput{
+				Components: []ComponentSummary{},
+				Error:      cursorOptionsMismatch(),
+			}
+		}
+		if input.Version != "" && input.Version != payload.Version {
+			return nil, ListComponentsOutput{
+				Components: []ComponentSummary{},
+				Error:      cursorVersionMismatch(payload.Version, input.Version),
+			}
+		}
+		resolved, failure := s.resolutionForBundledVersion(payload.Version)
+		if failure != nil {
+			return nil, ListComponentsOutput{Components: []ComponentSummary{}, Error: failure}
+		}
+		return nil, s.listComponents(resolved, input)
+	}
+
 	resolved, required, failure := s.prepareResolution(
 		ctx, newCallEnv(request), input.Version, "", true)
 	if required != nil {
@@ -118,6 +145,52 @@ func (s *Service) listComponentsWithEnv(
 		return nil, ListComponentsOutput{Components: []ComponentSummary{}, Error: failure}
 	}
 	return nil, s.listComponents(resolved, input)
+}
+
+// resolutionForListInput uses a cursor-bound version when present. Direct
+// service calls have no protocol session, so they do not run the workspace
+// cascade.
+func (s *Service) resolutionForListInput(input ListComponentsInput) (resolution, *ToolError) {
+	if input.Cursor != "" && input.Version == "" {
+		payload, cursorErr := decodeCursor(input.Cursor)
+		if cursorErr != nil {
+			return resolution{}, cursorErr
+		}
+		return s.resolutionForBundledVersion(payload.Version)
+	}
+	return s.bundledResolution(input.Version, "")
+}
+
+func (s *Service) resolutionForBundledVersion(version string) (resolution, *ToolError) {
+	result := resolve.Result{
+		Elements: version,
+		Source:   "cursor",
+		Candidates: []resolve.Candidate{{
+			Version:    version,
+			Source:     "cursor",
+			Precedence: resolve.PrecedenceBundled,
+			Level:      resolve.LevelBundled,
+		}},
+	}
+	return s.resolutionFrom(result, "", true)
+}
+
+func cursorOptionsMismatch() *ToolError {
+	return &ToolError{
+		Code:    "cursor_options_mismatch",
+		Message: "includeDeprecated changed between pages",
+		Hint:    "use the same includeDeprecated value for every page of one listing",
+	}
+}
+
+func cursorVersionMismatch(cursorVersion, requestedVersion string) *ToolError {
+	return &ToolError{
+		Code: "cursor_version_mismatch",
+		Message: fmt.Sprintf(
+			"cursor resolves elements@%s but the call requested elements@%s",
+			cursorVersion, requestedVersion),
+		Hint: "restart pagination without a cursor or use the same version",
+	}
 }
 
 func (s *Service) listComponents(resolved resolution, input ListComponentsInput) ListComponentsOutput {
@@ -138,8 +211,7 @@ func (s *Service) listComponents(resolved resolution, input ListComponentsInput)
 	}
 
 	entries := collectComponents(model, input.IncludeDeprecated)
-	docsAvailable := resolved.Resolved.Docs != "" &&
-		s.store.Has(packageDocs, resolved.Resolved.Docs, kindDocs)
+	docsTags := s.docsTagsFor(resolved.Resolved.Docs)
 
 	pageSize := input.PageSize
 	if pageSize == 0 {
@@ -159,13 +231,11 @@ func (s *Service) listComponents(resolved resolution, input ListComponentsInput)
 			return out
 		}
 		if payload.Version != version {
-			out.Error = &ToolError{
-				Code: "cursor_version_mismatch",
-				Message: fmt.Sprintf(
-					"cursor resolves elements@%s but this call resolves elements@%s",
-					payload.Version, version),
-				Hint: "restart pagination without a cursor or use the same version",
-			}
+			out.Error = cursorVersionMismatch(payload.Version, version)
+			return out
+		}
+		if payload.IncludeDeprecated != input.IncludeDeprecated {
+			out.Error = cursorOptionsMismatch()
 			return out
 		}
 		if payload.IncludeDeprecated != input.IncludeDeprecated {
@@ -193,14 +263,44 @@ func (s *Service) listComponents(resolved resolution, input ListComponentsInput)
 			ModulePath:     entry.modulePath,
 			PackageSubpath: entry.packageSubpath,
 			Deprecated:     entry.deprecated,
-			DocsAvailable:  docsAvailable,
+			DocsAvailable:  docsTags[entry.tagName],
 		})
 	}
 	out.Total = len(entries)
 	if end < len(entries) {
 		out.NextCursor = encodeCursor(version, end, input.IncludeDeprecated)
 	}
+	fitListComponents(&out, offset, input.IncludeDeprecated, defaultResponseBudget)
 	return out
+}
+
+// docsTagsFor returns the element tags that have a page in a docs snapshot.
+// Real docs paths are elements/<tag>/docs/*.md.
+func (s *Service) docsTagsFor(version string) map[string]bool {
+	if version == "" || !s.store.Has(packageDocs, version, kindDocs) {
+		return nil
+	}
+	if cached, ok := s.docsTags.Load(version); ok {
+		return cached.(map[string]bool)
+	}
+	records, failure := s.docsRecords(version)
+	if failure != nil {
+		return nil
+	}
+	tags := make(map[string]bool)
+	for _, record := range records {
+		const prefix = "elements/"
+		if !strings.HasPrefix(record.Path, prefix) {
+			continue
+		}
+		rest := strings.TrimPrefix(record.Path, prefix)
+		tag, _, found := strings.Cut(rest, "/")
+		if found && tag != "" {
+			tags[tag] = true
+		}
+	}
+	actual, _ := s.docsTags.LoadOrStore(version, tags)
+	return actual.(map[string]bool)
 }
 
 func collectComponents(model *cem.Model, includeDeprecated bool) []componentEntry {
