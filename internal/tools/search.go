@@ -75,7 +75,9 @@ type patternRecord struct {
 func (s *Service) Search(ctx context.Context, input SearchInput) SearchOutput {
 	resolved, failure := s.bundledResolution(input.Version, "")
 	if failure != nil {
-		return SearchOutput{Hits: []SearchHit{}, Error: failure}
+		out := SearchOutput{Hits: []SearchHit{}, Error: failure}
+		fitSearch(&out, defaultResponseBudget)
+		return out
 	}
 	return s.search(resolved, input)
 }

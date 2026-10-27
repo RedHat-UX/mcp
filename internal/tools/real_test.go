@@ -8,8 +8,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
+	"github.com/redhat-ux/mcp/internal/cem"
 	"github.com/redhat-ux/mcp/internal/data"
 )
 
@@ -176,8 +180,10 @@ func TestRealListComponentsDefaultPagesFitBudget(t *testing.T) {
 }
 
 // TestRealComponentAPISummariesFitBudget checks the default summary for every
-// bundled 5.0.0 component. The default must fit NFR-03 or return a follow-up
-// error; silent truncation is not allowed.
+// bundled 5.0.0 component. The default must fit NFR-03, omit whole sections
+// with a warning naming each omission, or return the documented follow-up
+// error; silent truncation is not allowed. Contract fields (names, types, and
+// defaults) and summary metadata must match the normalized manifest exactly.
 func TestRealComponentAPISummariesFitBudget(t *testing.T) {
 	if _, err := os.Stat(filepath.Join("..", "data", "dist", data.IndexPath)); err != nil {
 		t.Skip("generated data is absent; run make data")
@@ -193,21 +199,452 @@ func TestRealComponentAPISummariesFitBudget(t *testing.T) {
 	service := New(store, nil)
 	ctx := context.Background()
 
+	model, failure := service.loadModel("5.0.0")
+	if failure != nil {
+		t.Fatalf("loadModel(5.0.0) error = %+v", failure)
+	}
 	components, _ := allRealComponents(t, service, "5.0.0")
 	for _, component := range components {
+		modeled, ok := model.Component(component.TagName)
+		if !ok {
+			t.Errorf("%s is listed but missing from the normalized manifest", component.TagName)
+			continue
+		}
 		out := service.GetComponentAPI(ctx, GetComponentAPIInput{
 			TagName: component.TagName,
 			Version: "5.0.0",
 		})
 		if out.Error != nil {
-			t.Errorf("%s default summary error = %+v", component.TagName, out.Error)
+			// The documented follow-up error is the only acceptable failure.
+			if out.Error.Code != "response_too_large" {
+				t.Errorf("%s default summary error = %+v", component.TagName, out.Error)
+			}
 			continue
 		}
 		if size := estimatedResponseBytes(out); size > defaultResponseBudget {
 			t.Errorf("%s default summary is %d bytes, want <= %d",
 				component.TagName, size, defaultResponseBudget)
 		}
+		for _, section := range componentAPISections {
+			if slices.Contains(out.Sections, section) {
+				continue
+			}
+			if componentSectionPresent(out, section) {
+				t.Errorf("%s dropped %s from Sections but still returned its data",
+					component.TagName, section)
+			}
+			if !warnedForSection(out.Resolved.Warnings, section) {
+				t.Errorf("%s omitted %s without a warning naming the section; warnings = %v",
+					component.TagName, section, out.Resolved.Warnings)
+			}
+		}
+		assertSummaryContractFidelity(t, component.TagName, modeled, out)
 	}
+}
+
+func componentSectionPresent(out ComponentAPIOutput, section string) bool {
+	switch section {
+	case sectionAttributes:
+		return out.Attributes != nil
+	case sectionProperties:
+		return out.Properties != nil
+	case sectionEvents:
+		return out.Events != nil
+	case sectionSlots:
+		return out.Slots != nil
+	case sectionCSSParts:
+		return out.CSSParts != nil
+	case sectionCSSProperties:
+		return out.CSSProperties != nil
+	case sectionExamples:
+		return out.Examples != nil
+	default:
+		return false
+	}
+}
+
+func warnedForSection(warnings []string, section string) bool {
+	for _, warning := range warnings {
+		if strings.Contains(warning, section) {
+			return true
+		}
+	}
+	return false
+}
+
+func assertSummaryContractFidelity(
+	t *testing.T,
+	tagName string,
+	want *cem.Component,
+	got ComponentAPIOutput,
+) {
+	t.Helper()
+	if got.Name != want.Name {
+		t.Errorf("%s name = %q, want %q", tagName, got.Name, want.Name)
+	}
+	if got.Summary != want.Summary {
+		t.Errorf("%s summary = %q, want %q", tagName, got.Summary, want.Summary)
+	}
+	if slices.Contains(got.Sections, sectionAttributes) {
+		if len(got.Attributes) != len(want.Attributes) {
+			t.Errorf("%s attributes = %d, want %d", tagName, len(got.Attributes), len(want.Attributes))
+		} else {
+			for i := range got.Attributes {
+				actual, expected := got.Attributes[i], want.Attributes[i]
+				if actual.Name != expected.Name || actual.Type != expected.Type ||
+					actual.Default != expected.Default ||
+					actual.FieldName != expected.FieldName ||
+					actual.InheritedFrom != expected.InheritedFrom {
+					t.Errorf("%s attribute[%d] = %+v, want contract fields from %+v",
+						tagName, i, actual, expected)
+				}
+				if actual.Summary != "" || actual.Description != "" {
+					t.Errorf("%s attribute[%d] summary prose was not omitted: %+v",
+						tagName, i, actual)
+				}
+			}
+		}
+	}
+	if slices.Contains(got.Sections, sectionProperties) {
+		if len(got.Properties) != len(want.Properties) {
+			t.Errorf("%s properties = %d, want %d", tagName, len(got.Properties), len(want.Properties))
+		} else {
+			for i := range got.Properties {
+				actual, expected := got.Properties[i], want.Properties[i]
+				if actual.Name != expected.Name || actual.Type != expected.Type ||
+					actual.Default != expected.Default ||
+					actual.Attribute != expected.Attribute ||
+					actual.InheritedFrom != expected.InheritedFrom {
+					t.Errorf("%s property[%d] = %+v, want contract fields from %+v",
+						tagName, i, actual, expected)
+				}
+				if actual.Summary != "" || actual.Description != "" {
+					t.Errorf("%s property[%d] summary prose was not omitted: %+v",
+						tagName, i, actual)
+				}
+			}
+		}
+	}
+	if slices.Contains(got.Sections, sectionEvents) {
+		if len(got.Events) != len(want.Events) {
+			t.Errorf("%s events = %d, want %d", tagName, len(got.Events), len(want.Events))
+		} else {
+			for i := range got.Events {
+				actual, expected := got.Events[i], want.Events[i]
+				if actual.Name != expected.Name || actual.Type != expected.Type ||
+					actual.InheritedFrom != expected.InheritedFrom {
+					t.Errorf("%s event[%d] = %+v, want contract fields from %+v",
+						tagName, i, actual, expected)
+				}
+			}
+		}
+	}
+	if slices.Contains(got.Sections, sectionSlots) {
+		if len(got.Slots) != len(want.Slots) {
+			t.Errorf("%s slots = %d, want %d", tagName, len(got.Slots), len(want.Slots))
+		} else {
+			for i := range got.Slots {
+				actual, expected := got.Slots[i], want.Slots[i]
+				if actual.Name != expected.Name ||
+					actual.InheritedFrom != expected.InheritedFrom {
+					t.Errorf("%s slot[%d] = %+v, want contract fields from %+v",
+						tagName, i, actual, expected)
+				}
+			}
+		}
+	}
+	if slices.Contains(got.Sections, sectionCSSParts) {
+		if len(got.CSSParts) != len(want.CSSParts) {
+			t.Errorf("%s cssParts = %d, want %d", tagName, len(got.CSSParts), len(want.CSSParts))
+		} else {
+			for i := range got.CSSParts {
+				actual, expected := got.CSSParts[i], want.CSSParts[i]
+				if actual.Name != expected.Name ||
+					actual.InheritedFrom != expected.InheritedFrom {
+					t.Errorf("%s cssPart[%d] = %+v, want contract fields from %+v",
+						tagName, i, actual, expected)
+				}
+			}
+		}
+	}
+	if slices.Contains(got.Sections, sectionCSSProperties) {
+		if len(got.CSSProperties) != len(want.CSSProperties) {
+			t.Errorf("%s cssProperties = %d, want %d",
+				tagName, len(got.CSSProperties), len(want.CSSProperties))
+		} else {
+			for i := range got.CSSProperties {
+				actual, expected := got.CSSProperties[i], want.CSSProperties[i]
+				if actual.Name != expected.Name || actual.Default != expected.Default ||
+					actual.Syntax != expected.Syntax ||
+					actual.InheritedFrom != expected.InheritedFrom {
+					t.Errorf("%s cssProperty[%d] = %+v, want contract fields from %+v",
+						tagName, i, actual, expected)
+				}
+			}
+		}
+	}
+	if slices.Contains(got.Sections, sectionExamples) {
+		if len(got.Examples) != len(want.Examples) {
+			t.Errorf("%s examples = %d, want %d", tagName, len(got.Examples), len(want.Examples))
+		} else {
+			for i := range got.Examples {
+				actual, expected := got.Examples[i], want.Examples[i]
+				if actual.Description != expected.Description {
+					t.Errorf("%s example[%d] description = %q, want %q",
+						tagName, i, actual.Description, expected.Description)
+				}
+				if actual.URL != "" || actual.Source != "" {
+					t.Errorf("%s example[%d] summary should omit references: %+v",
+						tagName, i, actual)
+				}
+			}
+		}
+	}
+}
+
+// TestRealComponentAPIFullPreservesManifestText pins fidelity against the
+// 5.0.0 manifest for fields that the previous per-field caps shortened. The
+// lengths and strings are exact so a truncation regression cannot pass.
+func TestRealComponentAPIFullPreservesManifestText(t *testing.T) {
+	if _, err := os.Stat(filepath.Join("..", "data", "dist", data.IndexPath)); err != nil {
+		t.Skip("generated data is absent; run make data")
+	}
+	dist, err := fs.Sub(data.Embedded(), "dist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := data.Open(dist)
+	if err != nil {
+		t.Fatalf("data.Open() = %v", err)
+	}
+	service := New(store, nil)
+	ctx := context.Background()
+
+	model, failure := service.loadModel("5.0.0")
+	if failure != nil {
+		t.Fatalf("loadModel(5.0.0) error = %+v", failure)
+	}
+
+	t.Run("accordion panel attribute description", func(t *testing.T) {
+		component, ok := model.Component("rh-accordion-panel")
+		if !ok {
+			t.Fatal("rh-accordion-panel missing")
+		}
+		expected, ok := findModelAttribute(component.Attributes, "expanded")
+		if !ok {
+			t.Fatal("rh-accordion-panel attribute expanded missing")
+		}
+		if got := utf8.RuneCountInString(expected.Description); got != 895 {
+			t.Fatalf("manifest expanded description = %d runes, want 895", got)
+		}
+
+		full := service.GetComponentAPI(ctx, GetComponentAPIInput{
+			TagName:  "rh-accordion-panel",
+			Version:  "5.0.0",
+			Sections: []string{"attributes"},
+			Detail:   "full",
+		})
+		if full.Error != nil {
+			t.Fatalf("full error = %+v", full.Error)
+		}
+		actual, ok := findAttribute(full.Attributes, "expanded")
+		if !ok {
+			t.Fatal("expanded missing from full output")
+		}
+		if actual.Description != expected.Description {
+			t.Errorf("expanded description differs from the manifest:\ngot  %q\nwant %q",
+				actual.Description, expected.Description)
+		}
+		if got := utf8.RuneCountInString(actual.Description); got != 895 {
+			t.Errorf("full expanded description = %d runes, want 895", got)
+		}
+
+		summary := service.GetComponentAPI(ctx, GetComponentAPIInput{
+			TagName:  "rh-accordion-panel",
+			Version:  "5.0.0",
+			Sections: []string{"attributes"},
+		})
+		if summary.Error != nil {
+			t.Fatalf("summary error = %+v", summary.Error)
+		}
+		actual, ok = findAttribute(summary.Attributes, "expanded")
+		if !ok {
+			t.Fatal("expanded missing from summary output")
+		}
+		if actual.Name != expected.Name || actual.Type != expected.Type ||
+			actual.Default != expected.Default ||
+			actual.FieldName != expected.FieldName ||
+			actual.InheritedFrom != expected.InheritedFrom {
+			t.Errorf("summary expanded = %+v, want contract fields from %+v", actual, expected)
+		}
+	})
+
+	t.Run("audio player property default", func(t *testing.T) {
+		component, ok := model.Component("rh-audio-player")
+		if !ok {
+			t.Fatal("rh-audio-player missing")
+		}
+		expected, ok := findModelProperty(component.Properties, "enUS")
+		if !ok {
+			t.Fatal("rh-audio-player property enUS missing")
+		}
+		if got := utf8.RuneCountInString(expected.Default); got != 452 {
+			t.Fatalf("manifest enUS default = %d runes, want 452", got)
+		}
+		out := service.GetComponentAPI(ctx, GetComponentAPIInput{
+			TagName:  "rh-audio-player",
+			Version:  "5.0.0",
+			Sections: []string{"properties"},
+			Detail:   "full",
+		})
+		if out.Error != nil {
+			t.Fatalf("error = %+v", out.Error)
+		}
+		actual, ok := findProperty(out.Properties, "enUS")
+		if !ok {
+			t.Fatal("enUS missing from output")
+		}
+		if actual.Default != expected.Default {
+			t.Errorf("enUS default differs from the manifest:\ngot  %q\nwant %q",
+				actual.Default, expected.Default)
+		}
+		if got := utf8.RuneCountInString(actual.Default); got != 452 {
+			t.Errorf("full enUS default = %d runes, want 452", got)
+		}
+	})
+
+	t.Run("tag attribute type", func(t *testing.T) {
+		component, ok := model.Component("rh-tag")
+		if !ok {
+			t.Fatal("rh-tag missing")
+		}
+		expected, ok := findModelAttribute(component.Attributes, "color")
+		if !ok {
+			t.Fatal("rh-tag attribute color missing")
+		}
+		if got := utf8.RuneCountInString(expected.Type); got != 90 {
+			t.Fatalf("manifest color type = %d runes, want 90", got)
+		}
+		for _, detail := range []string{"summary", "full"} {
+			out := service.GetComponentAPI(ctx, GetComponentAPIInput{
+				TagName:  "rh-tag",
+				Version:  "5.0.0",
+				Sections: []string{"attributes"},
+				Detail:   detail,
+			})
+			if out.Error != nil {
+				t.Fatalf("%s error = %+v", detail, out.Error)
+			}
+			actual, ok := findAttribute(out.Attributes, "color")
+			if !ok {
+				t.Fatalf("color missing from %s output", detail)
+			}
+			if actual.Type != expected.Type {
+				t.Errorf("%s color type = %q, want %q", detail, actual.Type, expected.Type)
+			}
+			if got := utf8.RuneCountInString(actual.Type); got != 90 {
+				t.Errorf("%s color type = %d runes, want 90", detail, got)
+			}
+		}
+	})
+
+	t.Run("accordion example description", func(t *testing.T) {
+		component, ok := model.Component("rh-accordion")
+		if !ok {
+			t.Fatal("rh-accordion missing")
+		}
+		expected, ok := findModelExampleWithRunes(component.Examples, 233)
+		if !ok {
+			t.Fatal("rh-accordion 233-rune example missing")
+		}
+		full := service.GetComponentAPI(ctx, GetComponentAPIInput{
+			TagName:  "rh-accordion",
+			Version:  "5.0.0",
+			Sections: []string{"examples"},
+			Detail:   "full",
+		})
+		if full.Error != nil {
+			t.Fatalf("full error = %+v", full.Error)
+		}
+		actual, ok := findExample(full.Examples, expected.Description)
+		if !ok {
+			t.Fatal("233-rune example missing from full output")
+		}
+		if actual.Description != expected.Description {
+			t.Errorf("example description differs from the manifest:\ngot  %q\nwant %q",
+				actual.Description, expected.Description)
+		}
+		if got := utf8.RuneCountInString(actual.Description); got != 233 {
+			t.Errorf("full example description = %d runes, want 233", got)
+		}
+		if actual.URL != expected.URL || actual.Source != expected.Source {
+			t.Errorf("full example references = %+v, want %+v", actual, expected)
+		}
+
+		summary := service.GetComponentAPI(ctx, GetComponentAPIInput{
+			TagName:  "rh-accordion",
+			Version:  "5.0.0",
+			Sections: []string{"examples"},
+		})
+		if summary.Error != nil {
+			t.Fatalf("summary error = %+v", summary.Error)
+		}
+		actual, ok = findExample(summary.Examples, expected.Description)
+		if !ok {
+			t.Fatal("233-rune example missing from summary output")
+		}
+		if actual.Description != expected.Description {
+			t.Errorf("summary example description differs from the manifest:\ngot  %q\nwant %q",
+				actual.Description, expected.Description)
+		}
+		if actual.URL != "" || actual.Source != "" {
+			t.Errorf("summary example should omit references: %+v", actual)
+		}
+	})
+}
+
+func findModelAttribute(attributes []cem.Attribute, name string) (cem.Attribute, bool) {
+	for _, attribute := range attributes {
+		if attribute.Name == name {
+			return attribute, true
+		}
+	}
+	return cem.Attribute{}, false
+}
+
+func findAttribute(attributes []cem.Attribute, name string) (cem.Attribute, bool) {
+	return findModelAttribute(attributes, name)
+}
+
+func findModelProperty(properties []cem.Property, name string) (cem.Property, bool) {
+	for _, property := range properties {
+		if property.Name == name {
+			return property, true
+		}
+	}
+	return cem.Property{}, false
+}
+
+func findProperty(properties []cem.Property, name string) (cem.Property, bool) {
+	return findModelProperty(properties, name)
+}
+
+func findModelExampleWithRunes(examples []cem.Example, runes int) (cem.Example, bool) {
+	for _, example := range examples {
+		if utf8.RuneCountInString(example.Description) == runes {
+			return example, true
+		}
+	}
+	return cem.Example{}, false
+}
+
+func findExample(examples []cem.Example, description string) (cem.Example, bool) {
+	for _, example := range examples {
+		if example.Description == description {
+			return example, true
+		}
+	}
+	return cem.Example{}, false
 }
 func TestRealManifestNormalization(t *testing.T) {
 	if _, err := os.Stat(filepath.Join("..", "data", "dist", data.IndexPath)); err != nil {

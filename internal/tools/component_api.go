@@ -67,7 +67,7 @@ type ComponentAPIOutput struct {
 func (s *Service) GetComponentAPI(ctx context.Context, input GetComponentAPIInput) ComponentAPIOutput {
 	resolved, failure := s.bundledResolution(input.Version, "")
 	if failure != nil {
-		return ComponentAPIOutput{Error: failure}
+		return fitComponentAPI(ComponentAPIOutput{Error: failure}, defaultResponseBudget, true)
 	}
 	return s.componentAPI(resolved, input)
 }
@@ -207,24 +207,27 @@ func sectionList(selected map[string]bool) []string {
 	return sections
 }
 
+// The summarize helpers below never shorten names, types, defaults, or any
+// other field that is part of the API contract. Full detail returns every
+// requested field verbatim; the response budget layer then either fits the
+// whole document or asks for a follow-up call. Summary detail omits prose
+// fields and, when a section cannot fit, the budget layer omits the whole
+// section with a warning naming it. This keeps "no silent truncation" true:
+// the same section requested with detail=full always carries the complete
+// manifest text.
+
 func summarizeAttributes(attributes []cem.Attribute, full bool) []cem.Attribute {
 	if attributes == nil {
 		return nil
 	}
 	result := make([]cem.Attribute, len(attributes))
 	copy(result, attributes)
+	if full {
+		return result
+	}
 	for i := range result {
-		result[i].Name = truncateResponseText(result[i].Name, 80)
-		result[i].Type = truncateResponseText(result[i].Type, 80)
-		result[i].Default = truncateResponseText(result[i].Default, 40)
-		if full {
-			result[i].Description = truncateResponseText(result[i].Description, 500)
-			continue
-		}
 		result[i].Summary = ""
 		result[i].Description = ""
-		result[i].FieldName = ""
-		result[i].InheritedFrom = ""
 	}
 	return result
 }
@@ -235,18 +238,12 @@ func summarizeProperties(properties []cem.Property, full bool) []cem.Property {
 	}
 	result := make([]cem.Property, len(properties))
 	copy(result, properties)
+	if full {
+		return result
+	}
 	for i := range result {
-		result[i].Name = truncateResponseText(result[i].Name, 80)
-		result[i].Type = truncateResponseText(result[i].Type, 80)
-		result[i].Default = truncateResponseText(result[i].Default, 40)
-		result[i].Attribute = truncateResponseText(result[i].Attribute, 80)
-		if full {
-			result[i].Description = truncateResponseText(result[i].Description, 500)
-			continue
-		}
 		result[i].Summary = ""
 		result[i].Description = ""
-		result[i].InheritedFrom = ""
 	}
 	return result
 }
@@ -257,16 +254,12 @@ func summarizeEvents(events []cem.Event, full bool) []cem.Event {
 	}
 	result := make([]cem.Event, len(events))
 	copy(result, events)
+	if full {
+		return result
+	}
 	for i := range result {
-		result[i].Name = truncateResponseText(result[i].Name, 80)
-		result[i].Type = truncateResponseText(result[i].Type, 80)
-		if full {
-			result[i].Description = truncateResponseText(result[i].Description, 500)
-			continue
-		}
 		result[i].Summary = ""
 		result[i].Description = ""
-		result[i].InheritedFrom = ""
 	}
 	return result
 }
@@ -277,15 +270,12 @@ func summarizeSlots(slots []cem.Slot, full bool) []cem.Slot {
 	}
 	result := make([]cem.Slot, len(slots))
 	copy(result, slots)
+	if full {
+		return result
+	}
 	for i := range result {
-		result[i].Name = truncateResponseText(result[i].Name, 80)
-		if full {
-			result[i].Description = truncateResponseText(result[i].Description, 500)
-			continue
-		}
 		result[i].Summary = ""
 		result[i].Description = ""
-		result[i].InheritedFrom = ""
 	}
 	return result
 }
@@ -296,15 +286,12 @@ func summarizeParts(parts []cem.CSSPart, full bool) []cem.CSSPart {
 	}
 	result := make([]cem.CSSPart, len(parts))
 	copy(result, parts)
+	if full {
+		return result
+	}
 	for i := range result {
-		result[i].Name = truncateResponseText(result[i].Name, 80)
-		if full {
-			result[i].Description = truncateResponseText(result[i].Description, 500)
-			continue
-		}
 		result[i].Summary = ""
 		result[i].Description = ""
-		result[i].InheritedFrom = ""
 	}
 	return result
 }
@@ -315,17 +302,12 @@ func summarizeCSSProperties(properties []cem.CSSProperty, full bool) []cem.CSSPr
 	}
 	result := make([]cem.CSSProperty, len(properties))
 	copy(result, properties)
+	if full {
+		return result
+	}
 	for i := range result {
-		result[i].Name = truncateResponseText(result[i].Name, 80)
-		result[i].Default = truncateResponseText(result[i].Default, 40)
-		result[i].Syntax = truncateResponseText(result[i].Syntax, 40)
-		if full {
-			result[i].Description = truncateResponseText(result[i].Description, 500)
-			continue
-		}
 		result[i].Summary = ""
 		result[i].Description = ""
-		result[i].InheritedFrom = ""
 	}
 	return result
 }
@@ -336,13 +318,10 @@ func summarizeExamples(examples []cem.Example, full bool) []cem.Example {
 	}
 	result := make([]cem.Example, len(examples))
 	copy(result, examples)
+	if full {
+		return result
+	}
 	for i := range result {
-		result[i].Description = truncateResponseText(result[i].Description, 120)
-		if full {
-			result[i].URL = truncateResponseText(result[i].URL, 300)
-			result[i].Source = truncateResponseText(result[i].Source, 300)
-			continue
-		}
 		result[i].URL = ""
 		result[i].Source = ""
 	}

@@ -2,8 +2,10 @@
 // Copyright 2026 Red Hat, Inc.
 
 // Package resolve implements the version cascade described in docs/PLAN.md
-// section 6. Every workspace read is bounded, symlinks are not followed, and
-// workspace content is treated as evidence, never as instructions.
+// section 6. Every workspace read is bounded and workspace content is treated
+// as evidence, never as instructions. Symlinks are resolved before reading so
+// a path can never escape the workspace root; symlinks that resolve to a
+// target inside the root are followed intentionally.
 package resolve
 
 import (

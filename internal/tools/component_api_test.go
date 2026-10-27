@@ -8,6 +8,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
+
+	"github.com/redhat-ux/mcp/internal/cem"
+	"github.com/redhat-ux/mcp/internal/data"
 )
 
 func TestGetComponentAPISummaryDefaults(t *testing.T) {
@@ -166,6 +170,152 @@ func TestGetComponentAPIDeprecationComesFromManifest(t *testing.T) {
 	}
 	if out.Deprecated.Message != "Use rh-dialog-v2 instead." {
 		t.Errorf("deprecation = %+v", out.Deprecated)
+	}
+}
+
+// TestSummarizeComponentAPISectionsPreserveContractData proves that names,
+// types, and defaults are returned verbatim in every detail mode, that summary
+// keeps fieldName and inheritedFrom, and that full returns every prose field
+// without shortening it.
+func TestSummarizeComponentAPISectionsPreserveContractData(t *testing.T) {
+	description := strings.Repeat("prose ", 400)
+	contract := strings.Repeat("contract", 40)
+
+	attributes := summarizeAttributes([]cem.Attribute{{
+		Name:          contract,
+		Type:          contract,
+		Default:       contract,
+		Summary:       "summary",
+		Description:   description,
+		FieldName:     "fieldName",
+		InheritedFrom: "BaseElement",
+	}}, true)
+	if got := attributes[0]; got.Name != contract || got.Type != contract ||
+		got.Default != contract || got.Description != description {
+		t.Errorf("full attribute = %+v, want verbatim contract and prose", got)
+	}
+	attributes = summarizeAttributes([]cem.Attribute{{
+		Name:          contract,
+		Type:          contract,
+		Default:       contract,
+		Summary:       "summary",
+		Description:   description,
+		FieldName:     "fieldName",
+		InheritedFrom: "BaseElement",
+	}}, false)
+	if got := attributes[0]; got.Name != contract || got.Type != contract ||
+		got.Default != contract || got.FieldName != "fieldName" ||
+		got.InheritedFrom != "BaseElement" {
+		t.Errorf("summary attribute = %+v, want verbatim contract fields", got)
+	}
+	if attributes[0].Summary != "" || attributes[0].Description != "" {
+		t.Errorf("summary attribute prose = %+v, want omitted prose", attributes[0])
+	}
+
+	properties := summarizeProperties([]cem.Property{{
+		Name:          contract,
+		Type:          contract,
+		Default:       contract,
+		Attribute:     contract,
+		Summary:       "summary",
+		Description:   description,
+		InheritedFrom: "BaseElement",
+	}}, true)
+	if got := properties[0]; got.Name != contract || got.Type != contract ||
+		got.Default != contract || got.Attribute != contract ||
+		got.Description != description {
+		t.Errorf("full property = %+v, want verbatim contract and prose", got)
+	}
+	properties = summarizeProperties([]cem.Property{{
+		Name:          contract,
+		Type:          contract,
+		Default:       contract,
+		Attribute:     contract,
+		Summary:       "summary",
+		Description:   description,
+		InheritedFrom: "BaseElement",
+	}}, false)
+	if got := properties[0]; got.Name != contract || got.Type != contract ||
+		got.Default != contract || got.Attribute != contract ||
+		got.InheritedFrom != "BaseElement" {
+		t.Errorf("summary property = %+v, want verbatim contract fields", got)
+	}
+
+	if got := summarizeEvents([]cem.Event{{
+		Name: contract, Type: contract, Description: description, InheritedFrom: "BaseElement",
+	}}, true)[0]; got.Name != contract || got.Type != contract || got.Description != description {
+		t.Errorf("full event = %+v", got)
+	}
+	if got := summarizeSlots([]cem.Slot{{
+		Name: contract, Description: description, InheritedFrom: "BaseElement",
+	}}, true)[0]; got.Name != contract || got.Description != description {
+		t.Errorf("full slot = %+v", got)
+	}
+	if got := summarizeParts([]cem.CSSPart{{
+		Name: contract, Description: description, InheritedFrom: "BaseElement",
+	}}, true)[0]; got.Name != contract || got.Description != description {
+		t.Errorf("full part = %+v", got)
+	}
+	if got := summarizeCSSProperties([]cem.CSSProperty{{
+		Name: contract, Default: contract, Syntax: contract,
+		Description: description, InheritedFrom: "BaseElement",
+	}}, true)[0]; got.Name != contract || got.Default != contract ||
+		got.Syntax != contract || got.Description != description {
+		t.Errorf("full css property = %+v", got)
+	}
+
+	examples := summarizeExamples([]cem.Example{{
+		Description: description,
+		URL:         contract,
+		Source:      contract,
+	}}, true)
+	if got := examples[0]; got.Description != description || got.URL != contract ||
+		got.Source != contract {
+		t.Errorf("full example = %+v, want verbatim fields", got)
+	}
+	examples = summarizeExamples([]cem.Example{{
+		Description: description,
+		URL:         contract,
+		Source:      contract,
+	}}, false)
+	if got := examples[0]; got.Description != description || got.URL != "" || got.Source != "" {
+		t.Errorf("summary example = %+v, want complete description and omitted references", got)
+	}
+}
+
+// TestDirectToolFailuresAreBounded covers the direct service entry points,
+// which do not go through the MCP request path. A hostile or corrupt data
+// error must not escape the response budget.
+func TestDirectToolFailuresAreBounded(t *testing.T) {
+	huge := strings.Repeat("e", 20000)
+	service := New(nil, &data.Error{
+		Code:    "data_unavailable",
+		Message: huge,
+		Hint:    huge,
+	})
+
+	component := service.GetComponentAPI(context.Background(), GetComponentAPIInput{
+		TagName: "rh-button",
+	})
+	if component.Error == nil {
+		t.Fatal("GetComponentAPI() error = nil, want the data failure")
+	}
+	if size := estimatedResponseBytes(component); size > defaultResponseBudget {
+		t.Errorf("GetComponentAPI() failure is %d bytes, want <= %d",
+			size, defaultResponseBudget)
+	}
+	if got := utf8.RuneCountInString(component.Error.Message); got > maxWarningRunes+len("...") {
+		t.Errorf("GetComponentAPI() error message is %d runes, want <= %d",
+			got, maxWarningRunes+len("..."))
+	}
+
+	search := service.Search(context.Background(), SearchInput{Query: "button"})
+	if search.Error == nil {
+		t.Fatal("Search() error = nil, want the data failure")
+	}
+	if size := estimatedResponseBytes(search); size > defaultResponseBudget {
+		t.Errorf("Search() failure is %d bytes, want <= %d",
+			size, defaultResponseBudget)
 	}
 }
 
