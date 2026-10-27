@@ -152,3 +152,14 @@ func TestFenceRunLengthMustBeAtLeastThree(t *testing.T) {
 		t.Error("tilde fence closed a backtick fence")
 	}
 }
+
+func TestATXClosingSequenceStripsEveryHash(t *testing.T) {
+	chunks := Chunks([]byte("## foo ###\n\nbody\n"))
+	if len(chunks) != 1 || chunks[0].Heading != "foo" {
+		t.Fatalf("chunks = %+v, want heading foo", chunks)
+	}
+	chunks = Chunks([]byte("## ###\n\nbody\n"))
+	if len(chunks) != 1 || chunks[0].Heading != "" {
+		t.Fatalf("chunks = %+v, want an empty heading", chunks)
+	}
+}

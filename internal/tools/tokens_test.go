@@ -393,3 +393,35 @@ func TestQueryTokensFullDetailIncludesDescriptionAndDeprecation(t *testing.T) {
 		t.Error("full detail omitted the deprecation message")
 	}
 }
+
+// A direct service caller has no workspace cascade. A cursor must resolve the
+// version that produced it instead of the latest bundled tokens release.
+func TestQueryTokensCursorKeepsOlderVersion(t *testing.T) {
+	svc := fixtureService(t)
+	first := svc.QueryTokens(context.Background(), QueryTokensInput{
+		Version:  "1.1.2",
+		PageSize: 1,
+	})
+	if first.Error != nil {
+		t.Fatalf("first page error = %+v", first.Error)
+	}
+	if first.NextCursor == "" {
+		t.Fatal("nextCursor = empty, want a second page")
+	}
+	second := svc.QueryTokens(context.Background(), QueryTokensInput{
+		Cursor:   first.NextCursor,
+		PageSize: 1,
+	})
+	if second.Error != nil {
+		t.Fatalf("second page error = %+v", second.Error)
+	}
+	if second.Resolved.Tokens != "1.1.2" {
+		t.Errorf("second page tokens version = %q, want 1.1.2", second.Resolved.Tokens)
+	}
+	if second.Resolved.Source != "cursor" {
+		t.Errorf("source = %q, want cursor", second.Resolved.Source)
+	}
+	if len(second.Tokens) != 1 {
+		t.Errorf("second page tokens = %d, want 1", len(second.Tokens))
+	}
+}

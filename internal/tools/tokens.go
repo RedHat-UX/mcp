@@ -78,12 +78,25 @@ func (s *Service) QueryTokens(_ context.Context, input QueryTokensInput) QueryTo
 		return fitQueryTokensPage(
 			QueryTokensOutput{Tokens: []TokenResult{}, Error: failure}, budget, 0)
 	}
-	version, fromElements, failure := s.resolveTokensVersion(input.Version)
+	requested := input.Version
+	source := "bundled"
+	// A cursor carries the version that produced it. Direct callers have no
+	// workspace cascade to rerun, so resolve that version instead of latest.
+	if requested == "" && input.Cursor != "" {
+		payload, cursorErr := decodeCursor(input.Cursor)
+		if cursorErr != nil {
+			return fitQueryTokensPage(
+				QueryTokensOutput{Tokens: []TokenResult{}, Error: cursorErr}, budget, 0)
+		}
+		requested = payload.Version
+		source = "cursor"
+	}
+	version, fromElements, failure := s.resolveTokensVersion(requested)
 	if failure != nil {
 		return fitQueryTokensPage(
 			QueryTokensOutput{Tokens: []TokenResult{}, Error: failure}, budget, 0)
 	}
-	resolved := ResolvedVersion{Tokens: version, Source: "bundled"}
+	resolved := ResolvedVersion{Tokens: version, Source: source}
 	if fromElements != "" {
 		resolved.Elements = fromElements
 		resolved.Warnings = append(resolved.Warnings,

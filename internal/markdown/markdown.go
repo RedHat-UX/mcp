@@ -245,11 +245,15 @@ func atxHeading(line string) (text string, level int, ok bool) {
 		return "", 0, false
 	}
 	text = strings.TrimSpace(rest)
-	// An ATX closing sequence is a run of '#' preceded by whitespace.
-	if index := strings.LastIndexByte(text, '#'); index >= 0 {
-		tail := text[index:]
-		if strings.Trim(tail, "#") == "" && index > 0 && (text[index-1] == ' ' || text[index-1] == '\t') {
-			text = strings.TrimSpace(text[:index])
+	// An ATX closing sequence is a run of one or more '#' preceded by
+	// whitespace (or starting the content after the opening run).
+	if run := len(text); run > 0 && text[run-1] == '#' {
+		start := run
+		for start > 0 && text[start-1] == '#' {
+			start--
+		}
+		if start == 0 || text[start-1] == ' ' || text[start-1] == '\t' {
+			text = strings.TrimSpace(text[:start])
 		}
 	}
 	return text, count, true
