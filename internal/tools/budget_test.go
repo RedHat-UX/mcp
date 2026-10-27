@@ -969,7 +969,7 @@ func TestErrorResponsesStayWithinBudgetWithLongWarnings(t *testing.T) {
 	}
 
 	tokens := QueryTokensOutput{Resolved: resolved, Error: failure}
-	tokens = fitQueryTokens(tokens, budget)
+	tokens = fitQueryTokensPage(tokens, budget, 0)
 	if size := estimatedResponseBytes(tokens); size > budget {
 		t.Errorf("tokens error response = %d bytes, want <= %d", size, budget)
 	}
