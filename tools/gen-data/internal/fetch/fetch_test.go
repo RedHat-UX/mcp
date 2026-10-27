@@ -160,6 +160,51 @@ func TestExtractTarGzEntryLimit(t *testing.T) {
 	}
 }
 
+func TestExtractTarGzAggregateLimits(t *testing.T) {
+	archive := makeTarGz(t, map[string]string{
+		"package/a.txt": "hello",
+		"package/b.txt": "world",
+	})
+	if _, err := ExtractTarGzWithLimits(bytes.NewReader(archive), "package/", nil, ExtractLimits{
+		MaxTotalBytes: 1,
+	}); err == nil {
+		t.Fatal("ExtractTarGzWithLimits() accepted content over the total cap")
+	}
+	if _, err := ExtractTarGzWithLimits(bytes.NewReader(archive), "package/", nil, ExtractLimits{
+		MaxEntries: 1,
+	}); err == nil {
+		t.Fatal("ExtractTarGzWithLimits() accepted too many entries")
+	}
+}
+
+func TestOpenLimit(t *testing.T) {
+	data := []byte("downloaded tarball")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(data)
+	}))
+	defer server.Close()
+
+	client := New()
+	client.MaxDownloadBytes = 4
+	if _, err := client.Open(context.Background(), server.URL); err == nil {
+		t.Fatal("Open() accepted a response over the cap")
+	}
+}
+
+func TestRegistryMetadataLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"name":"@rhds/elements","versions":{}}`))
+	}))
+	defer server.Close()
+
+	client := New()
+	client.RegistryBase = server.URL
+	client.MaxDownloadBytes = 4
+	if _, err := client.RegistryMetadata(context.Background(), "@rhds/elements"); err == nil {
+		t.Fatal("RegistryMetadata() accepted a response over the cap")
+	}
+}
+
 func TestDownloadLimit(t *testing.T) {
 	data := []byte("downloaded tarball")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

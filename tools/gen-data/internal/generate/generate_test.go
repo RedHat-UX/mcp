@@ -267,7 +267,7 @@ func TestGenerateRejectsDocTagTraversal(t *testing.T) {
 }
 
 func TestGenerateRejectsUnsafeOutputDirectory(t *testing.T) {
-	for _, out := range []string{".", "..", "/", "internal/data"} {
+	for _, out := range []string{".", "..", "/", "internal/data", os.TempDir()} {
 		if _, err := Generate(testInputs(), out); err == nil {
 			t.Errorf("Generate(out=%q) accepted an unsafe output directory", out)
 		}

@@ -47,7 +47,7 @@ const (
 
 // GeneratorVersion changes whenever generation or normalization changes in a
 // way that requires regenerating an existing dist tree.
-const GeneratorVersion = 1
+const GeneratorVersion = 2
 
 // Inputs is everything generation needs. Network fetching builds this value;
 // tests construct it from fixtures.
@@ -196,7 +196,7 @@ func validateOutputDir(absolute string) error {
 
 func isTempPath(resolved string) bool {
 	temp := filepath.Clean(os.TempDir())
-	return resolved == temp || strings.HasPrefix(resolved, temp+string(filepath.Separator))
+	return strings.HasPrefix(resolved, temp+string(filepath.Separator))
 }
 
 func isInternalDataDist(resolved string) bool {

@@ -36,7 +36,7 @@ func ProcessMarkdown(input []byte, source string) MarkdownResult {
 				end = i
 				break
 			}
-			if title == "" {
+			if title == "" && strings.TrimLeft(lines[i], " \t") == lines[i] {
 				if key, value, ok := strings.Cut(trimmed, ":"); ok && strings.TrimSpace(key) == "title" {
 					title = unquote(strings.TrimSpace(value))
 				}
@@ -58,31 +58,45 @@ func ProcessMarkdown(input []byte, source string) MarkdownResult {
 		if len(prose) == 0 {
 			return
 		}
-		joined := strings.Join(collapseBlankLines(prose), "\n")
-		protected, spans := protectInlineCode(joined)
-		protected = stripHTMLImages(protected)
-		processed = append(processed, strings.Split(restoreInlineCode(protected, spans), "\n")...)
+		lines := collapseBlankLines(prose)
+		for start := 0; start < len(lines); {
+			end := start + 1
+			open := tagOpenAfter(lines[start], false)
+			for open && end < len(lines) && lines[end] != "" {
+				open = tagOpenAfter(lines[end], open)
+				end++
+			}
+			// Strip images one tag-span chunk at a time. If malformed markup
+			// forces stripHTMLImages to leave a chunk untouched, the damage is
+			// limited to that chunk instead of the whole prose block.
+			chunk := strings.Join(lines[start:end], "\n")
+			protected, spans := protectInlineCode(chunk)
+			protected = stripHTMLImages(protected)
+			processed = append(processed, strings.Split(restoreInlineCode(protected, spans), "\n")...)
+			start = end
+		}
 		prose = prose[:0]
 		htmlTagOpen = false
 	}
 
-	fence := ""
+	var openFence *fenceRun
 	htmlCodeDepth := 0
 	for _, line := range body {
-		trimmed := strings.TrimLeft(line, " \t")
-		if fence != "" {
+		if openFence != nil {
 			flushProse()
 			processed = append(processed, line)
-			if strings.HasPrefix(trimmed, fence) {
-				fence = ""
+			if openFence.closes(line) {
+				openFence = nil
 			}
 			continue
 		}
-		if marker := fenceMarker(trimmed); marker != "" {
-			flushProse()
-			fence = marker
-			processed = append(processed, line)
-			continue
+		if !isIndentedCode(line) {
+			if marker, ok := fenceMarker(line); ok {
+				flushProse()
+				openFence = &marker
+				processed = append(processed, line)
+				continue
+			}
 		}
 		if !htmlTagOpen && isIndentedCode(line) {
 			flushProse()
@@ -133,14 +147,58 @@ func ProcessMarkdown(input []byte, source string) MarkdownResult {
 	return MarkdownResult{Content: []byte(content), Title: title}
 }
 
-func fenceMarker(line string) string {
-	if strings.HasPrefix(line, "```") {
-		return "```"
+// fenceRun is an open CommonMark code fence. Closing requires the same
+// character, a run at least as long, and only whitespace afterwards.
+type fenceRun struct {
+	char   byte
+	length int
+}
+
+// fenceMarker recognizes an opening fence indented by at most three spaces.
+// Tabs and deeper indentation are indented code, not fences.
+func fenceMarker(line string) (fenceRun, bool) {
+	indent := 0
+	for indent < len(line) && line[indent] == ' ' {
+		indent++
 	}
-	if strings.HasPrefix(line, "~~~") {
-		return "~~~"
+	if indent > 3 {
+		return fenceRun{}, false
 	}
-	return ""
+	rest := line[indent:]
+	if rest == "" || (rest[0] != '`' && rest[0] != '~') {
+		return fenceRun{}, false
+	}
+	char := rest[0]
+	length := 0
+	for length < len(rest) && rest[length] == char {
+		length++
+	}
+	if length < 3 {
+		return fenceRun{}, false
+	}
+	if char == '`' && strings.Contains(rest[length:], "`") {
+		return fenceRun{}, false
+	}
+	return fenceRun{char: char, length: length}, true
+}
+
+func (f fenceRun) closes(line string) bool {
+	indent := 0
+	for indent < len(line) && line[indent] == ' ' {
+		indent++
+	}
+	if indent > 3 {
+		return false
+	}
+	rest := line[indent:]
+	length := 0
+	for length < len(rest) && rest[length] == f.char {
+		length++
+	}
+	if length < f.length {
+		return false
+	}
+	return strings.TrimSpace(rest[length:]) == ""
 }
 
 const inlineCodePlaceholderPrefix = "\x00rhds-inline-code-"
@@ -255,7 +313,9 @@ func isIndentedCode(line string) bool {
 		return false
 	}
 	// Indented HTML in these docs is layout, not a code block. Treat a line
-	// that begins with a tag as prose so its images are processed.
+	// that begins with a tag as prose so its images are processed. Trade-off:
+	// an indented code sample starting with "<" is preserved as prose. See
+	// docs/PLAN.md section 5.5.
 	trimmed := strings.TrimLeft(line, " \t")
 	return !strings.HasPrefix(trimmed, "<")
 }

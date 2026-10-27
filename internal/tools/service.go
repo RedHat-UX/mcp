@@ -64,12 +64,12 @@ type Service struct {
 	documents     cemtypes.Manager
 	documentsErr  error
 	docSeq        atomic.Int64
-	manifestMu sync.Mutex
-	manifests  map[string]*manifest.Package
-	tokenMu    sync.Mutex
-	tokenSets  map[string]*tokenSet
-	themeMu    sync.Mutex
-	themes     map[string]map[string]map[string]string
+	manifestMu    sync.Mutex
+	manifests     map[string]*manifest.Package
+	tokenMu       sync.Mutex
+	tokenSets     map[string]*tokenSet
+	themeMu       sync.Mutex
+	themes        map[string]map[string]map[string]string
 
 	manifestParses atomic.Int64
 	tokenParses    atomic.Int64

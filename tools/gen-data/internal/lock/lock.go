@@ -7,6 +7,8 @@ package lock
 
 import (
 	"crypto/sha256"
+	"crypto/sha512"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -162,6 +164,9 @@ func (l *Lock) Validate() error {
 			if version.Integrity == "" {
 				return fmt.Errorf("%s@%s has no integrity hash", pkg.ID, version.Version)
 			}
+			if err := validateIntegrity(version.Integrity); err != nil {
+				return fmt.Errorf("%s@%s has an invalid integrity hash: %w", pkg.ID, version.Version, err)
+			}
 			if version.Tarball == "" {
 				return fmt.Errorf("%s@%s has no tarball URL", pkg.ID, version.Version)
 			}
@@ -174,6 +179,7 @@ func (l *Lock) Validate() error {
 	if l.Docs.Repo == "" {
 		return errors.New("lock has no docs repo")
 	}
+	seenTags := make(map[string]bool, len(l.Docs.Snapshots))
 	for i, snapshot := range l.Docs.Snapshots {
 		if snapshot.Tag == "" {
 			return fmt.Errorf("docs.snapshots[%d] has no tag", i)
@@ -181,16 +187,49 @@ func (l *Lock) Validate() error {
 		if !ValidDocTag(snapshot.Tag) {
 			return fmt.Errorf("docs.snapshots[%d] has an invalid tag %q", i, snapshot.Tag)
 		}
-		if len(snapshot.Commit) != 40 {
+		if seenTags[snapshot.Tag] {
+			return fmt.Errorf("docs snapshot tag %q is duplicated", snapshot.Tag)
+		}
+		seenTags[snapshot.Tag] = true
+		if !isLowerHexSHA(snapshot.Commit) {
 			return fmt.Errorf("docs.snapshots[%d] has an invalid commit sha %q", i, snapshot.Commit)
 		}
-		if snapshot.AIGuidelinesCommit != "" && len(snapshot.AIGuidelinesCommit) != 40 {
+		if snapshot.AIGuidelinesCommit != "" && !isLowerHexSHA(snapshot.AIGuidelinesCommit) {
 			return fmt.Errorf(
 				"docs.snapshots[%d] has an invalid ai-guidelines commit sha %q",
 				i, snapshot.AIGuidelinesCommit)
 		}
 	}
 	return nil
+}
+
+// validateIntegrity accepts the sha512 form npm publishes: "sha512-" followed
+// by the standard base64 encoding of exactly 64 digest bytes.
+func validateIntegrity(value string) error {
+	const prefix = "sha512-"
+	if !strings.HasPrefix(value, prefix) {
+		return errors.New(`want a "sha512-" value`)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(value, prefix))
+	if err != nil {
+		return err
+	}
+	if len(decoded) != sha512.Size {
+		return fmt.Errorf("want %d digest bytes, got %d", sha512.Size, len(decoded))
+	}
+	return nil
+}
+
+func isLowerHexSHA(value string) bool {
+	if len(value) != 40 {
+		return false
+	}
+	for _, r := range value {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // ValidDocTag accepts only release tags of the form vX.Y.Z. Docs tags become
@@ -359,7 +398,16 @@ func satisfiesComparator(v, comparator string) bool {
 		high, ok := lowerBound(comparator[1:])
 		return ok && semver.Compare(v, high) < 0
 	case strings.HasPrefix(comparator, "="):
-		low, ok := lowerBound(comparator[1:])
+		spec := comparator[1:]
+		if isPartialVersion(spec) {
+			low, ok := lowerBound(spec)
+			if !ok {
+				return false
+			}
+			high, ok := nextPartialBound(spec)
+			return ok && semver.Compare(v, low) >= 0 && semver.Compare(v, high) < 0
+		}
+		low, ok := lowerBound(spec)
 		return ok && semver.Compare(v, low) == 0
 	default:
 		return comparePartial(v, comparator)

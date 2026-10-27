@@ -59,6 +59,13 @@ jobs:
           cache: true
       - name: Generate pinned data
         run: make data
+      - name: Real data determinism
+        run: |
+          set -eu
+          make data-force
+          cp -a internal/data/dist /tmp/real-dist-first
+          make data-force
+          diff -r /tmp/real-dist-first internal/data/dist
       - name: Run real artifact tests and reject skips
         run: |
           set -o pipefail

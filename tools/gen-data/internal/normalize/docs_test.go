@@ -186,6 +186,56 @@ func TestProcessMarkdownMalformedImageDoesNotTruncate(t *testing.T) {
 	}
 }
 
+func TestProcessMarkdownIgnoresNestedFrontmatterTitle(t *testing.T) {
+	input := "---\nseo:\n  title: Nested\n  description: x\ntitle: Top\n---\n# Body\n"
+	result := ProcessMarkdown([]byte(input), "src")
+	if result.Title != "Top" {
+		t.Errorf("Title = %q, want Top", result.Title)
+	}
+}
+
+func TestProcessMarkdownFenceRunMustMatch(t *testing.T) {
+	input := "````md\n```html\n![keep](a.png)\n```\n![also keep](b.png)\n````\n\n![drop](c.png)\n"
+	result := ProcessMarkdown([]byte(input), "src")
+	content := string(result.Content)
+	for _, want := range []string{"![keep](a.png)", "![also keep](b.png)"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("fence content %q was modified", want)
+		}
+	}
+	if strings.Contains(content, "![drop](c.png)") {
+		t.Error("image after the fence was not removed")
+	}
+}
+
+func TestProcessMarkdownIndentedFenceIsCode(t *testing.T) {
+	input := "# X\n\n    ```md\n    ![keep](a.png)\n    ```\n\n![drop](b.png)\n"
+	result := ProcessMarkdown([]byte(input), "src")
+	content := string(result.Content)
+	if !strings.Contains(content, "![keep](a.png)") {
+		t.Error("indented fence content was modified")
+	}
+	if strings.Contains(content, "![drop](b.png)") {
+		t.Error("image after the indented fence was not removed")
+	}
+}
+
+func TestProcessMarkdownMalformedImageFallbackIsScoped(t *testing.T) {
+	input := "# X\n\nbefore <img src=\"x.png\" alt=\"a\" after\n\n" +
+		"<img src=\"y.png\" alt=\"b\">\n"
+	result := ProcessMarkdown([]byte(input), "src")
+	content := string(result.Content)
+	if !strings.Contains(content, "after") {
+		t.Error("malformed image truncated its own line")
+	}
+	if strings.Contains(content, "y.png") {
+		t.Error("valid image after a malformed line was not removed")
+	}
+	if !strings.Contains(content, "b") {
+		t.Error("valid image alt text was not kept")
+	}
+}
+
 func TestProcessMarkdownDropsImageOnlyLines(t *testing.T) {
 	result := ProcessMarkdown([]byte("# X\n\n![](logo.svg)\n\ntext\n"), "src")
 	content := string(result.Content)

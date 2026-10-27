@@ -555,6 +555,12 @@ Processing:
 - Keep headings for chunking
 - Record source tag and path
 
+Indented prose that begins with an HTML tag is treated as prose rather than an
+indented code block so template image tags can be stripped. The trade-off is
+that a genuinely indented code sample whose first character is `<` is preserved
+verbatim as prose. Fences indented four or more spaces stay code, and a closing
+fence must use the same character and a run at least as long as the opener.
+
 Bundle release notes for migration. They contain Before/After examples. Also compute
 breaking changes from `cem/breaking.Compare` between embedded manifests.
 

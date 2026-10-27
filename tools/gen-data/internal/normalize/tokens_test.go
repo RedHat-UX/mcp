@@ -320,6 +320,30 @@ func TestNormalizeRejectsTokenWithoutType(t *testing.T) {
 	}
 }
 
+func TestNormalizeErrorOrderIsDeterministic(t *testing.T) {
+	input := []byte(`{
+		"zeta": {"$value": "1"},
+		"alpha": {"$value": "2"}
+	}`)
+	first := ""
+	for i := 0; i < 20; i++ {
+		_, err := NormalizeTokens(input)
+		if err == nil {
+			t.Fatal("NormalizeTokens() accepted tokens with no derivable type")
+		}
+		if first == "" {
+			first = err.Error()
+			continue
+		}
+		if err.Error() != first {
+			t.Fatalf("NormalizeTokens() error changed: %q != %q", err.Error(), first)
+		}
+	}
+	if !strings.Contains(first, "alpha") {
+		t.Errorf("error %q does not name the first key in lexical order", first)
+	}
+}
+
 func TestNormalizeShadowValue(t *testing.T) {
 	input := []byte(`{
 		"box-shadow": {

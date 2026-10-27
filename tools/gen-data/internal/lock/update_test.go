@@ -40,13 +40,13 @@ func TestUpdatePinsStableVersionsAndDocs(t *testing.T) {
 		switch r.URL.Path {
 		case "/@rhds/elements", "/%40rhds%2Felements":
 			_, _ = w.Write([]byte(`{"name":"@rhds/elements","versions":{
-				"5.0.0":{"dist":{"integrity":"sha512-abc","tarball":"https://example.test/e.tgz","shasum":"def"}},
-				"6.0.0":{"dist":{"integrity":"sha512-new","tarball":"https://example.test/e6.tgz","shasum":"new"}},
-				"6.1.0-beta.1":{"dist":{"integrity":"sha512-beta","tarball":"https://example.test/b.tgz"}}
+				"5.0.0":{"dist":{"integrity":"sha512-YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYQ==","tarball":"https://example.test/e.tgz","shasum":"def"}},
+				"6.0.0":{"dist":{"integrity":"sha512-YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYg==","tarball":"https://example.test/e6.tgz","shasum":"new"}},
+				"6.1.0-beta.1":{"dist":{"integrity":"sha512-Y2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjYw==","tarball":"https://example.test/b.tgz"}}
 			}}`))
 		case "/@rhds/tokens", "/%40rhds%2Ftokens":
 			_, _ = w.Write([]byte(`{"name":"@rhds/tokens","versions":{
-				"3.2.0":{"dist":{"integrity":"sha512-xyz","tarball":"https://example.test/t.tgz","shasum":"ghi"}}
+				"3.2.0":{"dist":{"integrity":"sha512-ZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZA==","tarball":"https://example.test/t.tgz","shasum":"ghi"}}
 			}}`))
 		case "/repos/" + DocsRepo + "/commits/v1.4.5",
 			"/repos/" + DocsRepo + "/commits/v2.1.2",
@@ -83,7 +83,7 @@ func TestUpdatePinsStableVersionsAndDocs(t *testing.T) {
 		elements.Versions[1].Version != "6.0.0" {
 		t.Fatalf("elements versions = %+v, want stable 5.0.0 and 6.0.0", elements.Versions)
 	}
-	if elements.Versions[0].Integrity != "sha512-abc" {
+	if elements.Versions[0].Integrity != "sha512-YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYQ==" {
 		t.Errorf("integrity = %q", elements.Versions[0].Integrity)
 	}
 	tokens, ok := updated.PackageByID("tokens")

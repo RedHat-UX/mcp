@@ -8,6 +8,7 @@ package fetch
 import (
 	"archive/tar"
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha512"
@@ -35,7 +36,18 @@ const (
 	DefaultMaxDownloadBytes int64 = 256 << 20
 	// DefaultMaxEntryBytes caps one extracted tarball entry.
 	DefaultMaxEntryBytes int64 = 64 << 20
+	// DefaultMaxExtractedBytes caps the total decompressed tarball size.
+	DefaultMaxExtractedBytes int64 = 1 << 30
+	// DefaultMaxEntries caps the number of headers in a tarball.
+	DefaultMaxEntries = 100_000
 )
+
+// ExtractLimits bounds tarball extraction. Zero values use the defaults.
+type ExtractLimits struct {
+	MaxEntryBytes int64
+	MaxTotalBytes int64
+	MaxEntries    int
+}
 
 // Client fetches registry and GitHub inputs.
 type Client struct {
@@ -97,7 +109,11 @@ func (c *Client) RegistryMetadata(ctx context.Context, packageName string) (*Reg
 	defer func() { _ = body.Close() }()
 
 	var metadata RegistryMetadata
-	if err := decodeJSON(body, &metadata); err != nil {
+	data, err := readLimited(body, c.maxDownloadBytes())
+	if err != nil {
+		return nil, fmt.Errorf("decoding registry metadata for %s: %w", packageName, err)
+	}
+	if err := decodeJSON(bytes.NewReader(data), &metadata); err != nil {
 		return nil, fmt.Errorf("decoding registry metadata for %s: %w", packageName, err)
 	}
 	if metadata.Name != packageName {
@@ -130,10 +146,19 @@ func (c *Client) maxDownloadBytes() int64 {
 	return DefaultMaxDownloadBytes
 }
 
-// Open downloads a URL and returns the response body. The caller closes it.
-// Use Download when an integrity check is required.
+// Open downloads a URL and returns the response body, bounded by the
+// client's download limit. The caller closes it.
 func (c *Client) Open(ctx context.Context, endpoint string) (io.ReadCloser, error) {
-	return c.get(ctx, endpoint, nil)
+	body, err := c.get(ctx, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = body.Close() }()
+	data, err := readLimited(body, c.maxDownloadBytes())
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", endpoint, err)
+	}
+	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
 // VerifyIntegrity checks an npm "integrity" value. Only sha512 is accepted;
@@ -168,31 +193,47 @@ func equalBytes(a, b []byte) bool {
 // ExtractTarGz reads a gzipped tarball, strips prefix, and returns the entries
 // accepted by selectFunc. Keys are the paths after the prefix.
 func ExtractTarGz(reader io.Reader, prefix string, selectFunc func(string) bool) (map[string][]byte, error) {
-	return ExtractTarGzLimited(reader, prefix, selectFunc, DefaultMaxEntryBytes)
+	return ExtractTarGzWithLimits(reader, prefix, selectFunc, ExtractLimits{})
 }
 
 // ExtractTarGzLimited is ExtractTarGz with an explicit per-entry byte cap.
 func ExtractTarGzLimited(reader io.Reader, prefix string, selectFunc func(string) bool, maxEntryBytes int64) (map[string][]byte, error) {
+	return ExtractTarGzWithLimits(reader, prefix, selectFunc, ExtractLimits{MaxEntryBytes: maxEntryBytes})
+}
+
+// ExtractTarGzWithLimits is ExtractTarGz with explicit extraction bounds.
+func ExtractTarGzWithLimits(reader io.Reader, prefix string, selectFunc func(string) bool, limits ExtractLimits) (map[string][]byte, error) {
 	return extractTarGz(reader, func(name string) string {
 		return path.Clean(strings.TrimPrefix(name, prefix))
-	}, selectFunc, maxEntryBytes)
+	}, selectFunc, limits)
 }
 
 // ExtractTarGzTree reads a gzipped tarball and strips its top-level directory.
 // GitHub and codeload archives wrap everything in one component whose name
 // depends on the ref, so callers cannot always know the prefix in advance.
 func ExtractTarGzTree(reader io.Reader, selectFunc func(string) bool) (map[string][]byte, error) {
-	return extractTarGz(reader, stripFirstComponent, selectFunc, DefaultMaxEntryBytes)
+	return extractTarGz(reader, stripFirstComponent, selectFunc, ExtractLimits{})
 }
 
-func extractTarGz(reader io.Reader, transform func(string) string, selectFunc func(string) bool, maxEntryBytes int64) (map[string][]byte, error) {
+func extractTarGz(reader io.Reader, transform func(string) string, selectFunc func(string) bool, limits ExtractLimits) (map[string][]byte, error) {
+	if limits.MaxEntryBytes <= 0 {
+		limits.MaxEntryBytes = DefaultMaxEntryBytes
+	}
+	if limits.MaxTotalBytes <= 0 {
+		limits.MaxTotalBytes = DefaultMaxExtractedBytes
+	}
+	if limits.MaxEntries <= 0 {
+		limits.MaxEntries = DefaultMaxEntries
+	}
 	result := make(map[string][]byte)
 	gz, err := gzip.NewReader(reader)
 	if err != nil {
 		return nil, fmt.Errorf("opening gzip stream: %w", err)
 	}
 	defer func() { _ = gz.Close() }()
-	tr := tar.NewReader(gz)
+	total := &totalLimitReader{reader: gz, remaining: limits.MaxTotalBytes, limit: limits.MaxTotalBytes}
+	tr := tar.NewReader(total)
+	entries := 0
 	for {
 		header, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -200,6 +241,10 @@ func extractTarGz(reader io.Reader, transform func(string) string, selectFunc fu
 		}
 		if err != nil {
 			return nil, fmt.Errorf("reading tar entry: %w", err)
+		}
+		entries++
+		if entries > limits.MaxEntries {
+			return nil, fmt.Errorf("tarball exceeds the %d entry limit", limits.MaxEntries)
 		}
 		if header.Typeflag != tar.TypeReg {
 			continue
@@ -218,13 +263,29 @@ func extractTarGz(reader io.Reader, transform func(string) string, selectFunc fu
 		if selectFunc != nil && !selectFunc(name) {
 			continue
 		}
-		data, err := readLimited(tr, maxEntryBytes)
+		data, err := readLimited(tr, limits.MaxEntryBytes)
 		if err != nil {
 			return nil, fmt.Errorf("reading %s: %w", name, err)
 		}
 		result[name] = data
 	}
 	return result, nil
+}
+
+// totalLimitReader fails once the decompressed stream exceeds a byte budget.
+type totalLimitReader struct {
+	reader    io.Reader
+	remaining int64
+	limit     int64
+}
+
+func (r *totalLimitReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	r.remaining -= int64(n)
+	if r.remaining < 0 {
+		return n, fmt.Errorf("decompressed content exceeds the %d byte limit", r.limit)
+	}
+	return n, err
 }
 
 func stripFirstComponent(name string) string {

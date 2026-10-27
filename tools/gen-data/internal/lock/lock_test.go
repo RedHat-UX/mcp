@@ -4,11 +4,16 @@
 package lock
 
 import (
+	"crypto/sha512"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+var testIntegrity = "sha512-" + base64.StdEncoding.EncodeToString(make([]byte, sha512.Size))
 
 func TestStableVersions(t *testing.T) {
 	got := StableVersions([]string{
@@ -92,6 +97,11 @@ func TestRangeParserEdgeCases(t *testing.T) {
 		// A partial major upper bound covers the whole major line.
 		{"2.9.9", "1.2.3 - 2", true},
 		{"3.0.0", "1.2.3 - 2", false},
+		// =1.2 matches the whole 1.2.x line; =1.2.3 is exact.
+		{"1.2.9", "=1.2", true},
+		{"1.3.0", "=1.2", false},
+		{"1.2.3", "=1.2.3", true},
+		{"1.2.4", "=1.2.3", false},
 	}
 	for _, tt := range tests {
 		if got := satisfies(tt.version, tt.rangeSpec); got != tt.want {
@@ -195,7 +205,7 @@ func TestDigestIsStableAndChangesWithContent(t *testing.T) {
 			ID:   "elements",
 			Versions: []PackageVersion{{
 				Version:   "5.0.0",
-				Integrity: "sha512-abc",
+				Integrity: testIntegrity,
 				Tarball:   "https://example.test/elements-5.0.0.tgz",
 			}},
 		}},
@@ -270,7 +280,7 @@ func TestValidateRejectsMissingFields(t *testing.T) {
 				ID:   "elements",
 				Versions: []PackageVersion{{
 					Version:   "5.0.0",
-					Integrity: "sha512-abc",
+					Integrity: testIntegrity,
 					Tarball:   "https://example.test/x.tgz",
 				}},
 			}},
@@ -309,7 +319,7 @@ func TestValidateRejectsPrereleasesAndBadDocTags(t *testing.T) {
 				ID:   "elements",
 				Versions: []PackageVersion{{
 					Version:   "5.0.0",
-					Integrity: "sha512-abc",
+					Integrity: testIntegrity,
 					Tarball:   "https://example.test/x.tgz",
 				}},
 			}},
@@ -348,6 +358,89 @@ func TestValidateRejectsPrereleasesAndBadDocTags(t *testing.T) {
 	}
 	if !ValidDocTag("v1.4.5") {
 		t.Error("ValidDocTag(v1.4.5) = false")
+	}
+}
+
+func TestValidateRejectsBadIntegrity(t *testing.T) {
+	base := func(integrity string) *Lock {
+		return &Lock{
+			SchemaVersion: SchemaVersion,
+			Packages: []Package{{
+				Name: "@rhds/elements",
+				ID:   "elements",
+				Versions: []PackageVersion{{
+					Version:   "5.0.0",
+					Integrity: integrity,
+					Tarball:   "https://example.test/x.tgz",
+				}},
+			}},
+			Docs: Docs{Repo: "RedHat-UX/red-hat-design-system"},
+		}
+	}
+	if err := base(testIntegrity).Validate(); err != nil {
+		t.Fatalf("baseline Validate() = %v", err)
+	}
+	for _, integrity := range []string{
+		"sha256-abc",
+		"sha512-not-base64!",
+		"sha512-YWJj",
+		"sha512-" + base64.StdEncoding.EncodeToString(make([]byte, sha512.Size-1)),
+	} {
+		if err := base(integrity).Validate(); err == nil {
+			t.Errorf("Validate() accepted integrity %q", integrity)
+		}
+	}
+}
+
+func TestValidateRejectsDuplicateDocTagsAndBadSHAs(t *testing.T) {
+	base := func() *Lock {
+		return &Lock{
+			SchemaVersion: SchemaVersion,
+			Packages: []Package{{
+				Name: "@rhds/elements",
+				ID:   "elements",
+				Versions: []PackageVersion{{
+					Version:   "5.0.0",
+					Integrity: testIntegrity,
+					Tarball:   "https://example.test/x.tgz",
+				}},
+			}},
+			Docs: Docs{
+				Repo: "RedHat-UX/red-hat-design-system",
+				Snapshots: []DocSnapshot{{
+					Tag:    "v5.0.0",
+					Commit: "d2321d5a1feb5b677682305dee2c073422eda67c",
+				}},
+			},
+		}
+	}
+	if err := base().Validate(); err != nil {
+		t.Fatalf("baseline Validate() = %v", err)
+	}
+
+	l := base()
+	l.Docs.Snapshots = append(l.Docs.Snapshots, l.Docs.Snapshots[0])
+	if err := l.Validate(); err == nil {
+		t.Error("Validate() accepted duplicate docs tags")
+	}
+
+	for _, commitment := range []string{
+		"D2321D5A1FEB5B677682305DEE2C073422EDA67C",
+		"d2321d5a1feb5b677682305dee2c073422eda67",
+		"g2321d5a1feb5b677682305dee2c073422eda67c",
+		"d2321d5a1feb5b677682305dee2c073422eda67c00",
+	} {
+		l := base()
+		l.Docs.Snapshots[0].Commit = commitment
+		if err := l.Validate(); err == nil {
+			t.Errorf("Validate() accepted commit %q", commitment)
+		}
+	}
+
+	l = base()
+	l.Docs.Snapshots[0].AIGuidelinesCommit = strings.Repeat("A", 40)
+	if err := l.Validate(); err == nil {
+		t.Error("Validate() accepted an uppercase ai-guidelines commit")
 	}
 }
 

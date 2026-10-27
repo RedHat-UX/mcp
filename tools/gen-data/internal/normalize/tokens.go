@@ -103,7 +103,8 @@ type pendingComposite struct {
 
 func (n *normalizer) walkGroup(node map[string]any, logicalPath, outputPath []string) (map[string]any, error) {
 	result := make(map[string]any, len(node))
-	for key, value := range node {
+	for _, key := range sortedKeys(node) {
+		value := node[key]
 		switch {
 		case isMetadataKey(key):
 			result[key] = copyValue(value)
@@ -164,7 +165,8 @@ func (n *normalizer) normalizeEntry(
 		if normalizedMarker != nil {
 			markerKey := desiredOutputKey(outputKey, markerNode, fullOutputPath)
 			result := map[string]any{markerKey: normalizedMarker}
-			for childKey, childValue := range node {
+			for _, childKey := range sortedKeys(node) {
+				childValue := node[childKey]
 				if childKey == "_" || isMetadataKey(childKey) || isStyleDictionaryGroupKey(childKey) {
 					continue
 				}
@@ -210,6 +212,17 @@ func appendPath(path []string, element string) []string {
 	result := make([]string, len(path), len(path)+1)
 	copy(result, path)
 	return append(result, element)
+}
+
+// sortedKeys returns map keys in lexical order so normalization reports the
+// first error deterministically.
+func sortedKeys[V any](values map[string]V) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func mergeEntries(target, entries map[string]any) error {

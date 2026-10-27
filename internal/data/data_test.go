@@ -327,9 +327,10 @@ func TestOpenRejectsUnsupportedSchema(t *testing.T) {
 }
 
 func TestOpenRejectsDuplicateArtifactKeys(t *testing.T) {
+	sha := strings.Repeat("a", 64)
 	fsys := fstest.MapFS{IndexPath: &fstest.MapFile{Data: indexJSON(t,
-		Artifact{Package: "elements", Version: "5.0.0", Kind: "manifest", Path: "a"},
-		Artifact{Package: "elements", Version: "5.0.0", Kind: "manifest", Path: "b"},
+		Artifact{Package: "elements", Version: "5.0.0", Kind: "manifest", Path: "a", SHA256: sha, Bytes: 1},
+		Artifact{Package: "elements", Version: "5.0.0", Kind: "manifest", Path: "b", SHA256: sha, Bytes: 1},
 	)}}
 	if _, err := Open(fsys); !errors.Is(err, ErrInvalidIndex) {
 		t.Fatalf("Open() error = %v, want ErrInvalidIndex", err)

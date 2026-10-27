@@ -48,6 +48,7 @@ build: data
 
 # NFR-06: stripped binary 40 MB or less, npm tarball 16 MB or less.
 size-check: build
+	./hack/check-size.sh --self-test
 	./hack/check-size.sh $(DIST_DIR)/$(BINARY_NAME)
 
 # Allowlist from docs/PLAN.md section 9.3: GPL-3.0, MIT, Apache-2.0, BSD.
