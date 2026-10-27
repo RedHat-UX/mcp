@@ -5,7 +5,9 @@ package resolve
 
 import (
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseLockfileData(t *testing.T) {
@@ -62,6 +64,22 @@ importers:
 	}
 	if len(candidates) != 1 || candidates[0].Version != "4.2.2" {
 		t.Fatalf("candidates = %+v, want only the resolved 4.2.2", candidates)
+	}
+}
+
+func TestPNPMPeerRangesUnderPackagesAreNotPins(t *testing.T) {
+	data := `lockfileVersion: '9.0'
+packages:
+  /@rhds/elements@4.2.2:
+    peerDependencies:
+      '@rhds/elements': ^5.0.0
+`
+	candidates, _, err := parseLockfileData("pnpm-lock.yaml", []byte(data), DefaultLimits())
+	if err != nil {
+		t.Fatalf("parseLockfileData() error = %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].Version != "4.2.2" {
+		t.Fatalf("candidates = %+v, want only the package key 4.2.2", candidates)
 	}
 }
 
@@ -132,6 +150,32 @@ func TestCandidateTruncationIsDeterministicAndWarned(t *testing.T) {
 		if first[i] != second[i] {
 			t.Fatalf("candidate %d differs between runs: %+v then %+v", i, first[i], second[i])
 		}
+	}
+}
+
+func TestLargeLockfileParsingLatency(t *testing.T) {
+	var packages strings.Builder
+	for i := 0; i < 20000; i++ {
+		if i > 0 {
+			packages.WriteByte(',')
+		}
+		fmt.Fprintf(&packages, `"node_modules/pkg%d/node_modules/@rhds/elements":{"version":"5.0.%d"}`, i, i)
+	}
+	data := []byte(`{"lockfileVersion":3,"packages":{` + packages.String() + `}}`)
+	start := time.Now()
+	candidates, truncated, err := parseLockfileData("package-lock.json", data, DefaultLimits())
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("parseLockfileData() error = %v", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("parsing 20k lockfile entries took %s, want a bounded top-k scan", elapsed)
+	}
+	if !truncated {
+		t.Fatal("truncated = false, want true")
+	}
+	if len(candidates) != maxCandidates {
+		t.Fatalf("candidates = %d, want the retention cap %d", len(candidates), maxCandidates)
 	}
 }
 

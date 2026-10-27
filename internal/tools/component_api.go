@@ -83,13 +83,22 @@ func (s *Service) getComponentAPIWithEnv(
 		return required, ComponentAPIOutput{}
 	}
 	if failure != nil {
-		return nil, ComponentAPIOutput{Error: failure}
+		out := fitComponentAPI(ComponentAPIOutput{Error: failure}, defaultResponseBudget, true)
+		return nil, out
 	}
 	return nil, s.componentAPI(resolved, input)
 }
 
-func (s *Service) componentAPI(resolved resolution, input GetComponentAPIInput) ComponentAPIOutput {
-	out := ComponentAPIOutput{Resolved: resolved.Resolved}
+func (s *Service) componentAPI(resolved resolution, input GetComponentAPIInput) (out ComponentAPIOutput) {
+	budget := defaultResponseBudget
+	if input.Detail == "full" {
+		budget = hardResponseBudget
+	}
+	if s.maxResponseBytes > 0 && s.maxResponseBytes < budget {
+		budget = s.maxResponseBytes
+	}
+	defer func() { out = fitComponentAPI(out, budget, input.Detail != "full") }()
+	out = ComponentAPIOutput{Resolved: resolved.Resolved}
 	tagName := strings.ToLower(strings.TrimSpace(input.TagName))
 	if tagName == "" {
 		out.Error = invalidArgument("tagName is required")
@@ -120,9 +129,10 @@ func (s *Service) componentAPI(resolved resolution, input GetComponentAPIInput) 
 	component, ok := model.Component(tagName)
 	if !ok {
 		out.Error = &ToolError{
-			Code:    "component_not_found",
-			Message: fmt.Sprintf("%q is not a custom element in elements@%s", tagName, resolved.Resolved.Elements),
-			Hint:    "call rhds_list_components to list bundled tag names",
+			Code: "component_not_found",
+			Message: fmt.Sprintf("%q is not a custom element in elements@%s",
+				truncateResponseText(tagName, 100), resolved.Resolved.Elements),
+			Hint: "call rhds_list_components to list bundled tag names",
 		}
 		return out
 	}
@@ -160,14 +170,7 @@ func (s *Service) componentAPI(resolved resolution, input GetComponentAPIInput) 
 		out.Examples = summarizeExamples(component.Examples, full)
 	}
 
-	budget := defaultResponseBudget
-	if full {
-		budget = hardResponseBudget
-	}
-	if s.maxResponseBytes > 0 && s.maxResponseBytes < budget {
-		budget = s.maxResponseBytes
-	}
-	return fitComponentAPI(out, budget)
+	return out
 }
 
 func normalizeSections(requested []string) (map[string]bool, *ToolError) {
@@ -187,7 +190,7 @@ func normalizeSections(requested []string) (map[string]bool, *ToolError) {
 		if !valid[section] {
 			return nil, invalidArgument(fmt.Sprintf(
 				"unknown section %q; valid sections: %s",
-				section, strings.Join(componentAPISections, ", ")))
+				truncateResponseText(section, 100), strings.Join(componentAPISections, ", ")))
 		}
 		selected[section] = true
 	}
@@ -210,12 +213,18 @@ func summarizeAttributes(attributes []cem.Attribute, full bool) []cem.Attribute 
 	}
 	result := make([]cem.Attribute, len(attributes))
 	copy(result, attributes)
-	if full {
-		return result
-	}
 	for i := range result {
+		result[i].Name = truncateResponseText(result[i].Name, 80)
+		result[i].Type = truncateResponseText(result[i].Type, 80)
+		result[i].Default = truncateResponseText(result[i].Default, 40)
+		if full {
+			result[i].Description = truncateResponseText(result[i].Description, 500)
+			continue
+		}
 		result[i].Summary = ""
 		result[i].Description = ""
+		result[i].FieldName = ""
+		result[i].InheritedFrom = ""
 	}
 	return result
 }
@@ -226,12 +235,18 @@ func summarizeProperties(properties []cem.Property, full bool) []cem.Property {
 	}
 	result := make([]cem.Property, len(properties))
 	copy(result, properties)
-	if full {
-		return result
-	}
 	for i := range result {
+		result[i].Name = truncateResponseText(result[i].Name, 80)
+		result[i].Type = truncateResponseText(result[i].Type, 80)
+		result[i].Default = truncateResponseText(result[i].Default, 40)
+		result[i].Attribute = truncateResponseText(result[i].Attribute, 80)
+		if full {
+			result[i].Description = truncateResponseText(result[i].Description, 500)
+			continue
+		}
 		result[i].Summary = ""
 		result[i].Description = ""
+		result[i].InheritedFrom = ""
 	}
 	return result
 }
@@ -242,12 +257,16 @@ func summarizeEvents(events []cem.Event, full bool) []cem.Event {
 	}
 	result := make([]cem.Event, len(events))
 	copy(result, events)
-	if full {
-		return result
-	}
 	for i := range result {
+		result[i].Name = truncateResponseText(result[i].Name, 80)
+		result[i].Type = truncateResponseText(result[i].Type, 80)
+		if full {
+			result[i].Description = truncateResponseText(result[i].Description, 500)
+			continue
+		}
 		result[i].Summary = ""
 		result[i].Description = ""
+		result[i].InheritedFrom = ""
 	}
 	return result
 }
@@ -258,12 +277,15 @@ func summarizeSlots(slots []cem.Slot, full bool) []cem.Slot {
 	}
 	result := make([]cem.Slot, len(slots))
 	copy(result, slots)
-	if full {
-		return result
-	}
 	for i := range result {
+		result[i].Name = truncateResponseText(result[i].Name, 80)
+		if full {
+			result[i].Description = truncateResponseText(result[i].Description, 500)
+			continue
+		}
 		result[i].Summary = ""
 		result[i].Description = ""
+		result[i].InheritedFrom = ""
 	}
 	return result
 }
@@ -274,12 +296,15 @@ func summarizeParts(parts []cem.CSSPart, full bool) []cem.CSSPart {
 	}
 	result := make([]cem.CSSPart, len(parts))
 	copy(result, parts)
-	if full {
-		return result
-	}
 	for i := range result {
+		result[i].Name = truncateResponseText(result[i].Name, 80)
+		if full {
+			result[i].Description = truncateResponseText(result[i].Description, 500)
+			continue
+		}
 		result[i].Summary = ""
 		result[i].Description = ""
+		result[i].InheritedFrom = ""
 	}
 	return result
 }
@@ -290,12 +315,17 @@ func summarizeCSSProperties(properties []cem.CSSProperty, full bool) []cem.CSSPr
 	}
 	result := make([]cem.CSSProperty, len(properties))
 	copy(result, properties)
-	if full {
-		return result
-	}
 	for i := range result {
+		result[i].Name = truncateResponseText(result[i].Name, 80)
+		result[i].Default = truncateResponseText(result[i].Default, 40)
+		result[i].Syntax = truncateResponseText(result[i].Syntax, 40)
+		if full {
+			result[i].Description = truncateResponseText(result[i].Description, 500)
+			continue
+		}
 		result[i].Summary = ""
 		result[i].Description = ""
+		result[i].InheritedFrom = ""
 	}
 	return result
 }
@@ -306,10 +336,13 @@ func summarizeExamples(examples []cem.Example, full bool) []cem.Example {
 	}
 	result := make([]cem.Example, len(examples))
 	copy(result, examples)
-	if full {
-		return result
-	}
 	for i := range result {
+		result[i].Description = truncateResponseText(result[i].Description, 120)
+		if full {
+			result[i].URL = truncateResponseText(result[i].URL, 300)
+			result[i].Source = truncateResponseText(result[i].Source, 300)
+			continue
+		}
 		result[i].URL = ""
 		result[i].Source = ""
 	}

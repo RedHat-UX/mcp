@@ -4,6 +4,7 @@
 package resolve
 
 import (
+	"container/heap"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -18,85 +19,70 @@ import (
 // deeply nested or alias-expanded YAML and JSON.
 const maxDepth = 100
 
-// maxCandidates bounds candidate collection from one workspace. A hostile or
-// corrupt lockfile must not grow memory without limit.
-const maxCandidates = 4096
+// maxCandidates bounds candidate collection from one workspace. The public
+// output is capped much lower (100); this larger bound is enough to detect a
+// real major disagreement without trusting a hostile lockfile.
+const maxCandidates = 1024
 
 // maxCandidateRunes bounds a candidate's version and spec strings. Lockfiles
 // are untrusted input and can contain multi-megabyte values.
 const maxCandidateRunes = 256
 
 // candidateSet deduplicates candidates from one source while preserving a
-// deterministic order.
+// deterministic order. It retains the best maxCandidates entries with a
+// min-heap so a large lockfile is O(n log k), not O(n*k).
 type candidateSet struct {
-	seen      map[string]int
-	items     []Candidate
+	heap      *candidateHeap
 	truncated bool
 }
 
+type candidateHeap struct {
+	items  []Candidate
+	seen   map[string]int
+	parsed map[string]ParsedVersion
+}
+
+// maxParsedCache bounds the parsed-version memo. Lockfiles rarely contain
+// more than a few thousand distinct versions.
+const maxParsedCache = 1 << 16
+
 func newCandidateSet() *candidateSet {
-	return &candidateSet{seen: make(map[string]int)}
+	h := &candidateHeap{
+		seen:   make(map[string]int),
+		parsed: make(map[string]ParsedVersion),
+	}
+	heap.Init(h)
+	return &candidateSet{heap: h}
 }
 
-func (s *candidateSet) add(version, spec, source string, precedence int) {
-	version = truncateRunes(strings.TrimSpace(version), maxCandidateRunes)
-	spec = truncateRunes(strings.TrimSpace(spec), maxCandidateRunes)
-	if version == "" {
-		return
-	}
-	key := source + "\x00" + version
-	if index, ok := s.seen[key]; ok {
-		// A map traversal can reach the same version through different
-		// specifiers. Keep the lexicographically smallest so output does not
-		// depend on map iteration order.
-		if spec != "" && (s.items[index].Spec == "" || spec < s.items[index].Spec) {
-			s.items[index].Spec = spec
-		}
-		return
-	}
-	candidate := Candidate{
-		Version:    version,
-		Spec:       spec,
-		Source:     source,
-		Precedence: precedence,
-		Level:      LevelForPrecedence(precedence),
-	}
-	if len(s.items) < maxCandidates {
-		s.seen[key] = len(s.items)
-		s.items = append(s.items, candidate)
-		return
-	}
-	s.truncated = true
-	worst := s.worstIndex()
-	if worst >= 0 && candidateBetter(candidate, s.items[worst]) {
-		delete(s.seen, s.items[worst].Source+"\x00"+s.items[worst].Version)
-		s.items[worst] = candidate
-		s.seen[key] = worst
-	}
+func candidateKey(candidate Candidate) string {
+	return candidate.Source + "\x00" + candidate.Version
 }
 
-func (s *candidateSet) worstIndex() int {
-	if len(s.items) == 0 {
-		return -1
-	}
-	worst := 0
-	for i := 1; i < len(s.items); i++ {
-		if candidateBetter(s.items[worst], s.items[i]) {
-			worst = i
-		}
-	}
-	return worst
+func (h *candidateHeap) Len() int { return len(h.items) }
+func (h *candidateHeap) Less(i, j int) bool {
+	// The root must be the worst retained candidate, so the heap can evict it
+	// when a better candidate arrives.
+	return h.better(h.items[j], h.items[i])
 }
 
-// candidateBetter orders candidates for deterministic retention under the
-// cap: higher precedence first (lower number), then higher version, then
-// lexical source and spec.
-func candidateBetter(a, b Candidate) bool {
+func (h *candidateHeap) parse(text string) ParsedVersion {
+	if parsed, ok := h.parsed[text]; ok {
+		return parsed
+	}
+	parsed := ParseVersionSpec(text)
+	if len(h.parsed) < maxParsedCache {
+		h.parsed[text] = parsed
+	}
+	return parsed
+}
+
+func (h *candidateHeap) better(a, b Candidate) bool {
 	if a.Precedence != b.Precedence {
 		return a.Precedence < b.Precedence
 	}
-	left := ParseVersionSpec(a.Version)
-	right := ParseVersionSpec(b.Version)
+	left := h.parse(a.Version)
+	right := h.parse(b.Version)
 	if left.OK && right.OK {
 		if order := CompareParsed(left, right); order != 0 {
 			return order > 0
@@ -109,14 +95,69 @@ func candidateBetter(a, b Candidate) bool {
 	}
 	return a.Spec < b.Spec
 }
+func (h *candidateHeap) Swap(i, j int) {
+	h.items[i], h.items[j] = h.items[j], h.items[i]
+	h.seen[candidateKey(h.items[i])] = i
+	h.seen[candidateKey(h.items[j])] = j
+}
+func (h *candidateHeap) Push(value any) {
+	candidate := value.(Candidate)
+	h.seen[candidateKey(candidate)] = len(h.items)
+	h.items = append(h.items, candidate)
+}
+func (h *candidateHeap) Pop() any {
+	last := len(h.items) - 1
+	candidate := h.items[last]
+	delete(h.seen, candidateKey(candidate))
+	h.items = h.items[:last]
+	return candidate
+}
+
+func (s *candidateSet) add(version, spec, source string, precedence int) {
+	version = truncateRunes(strings.TrimSpace(version), maxCandidateRunes)
+	spec = truncateRunes(strings.TrimSpace(spec), maxCandidateRunes)
+	if version == "" {
+		return
+	}
+	key := source + "\x00" + version
+	if index, ok := s.heap.seen[key]; ok {
+		// A map traversal can reach the same version through different
+		// specifiers. Keep the lexicographically smallest so output does not
+		// depend on map iteration order.
+		if spec != "" && (s.heap.items[index].Spec == "" || spec < s.heap.items[index].Spec) {
+			s.heap.items[index].Spec = spec
+			heap.Fix(s.heap, index)
+		}
+		return
+	}
+	candidate := Candidate{
+		Version:    version,
+		Spec:       spec,
+		Source:     source,
+		Precedence: precedence,
+		Level:      LevelForPrecedence(precedence),
+	}
+	if len(s.heap.items) < maxCandidates {
+		heap.Push(s.heap, candidate)
+		return
+	}
+	s.truncated = true
+	if s.heap.better(candidate, s.heap.items[0]) {
+		delete(s.heap.seen, candidateKey(s.heap.items[0]))
+		s.heap.items[0] = candidate
+		s.heap.seen[key] = 0
+		heap.Fix(s.heap, 0)
+	}
+}
 
 func (s *candidateSet) sorted() []Candidate {
-	sort.SliceStable(s.items, func(i, j int) bool {
-		if s.items[i].Precedence != s.items[j].Precedence {
-			return s.items[i].Precedence < s.items[j].Precedence
+	items := append([]Candidate(nil), s.heap.items...)
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].Precedence != items[j].Precedence {
+			return items[i].Precedence < items[j].Precedence
 		}
-		left := ParseVersionSpec(s.items[i].Version)
-		right := ParseVersionSpec(s.items[j].Version)
+		left := s.heap.parse(items[i].Version)
+		right := s.heap.parse(items[j].Version)
 		if left.OK && right.OK {
 			if order := CompareParsed(left, right); order != 0 {
 				return order > 0
@@ -124,12 +165,12 @@ func (s *candidateSet) sorted() []Candidate {
 		} else if left.OK != right.OK {
 			return left.OK
 		}
-		if s.items[i].Source != s.items[j].Source {
-			return s.items[i].Source < s.items[j].Source
+		if items[i].Source != items[j].Source {
+			return items[i].Source < items[j].Source
 		}
-		return s.items[i].Version < s.items[j].Version
+		return items[i].Version < items[j].Version
 	})
-	return s.items
+	return items
 }
 
 // parseLockfileData parses one supported lockfile. The name selects the

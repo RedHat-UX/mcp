@@ -4,9 +4,12 @@
 package tools
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/redhat-ux/mcp/internal/cem"
 	"github.com/redhat-ux/mcp/internal/resolve"
@@ -38,6 +41,36 @@ func TestEstimatedResponseBytesCountsTextDuplication(t *testing.T) {
 	value := map[string]string{"value": strings.Repeat("a", 1000)}
 	if got := estimatedResponseBytes(value); got < 2000 {
 		t.Errorf("estimated = %d, want at least the doubled JSON size", got)
+	}
+}
+
+func TestEstimatedResponseBytesIncludesEscaping(t *testing.T) {
+	value := map[string]string{"value": strings.Repeat("\"\\\n", 500)}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, doubled := estimatedResponseBytes(value), len(encoded)*2; got <= doubled {
+		t.Errorf("estimated = %d, want more than the naive double %d for escaped text", got, doubled)
+	}
+}
+
+func TestEstimatedResponseBytesIsAWireUpperBound(t *testing.T) {
+	value := map[string]string{"text": strings.Repeat("\"\\\n<>&", 200)}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := mcp.CallToolResult{
+		StructuredContent: json.RawMessage(encoded),
+		Content:           []mcp.Content{&mcp.TextContent{Text: string(encoded)}},
+	}
+	wire, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if estimate := estimatedResponseBytes(value); estimate < len(wire) {
+		t.Errorf("estimate = %d, wire = %d; estimate must be an upper bound", estimate, len(wire))
 	}
 }
 
@@ -111,6 +144,33 @@ func TestFitSearchTrimsOutput(t *testing.T) {
 	}
 }
 
+func TestFitListComponentsCursorRoundTrip(t *testing.T) {
+	out := ListComponentsOutput{Resolved: ResolvedVersion{Elements: "5.0.0"}, Total: 10}
+	for i := 0; i < 10; i++ {
+		out.Components = append(out.Components, ComponentSummary{
+			TagName: fmt.Sprintf("rh-component-%02d", i),
+			Summary: strings.Repeat("summary ", 100),
+		})
+	}
+	fitListComponents(&out, 0, false, 4000)
+	if len(out.Components) == 0 || len(out.Components) >= 10 {
+		t.Fatalf("components = %d, want a trimmed page", len(out.Components))
+	}
+	payload, toolErr := decodeCursor(out.NextCursor)
+	if toolErr != nil {
+		t.Fatalf("decodeCursor() error = %+v", toolErr)
+	}
+	if payload.Offset != len(out.Components) {
+		t.Errorf("cursor offset = %d, want %d", payload.Offset, len(out.Components))
+	}
+	if payload.IncludeDeprecated {
+		t.Error("cursor includeDeprecated = true, want false")
+	}
+	if estimatedResponseBytes(out) > 4000 {
+		t.Errorf("estimated response = %d, want <= 4000", estimatedResponseBytes(out))
+	}
+}
+
 func TestFitComponentAPIRejectsOversizedResponse(t *testing.T) {
 	out := ComponentAPIOutput{
 		Resolved:   ResolvedVersion{Elements: "5.0.0"},
@@ -125,7 +185,7 @@ func TestFitComponentAPIRejectsOversizedResponse(t *testing.T) {
 			Description: strings.Repeat("description ", 100),
 		})
 	}
-	fitted := fitComponentAPI(out, hardResponseBudget)
+	fitted := fitComponentAPI(out, hardResponseBudget, false)
 	if fitted.Error == nil || fitted.Error.Code != "response_too_large" {
 		t.Fatalf("error = %+v, want response_too_large", fitted.Error)
 	}

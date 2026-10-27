@@ -50,8 +50,9 @@ type QueryTokensOutput struct {
 }
 
 // QueryTokens implements rhds_query_tokens.
-func (s *Service) QueryTokens(_ context.Context, input QueryTokensInput) QueryTokensOutput {
-	out := QueryTokensOutput{Tokens: []TokenResult{}}
+func (s *Service) QueryTokens(_ context.Context, input QueryTokensInput) (out QueryTokensOutput) {
+	defer func() { out = fitQueryTokens(out, defaultResponseBudget) }()
+	out = QueryTokensOutput{Tokens: []TokenResult{}}
 	if failure := s.dataFailure(); failure != nil {
 		out.Error = failure
 		return out
@@ -172,7 +173,7 @@ func (s *Service) QueryTokens(_ context.Context, input QueryTokensInput) QueryTo
 		}
 		out.Tokens = append(out.Tokens, result)
 	}
-	return fitQueryTokens(out, defaultResponseBudget)
+	return out
 }
 
 func tokenMatches(tok *token.Token, needle string) bool {

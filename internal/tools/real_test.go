@@ -13,6 +13,35 @@ import (
 	"github.com/redhat-ux/mcp/internal/data"
 )
 
+func allRealComponents(t *testing.T, service *Service, version string) ([]ComponentSummary, int) {
+	t.Helper()
+	var all []ComponentSummary
+	cursor := ""
+	total := 0
+	for page := 0; ; page++ {
+		out := service.ListComponents(context.Background(), ListComponentsInput{
+			Version:           version,
+			IncludeDeprecated: true,
+			PageSize:          100,
+			Cursor:            cursor,
+		})
+		if out.Error != nil {
+			t.Fatalf("ListComponents(%s, cursor=%q) error = %+v", version, cursor, out.Error)
+		}
+		if page == 0 {
+			total = out.Total
+		}
+		all = append(all, out.Components...)
+		if out.NextCursor == "" {
+			return all, total
+		}
+		cursor = out.NextCursor
+		if page > 20 {
+			t.Fatalf("pagination did not terminate for %s", version)
+		}
+	}
+}
+
 // TestRealEmbeddedData exercises the Phase B tools against `make data`
 // output. It is skipped on a clean checkout.
 func TestRealEmbeddedData(t *testing.T) {
@@ -29,20 +58,13 @@ func TestRealEmbeddedData(t *testing.T) {
 	}
 	service := New(store, nil)
 
-	components := service.ListComponents(context.Background(), ListComponentsInput{
-		Version:           "5.0.0",
-		IncludeDeprecated: true,
-		PageSize:          100,
-	})
-	if components.Error != nil {
-		t.Fatalf("ListComponents() error = %+v", components.Error)
-	}
-	if components.Total == 0 {
-		t.Fatal("ListComponents() returned no components for 5.0.0")
+	allComponents, total := allRealComponents(t, service, "5.0.0")
+	if total == 0 || len(allComponents) != total {
+		t.Fatalf("ListComponents() returned %d of %d components for 5.0.0", len(allComponents), total)
 	}
 	withDocs := 0
 	withoutDocs := 0
-	for _, component := range components.Components {
+	for _, component := range allComponents {
 		if component.DocsAvailable {
 			withDocs++
 		} else {
@@ -52,7 +74,7 @@ func TestRealEmbeddedData(t *testing.T) {
 	if withDocs == 0 || withoutDocs == 0 {
 		t.Fatalf("docsAvailable is not per component: %d with docs, %d without", withDocs, withoutDocs)
 	}
-	button, ok := findComponent(components.Components, "rh-button")
+	button, ok := findComponent(allComponents, "rh-button")
 	if !ok {
 		t.Fatal("rh-button missing from the 5.0.0 listing")
 	}
@@ -103,8 +125,90 @@ func TestRealEmbeddedData(t *testing.T) {
 	}
 }
 
-// TestRealManifestNormalization exercises both CEM schema versions against the
-// generated data for the oldest and newest bundled majors.
+// TestRealListComponentsDefaultPagesFitBudget pages every bundled version with
+// the default page size. Each page must fit the 8k budget, and the returned
+// cursor must continue the listing.
+func TestRealListComponentsDefaultPagesFitBudget(t *testing.T) {
+	if _, err := os.Stat(filepath.Join("..", "data", "dist", data.IndexPath)); err != nil {
+		t.Skip("generated data is absent; run make data")
+	}
+	dist, err := fs.Sub(data.Embedded(), "dist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := data.Open(dist)
+	if err != nil {
+		t.Fatalf("data.Open() = %v", err)
+	}
+	service := New(store, nil)
+	ctx := context.Background()
+
+	for _, version := range service.bundledElements() {
+		cursor := ""
+		seen := 0
+		for page := 0; ; page++ {
+			out := service.ListComponents(ctx, ListComponentsInput{
+				Version: version,
+				Cursor:  cursor,
+			})
+			if out.Error != nil {
+				t.Errorf("%s page %d error = %+v", version, page, out.Error)
+				break
+			}
+			if size := estimatedResponseBytes(out); size > defaultResponseBudget {
+				t.Errorf("%s page %d is %d bytes, want <= %d",
+					version, page, size, defaultResponseBudget)
+			}
+			seen += len(out.Components)
+			if out.NextCursor == "" {
+				if seen != out.Total {
+					t.Errorf("%s collected %d of %d components", version, seen, out.Total)
+				}
+				break
+			}
+			cursor = out.NextCursor
+			if page > 50 {
+				t.Errorf("%s pagination did not terminate", version)
+				break
+			}
+		}
+	}
+}
+
+// TestRealComponentAPISummariesFitBudget checks the default summary for every
+// bundled 5.0.0 component. The default must fit NFR-03 or return a follow-up
+// error; silent truncation is not allowed.
+func TestRealComponentAPISummariesFitBudget(t *testing.T) {
+	if _, err := os.Stat(filepath.Join("..", "data", "dist", data.IndexPath)); err != nil {
+		t.Skip("generated data is absent; run make data")
+	}
+	dist, err := fs.Sub(data.Embedded(), "dist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := data.Open(dist)
+	if err != nil {
+		t.Fatalf("data.Open() = %v", err)
+	}
+	service := New(store, nil)
+	ctx := context.Background()
+
+	components, _ := allRealComponents(t, service, "5.0.0")
+	for _, component := range components {
+		out := service.GetComponentAPI(ctx, GetComponentAPIInput{
+			TagName: component.TagName,
+			Version: "5.0.0",
+		})
+		if out.Error != nil {
+			t.Errorf("%s default summary error = %+v", component.TagName, out.Error)
+			continue
+		}
+		if size := estimatedResponseBytes(out); size > defaultResponseBudget {
+			t.Errorf("%s default summary is %d bytes, want <= %d",
+				component.TagName, size, defaultResponseBudget)
+		}
+	}
+}
 func TestRealManifestNormalization(t *testing.T) {
 	if _, err := os.Stat(filepath.Join("..", "data", "dist", data.IndexPath)); err != nil {
 		t.Skip("generated data is absent; run make data")

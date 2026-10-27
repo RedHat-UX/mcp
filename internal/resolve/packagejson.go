@@ -163,10 +163,18 @@ func addPackageSpec(spec, source string, set *candidateSet, warnings *[]string) 
 // isElementsSelector matches npm, yarn, and pnpm override keys such as
 // "@rhds/elements", "**/@rhds/elements", and "@rhds/elements@^5.0.0".
 func isElementsSelector(key string) bool {
-	return key == "@rhds/elements" ||
+	if key == "@rhds/elements" ||
 		strings.HasSuffix(key, "/@rhds/elements") ||
 		strings.HasPrefix(key, "@rhds/elements@") ||
-		strings.Contains(key, "@rhds/elements@")
+		strings.Contains(key, "@rhds/elements@") {
+		return true
+	}
+	// pnpm supports parent>child selectors, including >>.
+	if index := strings.LastIndex(key, ">"); index >= 0 {
+		segment := strings.TrimSpace(key[index+1:])
+		return segment == "@rhds/elements" || strings.HasPrefix(segment, "@rhds/elements@")
+	}
+	return false
 }
 
 func addOverrideCandidates(value any, source string, set *candidateSet, warnings *[]string) {
@@ -312,8 +320,8 @@ func workspaceDirectories(
 			} else if !info.IsDir() {
 				continue
 			}
-			relative, err := filepath.Rel(root, directory)
-			if err != nil || !withinRoot(root, directory) {
+			relative, err := filepath.Rel(reader.realRoot, directory)
+			if err != nil || !withinRoot(reader.realRoot, directory) {
 				continue
 			}
 			relative = filepath.ToSlash(relative)

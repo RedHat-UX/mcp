@@ -627,6 +627,16 @@ func TestOverrideSelectorKeys(t *testing.T) {
 			packageJSON: `{"overrides":{"@rhds/elements":{".":"4.2.2"}}}`,
 			want:        "4.2.2",
 		},
+		{
+			name:        "pnpm parent selector",
+			packageJSON: `{"pnpm":{"overrides":{"parent>@rhds/elements":"4.2.2"}}}`,
+			want:        "4.2.2",
+		},
+		{
+			name:        "pnpm deep parent selector",
+			packageJSON: `{"pnpm":{"overrides":{"parent>>@rhds/elements":"4.2.2"}}}`,
+			want:        "4.2.2",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -661,22 +671,44 @@ func TestOutOfRootSymlinkedAncestorIsRejected(t *testing.T) {
 
 func TestInRootPNPMSymlinkIsFollowed(t *testing.T) {
 	root := t.TempDir()
+	// Use a non-store target so the only way to find this package is through
+	// the in-root node_modules symlink.
 	writeFiles(t, root, map[string]string{
-		".pnpm/@rhds+elements@5.0.0/node_modules/@rhds/elements/package.json": `{"name":"@rhds/elements","version":"5.0.0"}`,
+		"vendor/elements/package.json": `{"name":"@rhds/elements","version":"5.0.0"}`,
 	})
 	if err := os.MkdirAll(filepath.Join(root, "node_modules", "@rhds"), 0o755); err != nil {
 		t.Fatalf("creating node_modules: %v", err)
 	}
-	target := filepath.Join(root, ".pnpm", "@rhds+elements@5.0.0", "node_modules", "@rhds", "elements")
+	target := filepath.Join(root, "vendor", "elements")
 	if err := os.Symlink(target, filepath.Join(root, "node_modules", "@rhds", "elements")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	result := resolveIn(t, root, "")
 	if result.Elements != "5.0.0" {
-		t.Errorf("elements = %q, want the in-root pnpm target 5.0.0", result.Elements)
+		t.Errorf("elements = %q, want the in-root symlink target 5.0.0", result.Elements)
 	}
-	if !strings.Contains(result.Source, "node_modules/@rhds/elements/package.json") {
-		t.Errorf("source = %q", result.Source)
+	if result.Source != "node_modules/@rhds/elements/package.json" {
+		t.Errorf("source = %q, want the symlinked node_modules path", result.Source)
+	}
+}
+
+func TestSymlinkedWorkspaceRoot(t *testing.T) {
+	realRoot := t.TempDir()
+	writeFiles(t, realRoot, map[string]string{
+		"package.json":              `{"private":true,"workspaces":["packages/app"]}`,
+		"packages/app/package.json": `{"dependencies":{"@rhds/elements":"^4"}}`,
+	})
+	linkParent := t.TempDir()
+	linkRoot := filepath.Join(linkParent, "workspace")
+	if err := os.Symlink(realRoot, linkRoot); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	result := resolveIn(t, linkRoot, "")
+	if result.Elements != "4.2.2" {
+		t.Errorf("elements = %q, want evidence from the symlinked root", result.Elements)
+	}
+	if result.Source != "packages/app/package.json" {
+		t.Errorf("source = %q, want the workspace package under the symlinked root", result.Source)
 	}
 }
 

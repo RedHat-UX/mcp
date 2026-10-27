@@ -236,8 +236,9 @@ func (s *Service) documentManager() (cemtypes.Manager, error) {
 // Slot-name and content-model rules are intentionally deferred: CEM does not
 // encode required slots or cardinality, and the #458 API will expose the
 // structure-aware findings this spike cannot make through DocumentManager.
-func (s *Service) ValidateMarkup(_ context.Context, input ValidateMarkupInput) ValidateMarkupOutput {
-	out := ValidateMarkupOutput{Issues: []MarkupIssue{}}
+func (s *Service) ValidateMarkup(_ context.Context, input ValidateMarkupInput) (out ValidateMarkupOutput) {
+	defer func() { out = fitValidateMarkup(out, defaultResponseBudget) }()
+	out = ValidateMarkupOutput{Issues: []MarkupIssue{}}
 	if failure := s.dataFailure(); failure != nil {
 		out.Error = failure
 		return out
@@ -419,7 +420,7 @@ func (s *Service) ValidateMarkup(_ context.Context, input ValidateMarkupInput) V
 		}
 		return a.Message < b.Message
 	})
-	return fitValidateMarkup(out, defaultResponseBudget)
+	return out
 }
 
 func declarationsByTag(pkg *manifest.Package) map[string]*manifest.CustomElementDeclaration {

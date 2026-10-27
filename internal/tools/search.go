@@ -91,13 +91,16 @@ func (s *Service) searchWithEnv(
 		return required, SearchOutput{}
 	}
 	if failure != nil {
-		return nil, SearchOutput{Hits: []SearchHit{}, Error: failure}
+		out := SearchOutput{Hits: []SearchHit{}, Error: failure}
+		fitSearch(&out, defaultResponseBudget)
+		return nil, out
 	}
 	return nil, s.search(resolved, input)
 }
 
-func (s *Service) search(resolved resolution, input SearchInput) SearchOutput {
-	out := SearchOutput{
+func (s *Service) search(resolved resolution, input SearchInput) (out SearchOutput) {
+	defer func() { fitSearch(&out, defaultResponseBudget) }()
+	out = SearchOutput{
 		Resolved: resolved.Resolved,
 		Hits:     []SearchHit{},
 	}
@@ -176,7 +179,6 @@ func (s *Service) search(resolved resolution, input SearchInput) SearchOutput {
 		hits = hits[:limit]
 	}
 	out.Hits = hits
-	fitSearch(&out, defaultResponseBudget)
 	return out
 }
 

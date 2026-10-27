@@ -99,7 +99,9 @@ type componentEntry struct {
 func (s *Service) ListComponents(_ context.Context, input ListComponentsInput) ListComponentsOutput {
 	resolved, failure := s.resolutionForListInput(input)
 	if failure != nil {
-		return ListComponentsOutput{Components: []ComponentSummary{}, Error: failure}
+		out := ListComponentsOutput{Components: []ComponentSummary{}, Error: failure}
+		fitListComponents(&out, 0, input.IncludeDeprecated, defaultResponseBudget)
+		return out
 	}
 	return s.listComponents(resolved, input)
 }
@@ -112,26 +114,25 @@ func (s *Service) listComponentsWithEnv(
 	request *mcp.CallToolRequest,
 	input ListComponentsInput,
 ) (*mcp.CallToolResult, ListComponentsOutput) {
+	fail := func(failure *ToolError) (*mcp.CallToolResult, ListComponentsOutput) {
+		out := ListComponentsOutput{Components: []ComponentSummary{}, Error: failure}
+		fitListComponents(&out, 0, input.IncludeDeprecated, defaultResponseBudget)
+		return nil, out
+	}
 	if input.Cursor != "" {
 		payload, cursorErr := decodeCursor(input.Cursor)
 		if cursorErr != nil {
-			return nil, ListComponentsOutput{Components: []ComponentSummary{}, Error: cursorErr}
+			return fail(cursorErr)
 		}
 		if payload.IncludeDeprecated != input.IncludeDeprecated {
-			return nil, ListComponentsOutput{
-				Components: []ComponentSummary{},
-				Error:      cursorOptionsMismatch(),
-			}
+			return fail(cursorOptionsMismatch())
 		}
 		if input.Version != "" && input.Version != payload.Version {
-			return nil, ListComponentsOutput{
-				Components: []ComponentSummary{},
-				Error:      cursorVersionMismatch(payload.Version, input.Version),
-			}
+			return fail(cursorVersionMismatch(payload.Version, input.Version))
 		}
 		resolved, failure := s.resolutionForBundledVersion(payload.Version)
 		if failure != nil {
-			return nil, ListComponentsOutput{Components: []ComponentSummary{}, Error: failure}
+			return fail(failure)
 		}
 		return nil, s.listComponents(resolved, input)
 	}
@@ -142,7 +143,7 @@ func (s *Service) listComponentsWithEnv(
 		return required, ListComponentsOutput{}
 	}
 	if failure != nil {
-		return nil, ListComponentsOutput{Components: []ComponentSummary{}, Error: failure}
+		return fail(failure)
 	}
 	return nil, s.listComponents(resolved, input)
 }
@@ -188,13 +189,18 @@ func cursorVersionMismatch(cursorVersion, requestedVersion string) *ToolError {
 		Code: "cursor_version_mismatch",
 		Message: fmt.Sprintf(
 			"cursor resolves elements@%s but the call requested elements@%s",
-			cursorVersion, requestedVersion),
+			truncateResponseText(cursorVersion, maxCandidateRunes),
+			truncateResponseText(requestedVersion, maxCandidateRunes)),
 		Hint: "restart pagination without a cursor or use the same version",
 	}
 }
 
-func (s *Service) listComponents(resolved resolution, input ListComponentsInput) ListComponentsOutput {
-	out := ListComponentsOutput{
+func (s *Service) listComponents(resolved resolution, input ListComponentsInput) (out ListComponentsOutput) {
+	startOffset := 0
+	defer func() {
+		fitListComponents(&out, startOffset, input.IncludeDeprecated, defaultResponseBudget)
+	}()
+	out = ListComponentsOutput{
 		Resolved:   resolved.Resolved,
 		Components: []ComponentSummary{},
 	}
@@ -254,6 +260,7 @@ func (s *Service) listComponents(resolved resolution, input ListComponentsInput)
 		}
 		offset = payload.Offset
 	}
+	startOffset = offset
 
 	end := min(offset+pageSize, len(entries))
 	for _, entry := range entries[offset:end] {
@@ -270,7 +277,6 @@ func (s *Service) listComponents(resolved resolution, input ListComponentsInput)
 	if end < len(entries) {
 		out.NextCursor = encodeCursor(version, end, input.IncludeDeprecated)
 	}
-	fitListComponents(&out, offset, input.IncludeDeprecated, defaultResponseBudget)
 	return out
 }
 

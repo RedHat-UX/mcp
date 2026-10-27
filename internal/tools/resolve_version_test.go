@@ -207,6 +207,108 @@ func TestPrepareResolutionMapsNoBundledElements(t *testing.T) {
 	}
 }
 
+func TestResolveVersionBoundsLargeAmbiguity(t *testing.T) {
+	var packages strings.Builder
+	for i := 0; i < 60; i++ {
+		if i > 0 {
+			packages.WriteByte(',')
+		}
+		fmt.Fprintf(&packages,
+			`"node_modules/a%d/node_modules/@rhds/elements":{"version":"4.0.%d"},`+
+				`"node_modules/b%d/node_modules/@rhds/elements":{"version":"5.0.%d"}`,
+			i, i, i, i)
+	}
+	root := writeWorkspace(t, map[string]string{
+		"package-lock.json": `{"lockfileVersion":3,"packages":{` + packages.String() + `}}`,
+	})
+	out := fixtureService(t).ResolveVersionInWorkspace(root, ResolveVersionInput{})
+	if out.Error == nil || out.Error.Code != "ambiguous_version" {
+		t.Fatalf("error = %+v, want ambiguous_version", out.Error)
+	}
+	if size := estimatedResponseBytes(out); size > defaultResponseBudget {
+		t.Fatalf("estimated response = %d bytes, want <= %d", size, defaultResponseBudget)
+	}
+	if out.Ambiguity == nil {
+		t.Fatal("ambiguity = nil")
+	}
+	if len(out.Ambiguity.Candidates) > 5 {
+		t.Errorf("ambiguity candidates = %d, want at most 5", len(out.Ambiguity.Candidates))
+	}
+	details, ok := out.Error.Details.(map[string]any)
+	if !ok {
+		t.Fatalf("details = %T, want a map", out.Error.Details)
+	}
+	if candidates, ok := details["candidates"].([]string); !ok || len(candidates) > 5 {
+		t.Errorf("details candidates = %#v, want at most 5 short labels", details["candidates"])
+	}
+}
+
+func TestErrorPathsAreBounded(t *testing.T) {
+	service := fixtureService(t)
+	huge := strings.Repeat("x", 200_000)
+
+	component := service.GetComponentAPI(context.Background(), GetComponentAPIInput{TagName: huge})
+	if component.Error == nil {
+		t.Fatal("expected an error for the huge tag name")
+	}
+	if size := estimatedResponseBytes(component); size > defaultResponseBudget {
+		t.Errorf("component error response = %d bytes, want <= %d", size, defaultResponseBudget)
+	}
+
+	section := service.GetComponentAPI(context.Background(), GetComponentAPIInput{
+		TagName:  "rh-button",
+		Sections: []string{huge},
+	})
+	if section.Error == nil || section.Error.Code != "invalid_argument" {
+		t.Fatalf("section error = %+v", section.Error)
+	}
+	if size := estimatedResponseBytes(section); size > defaultResponseBudget {
+		t.Errorf("section error response = %d bytes, want <= %d", size, defaultResponseBudget)
+	}
+
+	tokens := service.QueryTokens(context.Background(), QueryTokensInput{
+		Token:   huge,
+		Version: "3.2.0",
+	})
+	if tokens.Error == nil {
+		t.Fatal("expected an error for the huge token name")
+	}
+	if size := estimatedResponseBytes(tokens); size > defaultResponseBudget {
+		t.Errorf("token error response = %d bytes, want <= %d", size, defaultResponseBudget)
+	}
+
+	resolved := service.ResolveVersion(context.Background(), ResolveVersionInput{
+		Version:       "5.0.0",
+		TokensVersion: huge,
+	})
+	if resolved.Error == nil {
+		t.Fatal("expected an error for the huge tokens version")
+	}
+	if size := estimatedResponseBytes(resolved); size > defaultResponseBudget {
+		t.Errorf("resolve error response = %d bytes, want <= %d", size, defaultResponseBudget)
+	}
+
+	if _, componentEnv := service.getComponentAPIWithEnv(context.Background(), nil, GetComponentAPIInput{
+		TagName: huge,
+	}); estimatedResponseBytes(componentEnv) > defaultResponseBudget {
+		t.Errorf("component env error response = %d bytes, want <= %d",
+			estimatedResponseBytes(componentEnv), defaultResponseBudget)
+	}
+	if _, listEnv := service.listComponentsWithEnv(context.Background(), nil, ListComponentsInput{
+		Version: huge,
+	}); estimatedResponseBytes(listEnv) > defaultResponseBudget {
+		t.Errorf("list env error response = %d bytes, want <= %d",
+			estimatedResponseBytes(listEnv), defaultResponseBudget)
+	}
+	if _, searchEnv := service.searchWithEnv(context.Background(), nil, SearchInput{
+		Query:   "button",
+		Version: huge,
+	}); estimatedResponseBytes(searchEnv) > defaultResponseBudget {
+		t.Errorf("search env error response = %d bytes, want <= %d",
+			estimatedResponseBytes(searchEnv), defaultResponseBudget)
+	}
+}
+
 func TestResolveVersionBoundsHugeLockfileVersion(t *testing.T) {
 	huge := strings.Repeat("9", 1_000_000)
 	root := writeWorkspace(t, map[string]string{
@@ -234,7 +336,6 @@ func TestResolveVersionBoundsHugeLockfileVersion(t *testing.T) {
 }
 
 func TestResolveVersionCapsWarningCount(t *testing.T) {
-	root := t.TempDir()
 	files := map[string]string{
 		"package.json": `{"private":true,"workspaces":["packages/*"]}`,
 	}
@@ -242,7 +343,7 @@ func TestResolveVersionCapsWarningCount(t *testing.T) {
 		files[fmt.Sprintf("packages/pkg%02d/package.json", i)] =
 			fmt.Sprintf(`{"dependencies":{"@rhds/elements":"file:../missing-%d"}}`, i)
 	}
-	writeWorkspace(t, files)
+	root := writeWorkspace(t, files)
 	out := fixtureService(t).ResolveVersionInWorkspace(root, ResolveVersionInput{})
 	if out.Error != nil {
 		t.Fatalf("ResolveVersion() error = %+v", out.Error)
