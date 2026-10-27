@@ -235,6 +235,9 @@ Makefile contract (checked by grw `validate-makefile`):
   (section 4.3). Pinned inputs keep the six runs identical
 - win32 targets run `make data` on the host runner, then build inside the grw container,
   which mounts the source tree. The container needs no network
+- grw `build-binaries.yml` v1.4 runs plain `make <platform>` and passes no `VERSION`.
+  The Makefile defaults it to `0.0.1`, so Phase F must pass `VERSION=<tag>` or derive it
+  from the release tag for release binaries to report the tag
 - Optional upstream improvement: a grw input to download a prebuilt data artifact, so
   data is generated once per workflow instead of six times. Not filed
 

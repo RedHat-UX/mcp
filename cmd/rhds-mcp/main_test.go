@@ -279,6 +279,9 @@ func TestSIGTERMExitsCleanly(t *testing.T) {
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	if !scanner.Scan() {
+		// Wait for the exec stderr copy goroutine before reading the buffer.
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 		t.Fatalf("no initialize response before signal: %v (stderr: %s)",
 			scanner.Err(), stderr.String())
 	}

@@ -2,6 +2,9 @@
 # Copyright 2026 Red Hat, Inc.
 
 BINARY_NAME := rhds-mcp
+# grw build-binaries v1.4 runs plain `make <platform>` without VERSION, so CI
+# binaries report the default until Phase F passes VERSION=<tag> or derives it
+# from the release tag.
 VERSION ?= 0.0.1
 DIST_DIR := dist/bin
 GO_PACKAGE := ./cmd/rhds-mcp
