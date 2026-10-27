@@ -50,14 +50,19 @@ func initializeRequest(protocolVersion string) string {
 	)
 }
 
-func buildServerBinary(t *testing.T) string {
+// buildServerBinary builds the command, passing extra arguments to `go build`.
+// Tests that exercise build-time flags use extra to prove the flag wiring.
+func buildServerBinary(t *testing.T, extra ...string) string {
 	t.Helper()
 	binaryName := "rhds-mcp"
 	if runtime.GOOS == "windows" {
 		binaryName += ".exe"
 	}
 	binary := filepath.Join(t.TempDir(), binaryName)
-	build := exec.Command("go", "build", "-trimpath", "-o", binary, ".")
+	args := []string{"build", "-trimpath"}
+	args = append(args, extra...)
+	args = append(args, "-o", binary, ".")
+	build := exec.Command("go", args...)
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
 		t.Fatalf("building binary: %v", err)
@@ -65,10 +70,64 @@ func buildServerBinary(t *testing.T) string {
 	return binary
 }
 
-func TestAdvertisedProtocolVersionsAreNewestFirst(t *testing.T) {
-	want := []string{"2026-07-28", "2025-11-25", "2025-06-18"}
-	if got := supportedProtocolVersions; !slices.Equal(got, want) {
-		t.Fatalf("supportedProtocolVersions = %v, want %v", got, want)
+// TestAdvertisedProtocolVersions checks the list a 2026-07-28 client sees in
+// server/discover. Comparing it with supportedProtocolVersions proves both the
+// contents and the order, and fails if newServer stops applying the
+// SupportedProtocolVersions option: the SDK default list also contains
+// 2025-03-26 and 2024-11-05.
+func TestAdvertisedProtocolVersions(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	server := newServer(slog.New(slog.DiscardHandler))
+	var advertised []string
+	server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			result, err := next(ctx, method, req)
+			if method == "server/discover" && err == nil {
+				if discover, ok := result.(*mcp.DiscoverResult); ok {
+					advertised = slices.Clone(discover.SupportedVersions)
+				}
+			}
+			return result, err
+		}
+	})
+
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	session, err := server.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatalf("connecting server: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+
+	client := mcp.NewClient(&mcp.Implementation{
+		Name:    "rhds-mcp-test",
+		Version: "0.0.0",
+	}, nil)
+	clientSession, err := client.Connect(ctx, clientTransport, &mcp.ClientSessionOptions{
+		ProtocolVersion: supportedProtocolVersions[0],
+	})
+	if err != nil {
+		t.Fatalf("connecting client: %v", err)
+	}
+	defer func() { _ = clientSession.Close() }()
+
+	if !slices.Equal(advertised, supportedProtocolVersions) {
+		t.Errorf("advertised protocol versions = %v, want %v",
+			advertised, supportedProtocolVersions)
+	}
+}
+
+// TestAdvertisedProtocolVersionsAreSupportedBySDK guards against an SDK bump
+// that drops a version we advertise: mcp.NewServer panics on an unsupported
+// version, so failing here names the cause instead of surfacing a panic.
+func TestAdvertisedProtocolVersionsAreSupportedBySDK(t *testing.T) {
+	sdkVersions := mcp.SupportedProtocolVersions()
+	for _, version := range supportedProtocolVersions {
+		if !slices.Contains(sdkVersions, version) {
+			t.Errorf("advertised protocol version %q is not supported by the SDK (%v)",
+				version, sdkVersions)
+		}
 	}
 }
 
@@ -130,6 +189,54 @@ func TestInitializeAtEachAdvertisedVersion(t *testing.T) {
 	}
 }
 
+// TestInitializeFallsBackForExcludedLegacyVersion proves the server restricts
+// the protocol set rather than merely accepting the versions it lists. The
+// client asks for 2025-03-26, which the SDK supports but this server
+// deliberately excludes (PLAN section 8.1), and must be downgraded to the
+// newest handshake version we advertise.
+func TestInitializeFallsBackForExcludedLegacyVersion(t *testing.T) {
+	const excluded = "2025-03-26"
+	if slices.Contains(supportedProtocolVersions, excluded) {
+		t.Fatalf("test assumption broken: %q is advertised", excluded)
+	}
+	if !slices.Contains(mcp.SupportedProtocolVersions(), excluded) {
+		t.Skipf("SDK no longer supports %q; fallback behavior cannot be exercised", excluded)
+	}
+	want := supportedProtocolVersions[1]
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	server := newServer(slog.New(slog.DiscardHandler))
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	session, err := server.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatalf("connecting server: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+
+	client := mcp.NewClient(&mcp.Implementation{
+		Name:    "rhds-mcp-test",
+		Version: "0.0.0",
+	}, nil)
+	clientSession, err := client.Connect(ctx, clientTransport, &mcp.ClientSessionOptions{
+		ProtocolVersion: excluded,
+	})
+	if err != nil {
+		t.Fatalf("initialize at %s: %v", excluded, err)
+	}
+	defer func() { _ = clientSession.Close() }()
+
+	result := clientSession.InitializeResult()
+	if result == nil {
+		t.Fatal("initialize returned no result")
+	}
+	if result.ProtocolVersion != want {
+		t.Errorf("negotiated protocol version for excluded %s = %q, want %q",
+			excluded, result.ProtocolVersion, want)
+	}
+}
+
 func TestExitCode(t *testing.T) {
 	tests := []struct {
 		name string
@@ -153,8 +260,8 @@ func TestExitCode(t *testing.T) {
 
 // TestStdoutCarriesOnlyJSONRPC builds the real binary and drives it over stdio.
 // Every line written to stdout must be a JSON-RPC message; logs belong on
-// stderr. The fake method call provokes an error log so the assertion covers a
-// failing request as well as successful ones.
+// stderr. It also asserts the success and error response shapes: tools/list
+// succeeds and the unknown method returns a JSON-RPC error.
 func TestStdoutCarriesOnlyJSONRPC(t *testing.T) {
 	binary := buildServerBinary(t)
 	protocolVersion := supportedProtocolVersions[1]
@@ -209,8 +316,19 @@ func TestStdoutCarriesOnlyJSONRPC(t *testing.T) {
 			}
 			initializeVersion = result.ProtocolVersion
 			seen["1"] = true
-		case "2", "3":
-			seen[string(message.ID)] = true
+		case "2":
+			if len(message.Error) != 0 {
+				t.Errorf("tools/list returned an error: %s", message.Error)
+			}
+			if len(message.Result) == 0 {
+				t.Error("tools/list returned no result")
+			}
+			seen["2"] = true
+		case "3":
+			if len(message.Error) == 0 {
+				t.Errorf("unknown method returned no error, result: %s", message.Result)
+			}
+			seen["3"] = true
 		}
 	}
 	if initializeVersion != protocolVersion {
@@ -233,14 +351,69 @@ func TestStdoutCarriesOnlyJSONRPC(t *testing.T) {
 	if ctx.Err() != nil {
 		t.Fatalf("server did not exit: %v", ctx.Err())
 	}
-	// A nonzero exit after stdin closes is acceptable; the assertion here is
-	// about the stdout contract, not the shutdown code.
+	// A clean client disconnect (stdin EOF) is a normal shutdown and must exit
+	// zero; editors and the npm wrapper treat a nonzero status as a crash.
 	if waitErr != nil {
-		t.Logf("server exited with: %v", waitErr)
+		t.Fatalf("server exit after stdin EOF: %v (stderr: %s)", waitErr, stderr.String())
 	}
 
 	if stderr.Len() == 0 {
 		t.Error("expected diagnostic logs on stderr")
+	}
+}
+
+// TestLdflagsSetServerVersion locks the linker symbol the Makefile uses to
+// stamp VERSION into release binaries. A typo in either the Makefile or the
+// variable name would otherwise ship binaries reporting the default version.
+func TestLdflagsSetServerVersion(t *testing.T) {
+	const want = "9.9.9"
+	binary := buildServerBinary(t, "-ldflags=-X main.serverVersion="+want)
+	protocolVersion := supportedProtocolVersions[1]
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, binary)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("opening stdin: %v", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("opening stdout: %v", err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting server: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+
+	if _, err := fmt.Fprintln(stdin, initializeRequest(protocolVersion)); err != nil {
+		t.Fatalf("writing initialize: %v", err)
+	}
+
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	if !scanner.Scan() {
+		t.Fatalf("no initialize response: %v (stderr: %s)", scanner.Err(), stderr.String())
+	}
+	message := checkJSONRPCLine(t, scanner.Text())
+	var result struct {
+		ServerInfo struct {
+			Version string `json:"version"`
+		} `json:"serverInfo"`
+	}
+	if err := json.Unmarshal(message.Result, &result); err != nil {
+		t.Fatalf("decoding initialize result: %v", err)
+	}
+	if result.ServerInfo.Version != want {
+		t.Errorf("server version = %q, want %q", result.ServerInfo.Version, want)
 	}
 }
 
