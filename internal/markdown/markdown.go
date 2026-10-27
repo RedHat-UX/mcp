@@ -165,9 +165,21 @@ func CodeBlocks(text string) []CodeBlock {
 	return blocks
 }
 
-func opensFence(line string) (string, bool) {
+// OpensFence reports whether line opens a fenced code block and returns the
+// fence marker. The marker is the full run of backticks or tildes, so a fence
+// opened with four backticks is only closed by four or more.
+func OpensFence(line string) (string, bool) {
 	marker, _, ok := fenceOpen(line)
 	return marker, ok
+}
+
+// ClosesFence reports whether line closes a fence opened with marker.
+func ClosesFence(line, marker string) bool {
+	return closesFence(line, marker)
+}
+
+func opensFence(line string) (string, bool) {
+	return OpensFence(line)
 }
 
 func fenceOpen(line string) (marker, language string, ok bool) {
@@ -175,15 +187,25 @@ func fenceOpen(line string) (marker, language string, ok bool) {
 	if len(line)-len(trimmed) > 3 {
 		return "", "", false
 	}
-	switch {
-	case strings.HasPrefix(trimmed, "```"):
-		marker = "```"
-	case strings.HasPrefix(trimmed, "~~~"):
-		marker = "~~~"
-	default:
+	if len(trimmed) < 3 {
 		return "", "", false
 	}
-	language = strings.TrimSpace(strings.TrimPrefix(trimmed, marker))
+	character := trimmed[0]
+	if character != '`' && character != '~' {
+		return "", "", false
+	}
+	run := 0
+	for run < len(trimmed) && trimmed[run] == character {
+		run++
+	}
+	if run < 3 {
+		return "", "", false
+	}
+	marker = trimmed[:run]
+	language = strings.TrimSpace(trimmed[run:])
+	if character == '`' && strings.ContainsRune(language, '`') {
+		return "", "", false
+	}
 	if fields := strings.Fields(language); len(fields) > 0 {
 		language = fields[0]
 	}
@@ -195,7 +217,15 @@ func closesFence(line, marker string) bool {
 	if len(line)-len(trimmed) > 3 {
 		return false
 	}
-	return strings.HasPrefix(trimmed, marker)
+	if marker == "" {
+		return false
+	}
+	character := marker[0]
+	run := 0
+	for run < len(trimmed) && trimmed[run] == character {
+		run++
+	}
+	return run >= len(marker)
 }
 
 func atxHeading(line string) (text string, level int, ok bool) {

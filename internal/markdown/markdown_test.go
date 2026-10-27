@@ -110,3 +110,45 @@ func TestCodeBlocksParseFences(t *testing.T) {
 		t.Errorf("second block = %+v", blocks[1])
 	}
 }
+
+// A shorter fence inside a longer one is content, not a closer. Without the
+// full marker, a three-backtick line would close a four-backtick block and the
+// rest of the sample would be parsed as prose.
+func TestCodeBlocksRequireMatchingFenceLength(t *testing.T) {
+	input := strings.Join([]string{
+		"````markdown",
+		"```html",
+		"## heading inside the sample",
+		"```",
+		"after the inner fence",
+		"````",
+		"## Real heading",
+	}, "\n")
+	blocks := CodeBlocks(input)
+	if len(blocks) != 1 {
+		t.Fatalf("blocks = %d, want 1: %+v", len(blocks), blocks)
+	}
+	if !strings.Contains(blocks[0].Content, "## heading inside the sample") ||
+		!strings.Contains(blocks[0].Content, "after the inner fence") {
+		t.Errorf("block content = %q, want the whole fenced sample", blocks[0].Content)
+	}
+	chunks := Chunks([]byte(input))
+	if len(chunks) != 2 || chunks[1].Heading != "Real heading" {
+		t.Fatalf("chunks = %+v, want the real heading only after the fence", chunks)
+	}
+	if strings.Contains(chunks[0].Body, "after the inner fence") == false {
+		t.Errorf("fenced sample was split out of the intro chunk: %+v", chunks[0])
+	}
+}
+
+func TestFenceRunLengthMustBeAtLeastThree(t *testing.T) {
+	if _, ok := OpensFence("``"); ok {
+		t.Error("two backticks opened a fence")
+	}
+	if _, ok := OpensFence("````"); !ok {
+		t.Error("four backticks did not open a fence")
+	}
+	if ClosesFence("~~~", "````") {
+		t.Error("tilde fence closed a backtick fence")
+	}
+}

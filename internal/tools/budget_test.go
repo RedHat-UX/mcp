@@ -986,3 +986,68 @@ func TestErrorResponsesStayWithinBudgetWithLongWarnings(t *testing.T) {
 		t.Errorf("component API error response = %d bytes, want <= %d", size, budget)
 	}
 }
+
+// A hostile or mistaken version string must not be echoed back at full length,
+// and every migration-guide return path must respect the response budget.
+func TestMigrationGuideErrorResponseIsBounded(t *testing.T) {
+	huge := strings.Repeat("9", 100_000)
+	out := fixtureService(t).GetMigrationGuide(context.Background(), MigrationGuideInput{
+		FromVersion: huge,
+		ToVersion:   "4.2.2",
+	})
+	if out.Error == nil {
+		t.Fatal("error = nil, want artifact_not_found")
+	}
+	if size := wireResponseBytes(out); size > defaultResponseBudget {
+		t.Errorf("migration guide error response = %d bytes, want <= %d", size, defaultResponseBudget)
+	}
+	if len(out.Error.Message) > maxWarningRunes+3 {
+		t.Errorf("error message = %d runes, want <= %d", len(out.Error.Message), maxWarningRunes+3)
+	}
+}
+
+func TestDesignGuidelinesEchoedInputIsBounded(t *testing.T) {
+	huge := strings.Repeat("x", 100_000)
+	svc := fixtureService(t)
+
+	topic := svc.GetDesignGuidelines(context.Background(), DesignGuidelinesInput{
+		Topic:   huge,
+		Version: "5.0.0",
+	})
+	if size := wireResponseBytes(topic); size > defaultResponseBudget {
+		t.Errorf("topic response = %d bytes, want <= %d", size, defaultResponseBudget)
+	}
+	if len(topic.Topic) > maxCandidateRunes+3 {
+		t.Errorf("topic = %d runes, want <= %d", len(topic.Topic), maxCandidateRunes+3)
+	}
+
+	element := svc.GetDesignGuidelines(context.Background(), DesignGuidelinesInput{
+		Element: huge,
+		Version: "5.0.0",
+	})
+	if element.Error == nil {
+		t.Fatal("element error = nil, want docs_not_found")
+	}
+	if size := wireResponseBytes(element); size > defaultResponseBudget {
+		t.Errorf("element response = %d bytes, want <= %d", size, defaultResponseBudget)
+	}
+	if len(element.Element) > maxCandidateRunes+3 {
+		t.Errorf("element = %d runes, want <= %d", len(element.Element), maxCandidateRunes+3)
+	}
+}
+
+func TestUsageExamplesEchoedTagNameIsBounded(t *testing.T) {
+	huge := strings.Repeat("x", 100_000)
+	out := fixtureService(t).GetUsageExamples(context.Background(), UsageExamplesInput{
+		TagName: huge,
+	})
+	if out.Error == nil {
+		t.Fatal("error = nil, want component_not_found")
+	}
+	if size := wireResponseBytes(out); size > defaultResponseBudget {
+		t.Errorf("usage examples response = %d bytes, want <= %d", size, defaultResponseBudget)
+	}
+	if len(out.TagName) > maxCandidateRunes+3 {
+		t.Errorf("tag name = %d runes, want <= %d", len(out.TagName), maxCandidateRunes+3)
+	}
+}

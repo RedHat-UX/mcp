@@ -849,6 +849,99 @@ func shortenToken(result *TokenResult) bool {
 	return shortened
 }
 
+// fitDesignGuidelines bounds every return path of rhds_get_design_guidelines.
+// It caps the caller-supplied topic and element echoed in the output, bounds
+// errors, and trims chunks until the response fits.
+func fitDesignGuidelines(out DesignGuidelinesOutput, budget int) DesignGuidelinesOutput {
+	out.Resolved.Warnings = sanitizeWarnings(out.Resolved.Warnings)
+	out.Topic = truncateResponseText(out.Topic, maxCandidateRunes)
+	out.Element = truncateResponseText(out.Element, maxCandidateRunes)
+	if out.Error != nil {
+		out.Error = boundError(out.Error)
+		if estimatedResponseBytes(out) > budget {
+			out.Resolved.Warnings = summarizeWarnings(out.Resolved.Warnings)
+		}
+		if estimatedResponseBytes(out) > budget {
+			out.Resolved.Warnings = nil
+		}
+		if estimatedResponseBytes(out) > budget {
+			out.Error = responseTooLarge("the design guidelines response", budget)
+			out.Chunks = nil
+		}
+		return out
+	}
+	if estimatedResponseBytes(out) <= budget {
+		return out
+	}
+
+	hadChunks := len(out.Chunks) > 0
+	out.Truncated = true
+	out.Resolved.Warnings = append(out.Resolved.Warnings,
+		fmt.Sprintf("the response budget of %d bytes was reached; narrow the topic or element", budget))
+	for estimatedResponseBytes(out) > budget && len(out.Chunks) > 0 {
+		out.Chunks = out.Chunks[:len(out.Chunks)-1]
+	}
+	if estimatedResponseBytes(out) > budget {
+		out.Error = responseTooLarge("the design guidelines response", budget)
+		out.Chunks = nil
+		return out
+	}
+	if hadChunks && len(out.Chunks) == 0 {
+		out.Error = &ToolError{
+			Code:    "response_too_large",
+			Message: fmt.Sprintf("no guideline chunk fits the %d byte response budget", budget),
+			Hint:    "narrow the topic or element",
+		}
+	}
+	return out
+}
+
+// fitUsageExamples bounds every return path of rhds_get_usage_examples. It
+// caps the echoed tag name, bounds errors, and trims examples until the
+// response fits.
+func fitUsageExamples(out UsageExamplesOutput, budget int) UsageExamplesOutput {
+	out.Resolved.Warnings = sanitizeWarnings(out.Resolved.Warnings)
+	out.TagName = truncateResponseText(out.TagName, maxCandidateRunes)
+	if out.Error != nil {
+		out.Error = boundError(out.Error)
+		if estimatedResponseBytes(out) > budget {
+			out.Resolved.Warnings = summarizeWarnings(out.Resolved.Warnings)
+		}
+		if estimatedResponseBytes(out) > budget {
+			out.Resolved.Warnings = nil
+		}
+		if estimatedResponseBytes(out) > budget {
+			out.Error = responseTooLarge("the usage examples response", budget)
+			out.Examples = nil
+		}
+		return out
+	}
+	if estimatedResponseBytes(out) <= budget {
+		return out
+	}
+
+	hadExamples := len(out.Examples) > 0
+	out.Truncated = true
+	out.Resolved.Warnings = append(out.Resolved.Warnings,
+		fmt.Sprintf("the response budget of %d bytes was reached; use kind to request one example kind", budget))
+	for estimatedResponseBytes(out) > budget && len(out.Examples) > 0 {
+		out.Examples = out.Examples[:len(out.Examples)-1]
+	}
+	if estimatedResponseBytes(out) > budget {
+		out.Error = responseTooLarge("the usage examples response", budget)
+		out.Examples = nil
+		return out
+	}
+	if hadExamples && len(out.Examples) == 0 {
+		out.Error = &ToolError{
+			Code:    "response_too_large",
+			Message: fmt.Sprintf("no usage example fits the %d byte response budget", budget),
+			Hint:    "request one kind at a time",
+		}
+	}
+	return out
+}
+
 func fitValidateMarkup(out ValidateMarkupOutput, budget int) ValidateMarkupOutput {
 	out.Resolved.Warnings = sanitizeWarnings(out.Resolved.Warnings)
 	out.Warnings = sanitizeWarnings(out.Warnings)
@@ -1073,6 +1166,19 @@ type migrationCategoryCounts struct {
 func fitMigrationGuide(out MigrationGuideOutput, budget int) MigrationGuideOutput {
 	out.Resolved.Warnings = sanitizeWarnings(out.Resolved.Warnings)
 	if out.Error != nil {
+		out.Error = boundError(out.Error)
+		if estimatedResponseBytes(out) > budget {
+			out.Resolved.Warnings = summarizeWarnings(out.Resolved.Warnings)
+		}
+		if estimatedResponseBytes(out) > budget {
+			out.Resolved.Warnings = nil
+		}
+		if estimatedResponseBytes(out) > budget {
+			out.Error = responseTooLarge("the migration guide", budget)
+			out.Changes = nil
+			out.ReleaseNotes = nil
+			out.TokenChanges = nil
+		}
 		return out
 	}
 	if estimatedResponseBytes(out) <= budget {

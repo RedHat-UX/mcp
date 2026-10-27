@@ -102,7 +102,7 @@ func (s *Service) migrationGuideWithEnv(
 			TokenChanges: []TokenChange{},
 			Error:        failure,
 		}
-		return nil, fitMigrationGuide(out, defaultResponseBudget)
+		return nil, fitMigrationGuide(out, s.responseBudget(input.Detail == "full"))
 	}
 	if resolved.Resolved.Elements != "" {
 		input.FromVersion = resolved.Resolved.Elements
@@ -112,8 +112,17 @@ func (s *Service) migrationGuideWithEnv(
 	return nil, out
 }
 
-func (s *Service) migrationGuide(input MigrationGuideInput) MigrationGuideOutput {
-	out := MigrationGuideOutput{
+func (s *Service) migrationGuide(input MigrationGuideInput) (out MigrationGuideOutput) {
+	detail := input.Detail
+	if detail == "" {
+		detail = "summary"
+	}
+	// Every return path, including errors that echo caller-supplied versions,
+	// goes through the response bound.
+	defer func() {
+		out = fitMigrationGuide(out, s.responseBudget(detail == "full"))
+	}()
+	out = MigrationGuideOutput{
 		Changes:      []MigrationChange{},
 		ReleaseNotes: []ReleaseNoteExample{},
 		TokenChanges: []TokenChange{},
@@ -121,10 +130,6 @@ func (s *Service) migrationGuide(input MigrationGuideInput) MigrationGuideOutput
 	if failure := s.dataFailure(); failure != nil {
 		out.Error = failure
 		return out
-	}
-	detail := input.Detail
-	if detail == "" {
-		detail = "summary"
 	}
 	switch detail {
 	case "summary", "full":
@@ -266,7 +271,7 @@ func (s *Service) migrationGuide(input MigrationGuideInput) MigrationGuideOutput
 		}
 	}
 
-	return fitMigrationGuide(out, s.responseBudget(detail == "full"))
+	return out
 }
 
 const maxMigrationLimit = 200
@@ -288,7 +293,8 @@ func normalizeMigrationSections(requested []string) (map[string]bool, []string, 
 		section = strings.TrimSpace(section)
 		if !validSet[section] {
 			return nil, nil, invalidArgument(fmt.Sprintf(
-				"unknown section %q; valid sections: %s", section, strings.Join(valid, ", ")))
+				"unknown section %q; valid sections: %s",
+				truncateResponseText(section, maxCandidateRunes), strings.Join(valid, ", ")))
 		}
 		selected[section] = true
 	}
@@ -330,7 +336,7 @@ func (s *Service) normalizeMigrationVersion(value, field string) (string, *ToolE
 	}
 	return "", &ToolError{
 		Code:    "artifact_not_found",
-		Message: fmt.Sprintf("elements@%s is not bundled", trimmed),
+		Message: fmt.Sprintf("elements@%s is not bundled", truncateResponseText(trimmed, maxCandidateRunes)),
 		Hint:    "call rhds_resolve_version to list bundled versions",
 	}
 }
@@ -543,26 +549,11 @@ func releaseNoteBullets(body string) []string {
 }
 
 func opensFenceLine(line string) (string, bool) {
-	trimmed := strings.TrimLeft(line, " ")
-	if len(line)-len(trimmed) > 3 {
-		return "", false
-	}
-	switch {
-	case strings.HasPrefix(trimmed, "```"):
-		return "```", true
-	case strings.HasPrefix(trimmed, "~~~"):
-		return "~~~", true
-	default:
-		return "", false
-	}
+	return markdown.OpensFence(line)
 }
 
 func closesFenceLine(line, marker string) bool {
-	trimmed := strings.TrimLeft(line, " ")
-	if len(line)-len(trimmed) > 3 {
-		return false
-	}
-	return strings.HasPrefix(trimmed, marker)
+	return markdown.ClosesFence(line, marker)
 }
 
 func releaseNoteTitle(bullet string) string {
@@ -616,23 +607,49 @@ func beforeAfterPairs(bullet string) []beforeAfterPair {
 
 // nearestLabel walks upward from the line before a code fence and returns
 // "before" or "after" when it finds that label, stopping at a bullet boundary.
+// Release notes write labels as plain text ("Before:"), ATX headings
+// ("##### Before"), and annotated headings ("After, for the new API:").
 func nearestLabel(lines []string, start int) string {
 	for index := start; index >= 0 && index < len(lines); index-- {
 		line := strings.TrimSpace(lines[index])
 		if line == "" {
 			continue
 		}
+		if heading := strings.TrimLeft(line, "#"); heading != line {
+			heading = strings.TrimSpace(heading)
+			if heading != "" {
+				line = heading
+			}
+		}
 		line = strings.Trim(line, "*_` ")
 		switch {
-		case strings.EqualFold(line, "before:"):
+		case hasLabelPrefix(line, "before"):
 			return "before"
-		case strings.EqualFold(line, "after:"):
+		case hasLabelPrefix(line, "after"):
 			return "after"
 		case strings.HasPrefix(line, "- "):
 			return ""
 		}
 	}
 	return ""
+}
+
+// hasLabelPrefix reports whether line is a bare label or a label followed by
+// punctuation or an annotation, so "aftermath" does not match "after".
+func hasLabelPrefix(line, label string) bool {
+	if !strings.HasPrefix(strings.ToLower(line), label) {
+		return false
+	}
+	rest := line[len(label):]
+	if rest == "" {
+		return true
+	}
+	switch rest[0] {
+	case ':', ',', '(', '[', '-', ' ':
+		return true
+	default:
+		return false
+	}
 }
 
 // findTagName returns the first real custom-element tag in text. It rejects

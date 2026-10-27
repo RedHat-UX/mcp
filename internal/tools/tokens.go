@@ -73,12 +73,15 @@ const (
 
 // QueryTokens implements rhds_query_tokens.
 func (s *Service) QueryTokens(_ context.Context, input QueryTokensInput) QueryTokensOutput {
+	budget := s.responseBudget(input.Detail == "full")
 	if failure := s.dataFailure(); failure != nil {
-		return QueryTokensOutput{Tokens: []TokenResult{}, Error: failure}
+		return fitQueryTokensPage(
+			QueryTokensOutput{Tokens: []TokenResult{}, Error: failure}, budget, 0)
 	}
 	version, fromElements, failure := s.resolveTokensVersion(input.Version)
 	if failure != nil {
-		return QueryTokensOutput{Tokens: []TokenResult{}, Error: failure}
+		return fitQueryTokensPage(
+			QueryTokensOutput{Tokens: []TokenResult{}, Error: failure}, budget, 0)
 	}
 	resolved := ResolvedVersion{Tokens: version, Source: "bundled"}
 	if fromElements != "" {
@@ -118,13 +121,19 @@ func (s *Service) queryTokensWithEnv(
 		return required, QueryTokensOutput{}
 	}
 	if failure != nil {
-		return nil, QueryTokensOutput{Tokens: []TokenResult{}, Error: failure}
+		return nil, fitQueryTokensPage(
+			QueryTokensOutput{Tokens: []TokenResult{}, Error: failure},
+			s.responseBudget(input.Detail == "full"), 0)
 	}
 	return nil, s.queryTokens(resolved.Resolved, input)
 }
 
-func (s *Service) queryTokens(resolved ResolvedVersion, input QueryTokensInput) QueryTokensOutput {
-	out := QueryTokensOutput{Tokens: []TokenResult{}, Resolved: resolved}
+func (s *Service) queryTokens(resolved ResolvedVersion, input QueryTokensInput) (out QueryTokensOutput) {
+	pageOffset := 0
+	defer func() {
+		out = fitQueryTokensPage(out, s.responseBudget(input.Detail == "full"), pageOffset)
+	}()
+	out = QueryTokensOutput{Tokens: []TokenResult{}, Resolved: resolved}
 	if failure := s.dataFailure(); failure != nil {
 		out.Error = failure
 		return out
@@ -255,6 +264,7 @@ func (s *Service) queryTokens(resolved ResolvedVersion, input QueryTokensInput) 
 		}
 		offset = payload.Offset
 	}
+	pageOffset = offset
 
 	effectiveTheme := theme
 	if theme == "auto" {
@@ -275,7 +285,7 @@ func (s *Service) queryTokens(resolved ResolvedVersion, input QueryTokensInput) 
 	if end < len(selected) {
 		out.NextCursor = encodeCursor(version, end, false)
 	}
-	return fitQueryTokensPage(out, s.responseBudget(detail == "full"), offset)
+	return out
 }
 
 // resolveTokensVersion accepts a tokens version or, when the argument is not a
@@ -295,6 +305,7 @@ func (s *Service) resolveTokensVersion(requested string) (version, fromElements 
 			return coupled, elementsVersion, nil
 		}
 	}
+	requested = truncateResponseText(requested, maxCandidateRunes)
 	return "", "", &ToolError{
 		Code: "artifact_not_found",
 		Message: fmt.Sprintf(

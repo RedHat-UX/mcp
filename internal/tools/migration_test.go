@@ -494,3 +494,34 @@ func TestMigrationGuideWithEnvResolvesFromVersion(t *testing.T) {
 			out.FromVersion, out.ToVersion)
 	}
 }
+
+func TestBeforeAfterPairsAcceptsHeadingAndAnnotatedLabels(t *testing.T) {
+	bullet := strings.Join([]string{
+		"- abc1234: `<rh-card>` changed.",
+		"",
+		"##### Before",
+		"",
+		"```html",
+		"A",
+		"```",
+		"",
+		"**After, for the new API:**",
+		"",
+		"```html",
+		"B",
+		"```",
+		"",
+		"#### Aftermath is not a label",
+		"",
+		"```html",
+		"C",
+		"```",
+	}, "\n")
+	pairs := beforeAfterPairs(bullet)
+	if len(pairs) != 1 {
+		t.Fatalf("pairs = %+v, want 1", pairs)
+	}
+	if pairs[0].Before != "A" || pairs[0].After != "B" {
+		t.Errorf("pair = %+v, want A before and B after", pairs[0])
+	}
+}

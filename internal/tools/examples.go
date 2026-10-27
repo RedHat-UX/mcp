@@ -67,7 +67,8 @@ type UsageExamplesOutput struct {
 func (s *Service) GetUsageExamples(_ context.Context, input UsageExamplesInput) UsageExamplesOutput {
 	resolved, failure := s.examplesResolution(input.Version)
 	if failure != nil {
-		return UsageExamplesOutput{Examples: []UsageExample{}, Error: failure}
+		return fitUsageExamples(
+			UsageExamplesOutput{Examples: []UsageExample{}, Error: failure}, s.responseBudget(false))
 	}
 	return s.usageExamples(resolved, input)
 }
@@ -80,7 +81,8 @@ func (s *Service) usageExamplesWithEnv(
 	if input.Version != "" && s.store != nil && s.store.Has(packageDocs, input.Version, kindDocs) {
 		resolved, failure := s.examplesResolution(input.Version)
 		if failure != nil {
-			return nil, UsageExamplesOutput{Examples: []UsageExample{}, Error: failure}
+			return nil, fitUsageExamples(
+				UsageExamplesOutput{Examples: []UsageExample{}, Error: failure}, s.responseBudget(false))
 		}
 		return nil, s.usageExamples(resolved, input)
 	}
@@ -90,7 +92,8 @@ func (s *Service) usageExamplesWithEnv(
 		return required, UsageExamplesOutput{}
 	}
 	if failure != nil {
-		return nil, UsageExamplesOutput{Examples: []UsageExample{}, Error: failure}
+		return nil, fitUsageExamples(
+			UsageExamplesOutput{Examples: []UsageExample{}, Error: failure}, s.responseBudget(false))
 	}
 	return nil, s.usageExamples(resolved, input)
 }
@@ -105,7 +108,8 @@ func (s *Service) examplesResolution(explicit string) (resolution, *ToolError) {
 			return resolution{}, &ToolError{
 				Code: "artifact_not_found",
 				Message: fmt.Sprintf(
-					"docs snapshot %s has no matching bundled elements version", explicit),
+					"docs snapshot %s has no matching bundled elements version",
+					truncateResponseText(explicit, maxCandidateRunes)),
 				Hint: "pass an @rhds/elements version instead",
 			}
 		}
@@ -148,8 +152,11 @@ func (s *Service) elementsVersionForDocsTag(tag string) (string, bool) {
 	return "", false
 }
 
-func (s *Service) usageExamples(resolved resolution, input UsageExamplesInput) UsageExamplesOutput {
-	out := UsageExamplesOutput{
+func (s *Service) usageExamples(resolved resolution, input UsageExamplesInput) (out UsageExamplesOutput) {
+	defer func() {
+		out = fitUsageExamples(out, s.responseBudget(false))
+	}()
+	out = UsageExamplesOutput{
 		Resolved: resolved.Resolved,
 		Examples: []UsageExample{},
 	}
@@ -202,23 +209,6 @@ func (s *Service) usageExamples(resolved resolution, input UsageExamplesInput) U
 	}
 
 	out.Total = len(out.Examples)
-	budget := s.responseBudget(false)
-	if estimatedResponseBytes(out) > budget {
-		out.Truncated = true
-		out.Resolved.Warnings = append(out.Resolved.Warnings,
-			fmt.Sprintf("the response budget of %d bytes was reached; use kind to request one example kind", budget))
-		for len(out.Examples) > 0 && estimatedResponseBytes(out) > budget {
-			out.Examples = out.Examples[:len(out.Examples)-1]
-		}
-		if len(out.Examples) == 0 && out.Total > 0 {
-			out.Error = &ToolError{
-				Code: "response_too_large",
-				Message: fmt.Sprintf(
-					"no usage example fits the %d byte response budget", budget),
-				Hint: "request one kind at a time",
-			}
-		}
-	}
 	return out
 }
 

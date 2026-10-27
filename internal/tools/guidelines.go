@@ -54,7 +54,8 @@ type DesignGuidelinesOutput struct {
 func (s *Service) GetDesignGuidelines(_ context.Context, input DesignGuidelinesInput) DesignGuidelinesOutput {
 	resolved, failure := s.guidelinesResolution(input.Version)
 	if failure != nil {
-		return DesignGuidelinesOutput{Chunks: []GuidelineChunk{}, Error: failure}
+		return fitDesignGuidelines(
+			DesignGuidelinesOutput{Chunks: []GuidelineChunk{}, Error: failure}, s.responseBudget(false))
 	}
 	return s.designGuidelines(resolved, input)
 }
@@ -67,7 +68,8 @@ func (s *Service) guidelinesWithEnv(
 	if input.Version != "" && s.store != nil && s.store.Has(packageDocs, input.Version, kindDocs) {
 		resolved, failure := s.guidelinesResolution(input.Version)
 		if failure != nil {
-			return nil, DesignGuidelinesOutput{Chunks: []GuidelineChunk{}, Error: failure}
+			return nil, fitDesignGuidelines(
+				DesignGuidelinesOutput{Chunks: []GuidelineChunk{}, Error: failure}, s.responseBudget(false))
 		}
 		return nil, s.designGuidelines(resolved, input)
 	}
@@ -77,7 +79,8 @@ func (s *Service) guidelinesWithEnv(
 		return required, DesignGuidelinesOutput{}
 	}
 	if failure != nil {
-		return nil, DesignGuidelinesOutput{Chunks: []GuidelineChunk{}, Error: failure}
+		return nil, fitDesignGuidelines(
+			DesignGuidelinesOutput{Chunks: []GuidelineChunk{}, Error: failure}, s.responseBudget(false))
 	}
 	return nil, s.designGuidelines(resolved, input)
 }
@@ -99,8 +102,11 @@ func (s *Service) guidelinesResolution(explicit string) (resolution, *ToolError)
 	return s.bundledResolution(explicit, "")
 }
 
-func (s *Service) designGuidelines(resolved resolution, input DesignGuidelinesInput) DesignGuidelinesOutput {
-	out := DesignGuidelinesOutput{
+func (s *Service) designGuidelines(resolved resolution, input DesignGuidelinesInput) (out DesignGuidelinesOutput) {
+	defer func() {
+		out = fitDesignGuidelines(out, s.responseBudget(false))
+	}()
+	out = DesignGuidelinesOutput{
 		Resolved: resolved.Resolved,
 		Topic:    strings.TrimSpace(input.Topic),
 		Element:  strings.TrimSpace(input.Element),
@@ -218,24 +224,6 @@ func (s *Service) designGuidelines(resolved resolution, input DesignGuidelinesIn
 			fmt.Sprintf("results were limited to %d chunks; narrow the topic or element, or raise the limit", limit))
 	}
 	out.Chunks = chunks
-
-	budget := s.responseBudget(false)
-	if estimatedResponseBytes(out) > budget {
-		out.Truncated = true
-		out.Resolved.Warnings = append(out.Resolved.Warnings,
-			fmt.Sprintf("the response budget of %d bytes was reached; narrow the topic or element", budget))
-		for len(out.Chunks) > 0 && estimatedResponseBytes(out) > budget {
-			out.Chunks = out.Chunks[:len(out.Chunks)-1]
-		}
-		if len(out.Chunks) == 0 && len(chunks) > 0 {
-			out.Error = &ToolError{
-				Code: "response_too_large",
-				Message: fmt.Sprintf(
-					"no guideline chunk fits the %d byte response budget", budget),
-				Hint: "narrow the topic or element",
-			}
-		}
-	}
 	return out
 }
 
