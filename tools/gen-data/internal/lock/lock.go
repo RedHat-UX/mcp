@@ -292,11 +292,14 @@ func satisfiesAlternative(v, spec string) bool {
 	if strings.Contains(spec, " - ") {
 		parts := strings.SplitN(spec, " - ", 2)
 		low, lok := lowerBound(strings.TrimSpace(parts[0]))
-		high, hok := upperBound(strings.TrimSpace(parts[1]))
+		high, inclusive, hok := hyphenUpperBound(strings.TrimSpace(parts[1]))
 		if !lok || !hok {
 			return false
 		}
-		return semver.Compare(v, low) >= 0 && semver.Compare(v, high) <= 0
+		if inclusive {
+			return semver.Compare(v, low) >= 0 && semver.Compare(v, high) <= 0
+		}
+		return semver.Compare(v, low) >= 0 && semver.Compare(v, high) < 0
 	}
 	fields := strings.Fields(spec)
 	if len(fields) == 0 {
@@ -337,10 +340,20 @@ func satisfiesComparator(v, comparator string) bool {
 		low, ok := lowerBound(comparator[2:])
 		return ok && semver.Compare(v, low) >= 0
 	case strings.HasPrefix(comparator, "<="):
-		high, ok := lowerBound(comparator[2:])
+		spec := comparator[2:]
+		if isPartialVersion(spec) {
+			next, ok := nextPartialBound(spec)
+			return ok && semver.Compare(v, next) < 0
+		}
+		high, ok := lowerBound(spec)
 		return ok && semver.Compare(v, high) <= 0
 	case strings.HasPrefix(comparator, ">"):
-		low, ok := lowerBound(comparator[1:])
+		spec := comparator[1:]
+		if isPartialVersion(spec) {
+			next, ok := nextPartialBound(spec)
+			return ok && semver.Compare(v, next) >= 0
+		}
+		low, ok := lowerBound(spec)
 		return ok && semver.Compare(v, low) > 0
 	case strings.HasPrefix(comparator, "<"):
 		high, ok := lowerBound(comparator[1:])
@@ -390,33 +403,29 @@ func lowerBound(spec string) (string, bool) {
 }
 
 func caretUpper(spec string) (string, bool) {
-	parts := strings.Split(strings.TrimPrefix(strings.TrimSpace(spec), "v"), ".")
-	numbers := make([]int, 3)
-	for i := 0; i < 3; i++ {
-		if i >= len(parts) || parts[i] == "x" || parts[i] == "X" || parts[i] == "*" {
-			numbers[i] = 0
-			continue
-		}
-		value, err := strconv.Atoi(parts[i])
-		if err != nil {
-			return "", false
-		}
-		numbers[i] = value
+	parts := splitVersion(spec)
+	numbers, ok := numericParts(parts)
+	if !ok {
+		return "", false
 	}
 	switch {
 	case numbers[0] > 0:
 		return fmt.Sprintf("v%d.0.0", numbers[0]+1), true
+	case len(parts) < 2 || isWildcard(parts[1]):
+		// ^0 -> <1.0.0
+		return "v1.0.0", true
 	case numbers[1] > 0:
 		return fmt.Sprintf("v0.%d.0", numbers[1]+1), true
-	case len(parts) < 3:
-		return "v1.0.0", true
+	case len(parts) < 3 || isWildcard(parts[2]):
+		// ^0.0 -> <0.1.0
+		return "v0.1.0", true
 	default:
 		return fmt.Sprintf("v0.0.%d", numbers[2]+1), true
 	}
 }
 
 func tildeUpper(spec string) (string, bool) {
-	parts := strings.Split(strings.TrimPrefix(strings.TrimSpace(spec), "v"), ".")
+	parts := splitVersion(spec)
 	if len(parts) < 2 || parts[0] == "" {
 		return "", false
 	}
@@ -424,7 +433,7 @@ func tildeUpper(spec string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	if len(parts) == 1 || parts[1] == "x" || parts[1] == "X" || parts[1] == "*" {
+	if len(parts) == 1 || isWildcard(parts[1]) {
 		return fmt.Sprintf("v%d.0.0", major+1), true
 	}
 	minor, err := strconv.Atoi(parts[1])
@@ -434,6 +443,65 @@ func tildeUpper(spec string) (string, bool) {
 	return fmt.Sprintf("v%d.%d.0", major, minor+1), true
 }
 
-func upperBound(spec string) (string, bool) {
-	return lowerBound(spec)
+// hyphenUpperBound returns the upper bound of a hyphen range. An exact upper
+// version is inclusive; a partial upper version (for example "2.3") means the
+// whole 2.3.x line, so the exclusive bound is 2.4.0.
+func hyphenUpperBound(spec string) (string, bool, bool) {
+	if !isPartialVersion(spec) {
+		bound, ok := lowerBound(spec)
+		return bound, true, ok
+	}
+	bound, ok := nextPartialBound(spec)
+	return bound, false, ok
+}
+
+func isPartialVersion(spec string) bool {
+	parts := splitVersion(spec)
+	if len(parts) < 3 {
+		return true
+	}
+	for _, part := range parts {
+		if isWildcard(part) {
+			return true
+		}
+	}
+	return false
+}
+
+// nextPartialBound returns the first version after the partial range:
+// 1 -> 2.0.0, 1.2 -> 1.3.0, 1.2.x -> 1.3.0.
+func nextPartialBound(spec string) (string, bool) {
+	parts := splitVersion(spec)
+	numbers, ok := numericParts(parts)
+	if !ok {
+		return "", false
+	}
+	if len(parts) < 2 || isWildcard(parts[1]) {
+		return fmt.Sprintf("v%d.0.0", numbers[0]+1), true
+	}
+	return fmt.Sprintf("v%d.%d.0", numbers[0], numbers[1]+1), true
+}
+
+func splitVersion(spec string) []string {
+	return strings.Split(strings.TrimPrefix(strings.TrimSpace(spec), "v"), ".")
+}
+
+func numericParts(parts []string) ([3]int, bool) {
+	var numbers [3]int
+	for i := 0; i < 3; i++ {
+		if i >= len(parts) || isWildcard(parts[i]) {
+			numbers[i] = 0
+			continue
+		}
+		value, err := strconv.Atoi(parts[i])
+		if err != nil {
+			return numbers, false
+		}
+		numbers[i] = value
+	}
+	return numbers, true
+}
+
+func isWildcard(part string) bool {
+	return part == "x" || part == "X" || part == "*"
 }

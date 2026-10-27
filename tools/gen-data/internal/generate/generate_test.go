@@ -6,11 +6,13 @@ package generate
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/redhat-ux/mcp/internal/data"
+	"github.com/redhat-ux/mcp/tools/gen-data/internal/lock"
 )
 
 const lockDigest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -289,6 +291,25 @@ func TestGenerateRequiresLockDigest(t *testing.T) {
 	inputs.LockDigest = ""
 	if _, err := Generate(inputs, t.TempDir()); err == nil {
 		t.Fatal("Generate() accepted an empty lock digest")
+	}
+}
+
+func TestParallelVersionErrorsAreDeterministic(t *testing.T) {
+	items := []lock.PackageVersion{
+		{Version: "3.0.0"},
+		{Version: "1.0.0"},
+		{Version: "2.0.0"},
+	}
+	for i := 0; i < 20; i++ {
+		_, err := parallelVersions(items, 3, func(version lock.PackageVersion) (struct{}, error) {
+			return struct{}{}, fmt.Errorf("failed %s", version.Version)
+		})
+		if err == nil {
+			t.Fatal("parallelVersions() = nil error")
+		}
+		if got, want := err.Error(), "failed 1.0.0"; got != want {
+			t.Fatalf("parallelVersions() error = %q, want %q", got, want)
+		}
 	}
 }
 

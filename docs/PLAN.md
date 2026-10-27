@@ -403,7 +403,8 @@ Prereleases are excluded.
 Docs snapshots: latest release tag per elements major: `v1.4.5`, `v2.1.2`, `v3.2.0`,
 `v4.2.2`, `v5.0.0`. Docs-only topics use the latest snapshot. This trades complete
 historical prose for reasonable binary size. Revisit if users need minor-level docs
-history.
+history. `make data-update` derives the tag set from the latest stable elements version
+per major in the lock, so a new major must have a matching docs tag or the update fails.
 
 ### 5.2 CEM schema normalization
 

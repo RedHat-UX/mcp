@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 
+	"golang.org/x/mod/semver"
+
 	"github.com/redhat-ux/mcp/tools/gen-data/internal/fetch"
 )
 
@@ -26,12 +28,31 @@ var packageSpecs = []struct {
 // DocsRepo is the source of documentation snapshots.
 const DocsRepo = "RedHat-UX/red-hat-design-system"
 
-// DocsTags are the latest release tag per elements major, per docs/PLAN.md
-// section 5.1.
-var DocsTags = []string{"v1.4.5", "v2.1.2", "v3.2.0", "v4.2.2", "v5.0.0"}
-
 // AIGuidelinesPath is the submodule path inside DocsRepo.
 const AIGuidelinesPath = "docs/ai-guidelines"
+
+// DocsTagsFromElements returns the latest release tag for each elements major
+// in the given stable version list. Deriving the tags keeps a future elements
+// major from being pinned in the lock without a docs snapshot.
+func DocsTagsFromElements(versions []string) []string {
+	latest := make(map[string]string)
+	for _, version := range StableVersions(versions) {
+		tag := "v" + strings.TrimPrefix(version, "v")
+		major := semver.Major(tag)
+		if major == "" {
+			continue
+		}
+		latest[major] = tag
+	}
+	tags := make([]string, 0, len(latest))
+	for _, tag := range latest {
+		tags = append(tags, tag)
+	}
+	sort.Slice(tags, func(i, j int) bool {
+		return compareVersions(tags[i], tags[j]) < 0
+	})
+	return tags
+}
 
 // Update resolves the current published inputs and returns a fresh lock.
 // It is the only function that writes new pins; `make data` never calls it.
@@ -76,10 +97,23 @@ func Update(ctx context.Context, client *fetch.Client) (*Lock, error) {
 		})
 	}
 
-	for _, tag := range DocsTags {
+	elements, ok := result.PackageByID("elements")
+	if !ok {
+		return nil, fmt.Errorf("lock has no elements package")
+	}
+	elementVersions := make([]string, 0, len(elements.Versions))
+	for _, version := range elements.Versions {
+		elementVersions = append(elementVersions, version.Version)
+	}
+	docsTags := DocsTagsFromElements(elementVersions)
+	if len(docsTags) == 0 {
+		return nil, fmt.Errorf("elements package has no stable versions to derive docs tags from")
+	}
+
+	for _, tag := range docsTags {
 		commit, err := client.GitHubCommit(ctx, DocsRepo, tag)
 		if err != nil {
-			return nil, fmt.Errorf("resolving %s@%s: %w", DocsRepo, tag, err)
+			return nil, fmt.Errorf("resolving docs tag %s for an elements major: %w", tag, err)
 		}
 		submodule, err := client.GitHubSubmoduleCommit(ctx, DocsRepo, commit, AIGuidelinesPath)
 		if err != nil {

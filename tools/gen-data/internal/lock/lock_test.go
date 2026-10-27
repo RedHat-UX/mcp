@@ -66,6 +66,40 @@ func TestHighestSatisfying(t *testing.T) {
 	}
 }
 
+func TestRangeParserEdgeCases(t *testing.T) {
+	tests := []struct {
+		version   string
+		rangeSpec string
+		want      bool
+	}{
+		// >1.2 means the whole 1.2.x line is excluded: >=1.3.0.
+		{"1.2.9", ">1.2", false},
+		{"1.3.0", ">1.2", true},
+		{"2.0.0", ">1.2", true},
+		// <=1.2 includes the whole 1.2.x line.
+		{"1.2.9", "<=1.2", true},
+		{"1.3.0", "<=1.2", false},
+		// ^0.0 is >=0.0.0 <0.1.0, not <1.0.0.
+		{"0.0.9", "^0.0", true},
+		{"0.1.0", "^0.0", false},
+		{"1.0.0", "^0.0", false},
+		// A partial hyphen upper bound covers the whole minor line.
+		{"2.3.9", "1.2.3 - 2.3", true},
+		{"2.4.0", "1.2.3 - 2.3", false},
+		// An exact hyphen upper bound is inclusive.
+		{"2.3.4", "1.2.3 - 2.3.4", true},
+		{"2.3.5", "1.2.3 - 2.3.4", false},
+		// A partial major upper bound covers the whole major line.
+		{"2.9.9", "1.2.3 - 2", true},
+		{"3.0.0", "1.2.3 - 2", false},
+	}
+	for _, tt := range tests {
+		if got := satisfies(tt.version, tt.rangeSpec); got != tt.want {
+			t.Errorf("satisfies(%q, %q) = %v, want %v", tt.version, tt.rangeSpec, got, tt.want)
+		}
+	}
+}
+
 func TestVerifiedElementsTokensTable(t *testing.T) {
 	// This is the verified table from docs/PLAN.md section 5.3. The generated
 	// mapping must reproduce it from each release's dependency range.

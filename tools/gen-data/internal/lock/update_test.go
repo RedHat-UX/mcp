@@ -12,6 +12,27 @@ import (
 	"github.com/redhat-ux/mcp/tools/gen-data/internal/fetch"
 )
 
+func TestDocsTagsFromElements(t *testing.T) {
+	got := DocsTagsFromElements([]string{
+		"1.0.0", "1.4.5",
+		"2.1.2",
+		"3.2.0",
+		"4.2.2",
+		"5.0.0", "5.1.0",
+		"6.0.0", "6.1.0",
+		"7.0.0-beta.1",
+	})
+	want := []string{"v1.4.5", "v2.1.2", "v3.2.0", "v4.2.2", "v5.1.0", "v6.1.0"}
+	if len(got) != len(want) {
+		t.Fatalf("DocsTagsFromElements() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("DocsTagsFromElements() = %v, want %v", got, want)
+		}
+	}
+}
+
 func TestUpdatePinsStableVersionsAndDocs(t *testing.T) {
 	const commit = "d2321d5a1feb5b677682305dee2c073422eda67c"
 	const submodule = "3e53486f83eba02fdecdb67390d1c4704bda5817"
@@ -20,7 +41,8 @@ func TestUpdatePinsStableVersionsAndDocs(t *testing.T) {
 		case "/@rhds/elements", "/%40rhds%2Felements":
 			_, _ = w.Write([]byte(`{"name":"@rhds/elements","versions":{
 				"5.0.0":{"dist":{"integrity":"sha512-abc","tarball":"https://example.test/e.tgz","shasum":"def"}},
-				"6.0.0-beta.1":{"dist":{"integrity":"sha512-beta","tarball":"https://example.test/b.tgz"}}
+				"6.0.0":{"dist":{"integrity":"sha512-new","tarball":"https://example.test/e6.tgz","shasum":"new"}},
+				"6.1.0-beta.1":{"dist":{"integrity":"sha512-beta","tarball":"https://example.test/b.tgz"}}
 			}}`))
 		case "/@rhds/tokens", "/%40rhds%2Ftokens":
 			_, _ = w.Write([]byte(`{"name":"@rhds/tokens","versions":{
@@ -30,7 +52,8 @@ func TestUpdatePinsStableVersionsAndDocs(t *testing.T) {
 			"/repos/" + DocsRepo + "/commits/v2.1.2",
 			"/repos/" + DocsRepo + "/commits/v3.2.0",
 			"/repos/" + DocsRepo + "/commits/v4.2.2",
-			"/repos/" + DocsRepo + "/commits/v5.0.0":
+			"/repos/" + DocsRepo + "/commits/v5.0.0",
+			"/repos/" + DocsRepo + "/commits/v6.0.0":
 			_, _ = w.Write([]byte(`{"sha":"` + commit + `"}`))
 		case "/repos/" + DocsRepo + "/contents/" + AIGuidelinesPath:
 			_, _ = w.Write([]byte(`{"type":"file","sha":"` + submodule + `"}`))
@@ -56,8 +79,9 @@ func TestUpdatePinsStableVersionsAndDocs(t *testing.T) {
 	if !ok {
 		t.Fatal("no elements package")
 	}
-	if len(elements.Versions) != 1 || elements.Versions[0].Version != "5.0.0" {
-		t.Fatalf("elements versions = %+v, want only stable 5.0.0", elements.Versions)
+	if len(elements.Versions) != 2 || elements.Versions[0].Version != "5.0.0" ||
+		elements.Versions[1].Version != "6.0.0" {
+		t.Fatalf("elements versions = %+v, want stable 5.0.0 and 6.0.0", elements.Versions)
 	}
 	if elements.Versions[0].Integrity != "sha512-abc" {
 		t.Errorf("integrity = %q", elements.Versions[0].Integrity)
@@ -66,8 +90,14 @@ func TestUpdatePinsStableVersionsAndDocs(t *testing.T) {
 	if !ok || len(tokens.Versions) != 1 {
 		t.Fatalf("tokens = %+v", tokens)
 	}
-	if len(updated.Docs.Snapshots) != len(DocsTags) {
-		t.Fatalf("snapshots = %d, want %d", len(updated.Docs.Snapshots), len(DocsTags))
+	if len(updated.Docs.Snapshots) != 2 {
+		t.Fatalf("snapshots = %d, want one per elements major", len(updated.Docs.Snapshots))
+	}
+	if got := updated.Docs.Snapshots[0].Tag; got != "v5.0.0" {
+		t.Errorf("first docs tag = %q, want v5.0.0", got)
+	}
+	if got := updated.Docs.Snapshots[1].Tag; got != "v6.0.0" {
+		t.Errorf("second docs tag = %q, want v6.0.0 (derived from the new major)", got)
 	}
 	if updated.Docs.Snapshots[0].AIGuidelinesCommit != submodule {
 		t.Errorf("submodule commit = %q", updated.Docs.Snapshots[0].AIGuidelinesCommit)

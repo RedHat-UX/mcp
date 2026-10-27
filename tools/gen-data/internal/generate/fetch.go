@@ -228,7 +228,7 @@ func parallelVersions[V any](
 	jobs := make(chan int)
 	var (
 		mu       sync.Mutex
-		firstErr error
+		failures = make(map[string]error, len(items))
 		wg       sync.WaitGroup
 	)
 	for i := 0; i < workers; i++ {
@@ -239,9 +239,7 @@ func parallelVersions[V any](
 				value, err := fn(items[index])
 				if err != nil {
 					mu.Lock()
-					if firstErr == nil {
-						firstErr = err
-					}
+					failures[items[index].Version] = err
 					mu.Unlock()
 					continue
 				}
@@ -256,8 +254,11 @@ func parallelVersions[V any](
 	}
 	close(jobs)
 	wg.Wait()
-	if firstErr != nil {
-		return nil, firstErr
+	if len(failures) > 0 {
+		// Report the lowest failing version, not whichever worker lost the
+		// race, so error output is deterministic.
+		versions := sortedKeys(failures)
+		return nil, failures[versions[0]]
 	}
 	return results, nil
 }
