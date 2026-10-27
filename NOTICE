@@ -13,6 +13,9 @@ Module                                        Version  License       Copyright
 --------------------------------------------  -------  ------------  ------------------------------------------------
 github.com/modelcontextprotocol/go-sdk        v1.8.0   MIT and       Copyright (c) 2024-2025 Model Context Protocol
                                                        Apache-2.0    a Series of LF Projects, LLC.
+                                                       (code);
+                                                       CC-BY-4.0
+                                                       (docs)
 github.com/google/jsonschema-go               v0.4.3   MIT           Copyright (c) 2025 JSON Schema Go Project Authors
 github.com/segmentio/asm                      v1.1.3   MIT           Copyright (c) 2021 Segment
 github.com/segmentio/encoding                 v0.5.4   MIT           Copyright (c) 2019 Segment.io, Inc.
@@ -29,6 +32,11 @@ contributions that have not been relicensed remain MIT. Both license texts are
 reproduced below so the notice is complete without the module's own LICENSE
 file.
 
+The SDK's documentation is licensed under CC-BY-4.0. This product links only the
+SDK code, not its documentation, so the CC-BY-4.0 text is not reproduced here.
+The attribution and license URL are recorded for completeness:
+https://creativecommons.org/licenses/by/4.0/
+
 The binary statically links the Go runtime and standard library. Those are
 distributed under the BSD 3-Clause License reproduced below.
 
@@ -38,8 +46,7 @@ Libraries expected in later phases (not yet linked)
 Dependency                License      Notes
 ------------------------  -----------  --------------------------------------------
 bennypowers.dev/cem       GPL-3.0-or-later  Added in Phase D
-bennypowers.dev/asimonim  GPL-3.0-only      Added in Phase D; relicenses to
-                                           GPL-3.0-or-later when PR #63 merges
+bennypowers.dev/asimonim  GPL-3.0-or-later  Added in Phase D
 tree-sitter               MIT               Linked through cem for markup validation
 
 Embedded data

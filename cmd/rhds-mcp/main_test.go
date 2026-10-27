@@ -485,6 +485,9 @@ func TestSIGTERMExitsCleanly(t *testing.T) {
 	if code := cmd.ProcessState.ExitCode(); code != 0 {
 		t.Errorf("exit code after SIGTERM = %d, want 0 (stderr: %s)", code, stderr.String())
 	}
+	if strings.Contains(stderr.String(), "level=ERROR") {
+		t.Errorf("clean shutdown logged an ERROR: %s", stderr.String())
+	}
 }
 
 func connectTestClient(t *testing.T, server *mcp.Server) *mcp.ClientSession {

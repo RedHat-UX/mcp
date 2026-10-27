@@ -2,10 +2,10 @@
 # Copyright 2026 Red Hat, Inc.
 
 BINARY_NAME := rhds-mcp
-# grw build-binaries v1.4 runs plain `make <platform>` without VERSION, so CI
-# binaries report the default until Phase F passes VERSION=<tag> or derives it
-# from the release tag.
-VERSION ?= 0.0.1
+# grw build-binaries v1.4 runs plain `make <platform>` without VERSION. Derive
+# it from the exact release tag when the checkout is tagged, and fall back to
+# the development default elsewhere. An explicit VERSION always wins.
+VERSION ?= $(shell tag=$$(git describe --tags --exact-match 2>/dev/null); if [ -n "$$tag" ]; then printf '%s' "$${tag\#v}"; else printf '0.0.1'; fi)
 DIST_DIR := dist/bin
 GO_PACKAGE := ./cmd/rhds-mcp
 GO_LDFLAGS := -s -w -X main.serverVersion=$(VERSION)
@@ -13,6 +13,9 @@ GO_BUILD_FLAGS := -trimpath -ldflags="$(GO_LDFLAGS)"
 
 # CI sets WINDOWS_IMAGE via go-release-workflows; override for local dev.
 WINDOWS_IMAGE ?= grw-windows-cross
+# Mount the host module cache into the Windows build container so it does not
+# re-download every module on each build. `go mod download` fills it first.
+GOMODCACHE := $(shell go env GOMODCACHE)
 
 .DEFAULT_GOAL := build
 
@@ -66,16 +69,20 @@ darwin-arm64: data
 # the toolchain, GOOS, and compiler selection from its Containerfile.
 win32-x64: data
 	@mkdir -p $(DIST_DIR)
-	podman run --rm -v "$(CURDIR):/app:Z" -w /app \
+	go mod download
+	podman run --rm -v "$(CURDIR):/app:Z" -v "$(GOMODCACHE):/go/pkg/mod:Z" -w /app \
 		-e GOARCH=amd64 -e BINARY_NAME=$(BINARY_NAME) -e GO_PACKAGE=$(GO_PACKAGE) \
+		-e GOMODCACHE=/go/pkg/mod -e GOCACHE=/tmp/go-build \
 		$(WINDOWS_IMAGE) \
 		sh -c 'export GOOS=windows CC=x86_64-w64-mingw32-gcc; go build $(GO_BUILD_FLAGS) -o "$(DIST_DIR)/$${BINARY_NAME}-windows-$${GOARCH}.exe" $${GO_PACKAGE}'
 	@mv $(DIST_DIR)/$(BINARY_NAME)-windows-amd64.exe $(DIST_DIR)/$(BINARY_NAME)-win32-x64.exe
 
 win32-arm64: data
 	@mkdir -p $(DIST_DIR)
-	podman run --rm -v "$(CURDIR):/app:Z" -w /app \
+	go mod download
+	podman run --rm -v "$(CURDIR):/app:Z" -v "$(GOMODCACHE):/go/pkg/mod:Z" -w /app \
 		-e GOARCH=arm64 -e BINARY_NAME=$(BINARY_NAME) -e GO_PACKAGE=$(GO_PACKAGE) \
+		-e GOMODCACHE=/go/pkg/mod -e GOCACHE=/tmp/go-build \
 		$(WINDOWS_IMAGE) \
 		sh -c 'export GOOS=windows CC=aarch64-w64-mingw32-clang; go build $(GO_BUILD_FLAGS) -o "$(DIST_DIR)/$${BINARY_NAME}-windows-$${GOARCH}.exe" $${GO_PACKAGE}'
 	@mv $(DIST_DIR)/$(BINARY_NAME)-windows-arm64.exe $(DIST_DIR)/$(BINARY_NAME)-win32-arm64.exe
