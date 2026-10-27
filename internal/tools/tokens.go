@@ -282,14 +282,17 @@ func (s *Service) queryTokens(resolved ResolvedVersion, input QueryTokensInput) 
 // bundled tokens release, an elements version whose coupled tokens release is
 // used. This mirrors the coupling rule in docs/PLAN.md section 5.3.
 func (s *Service) resolveTokensVersion(requested string) (version, fromElements string, failure *ToolError) {
-	if requested == "" || s.store.Has(packageTokens, requested, kindTokens) {
+	if requested == "" {
 		version, failure := s.resolveVersion(packageTokens, kindTokens, requested)
 		return version, "", failure
 	}
-	if s.store.Has(packageElements, requested, kindManifest) {
-		if coupled, ok := s.store.Index().TokensForElements(requested); ok &&
+	if tokensVersion := s.bundledTokensVersion(requested); tokensVersion != "" {
+		return tokensVersion, "", nil
+	}
+	if elementsVersion, ok := s.bundledVersion(packageElements, kindManifest, requested); ok {
+		if coupled, ok := s.store.Index().TokensForElements(elementsVersion); ok &&
 			s.store.Has(packageTokens, coupled, kindTokens) {
-			return coupled, requested, nil
+			return coupled, elementsVersion, nil
 		}
 	}
 	return "", "", &ToolError{
