@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/redhat-ux/mcp/internal/resolve"
 )
@@ -228,6 +229,43 @@ func compactStrings(values []string, limit, runes int) []string {
 	return compacted
 }
 
+// markComponentTruncation shortens the budget-controlled fields of one list
+// row. Every shortening sets Truncated and appends a warning naming the field
+// and its original rune length, so the list path never truncates silently.
+// Limits of zero leave the corresponding field untouched.
+func markComponentTruncation(
+	component *ComponentSummary,
+	warnings *[]string,
+	tagLimit, summaryLimit, moduleLimit, packageLimit int,
+) {
+	tag := truncateResponseText(component.TagName, 100)
+	fields := []struct {
+		name  string
+		value *string
+		limit int
+	}{
+		{"tagName", &component.TagName, tagLimit},
+		{"summary", &component.Summary, summaryLimit},
+		{"modulePath", &component.ModulePath, moduleLimit},
+		{"packageSubpath", &component.PackageSubpath, packageLimit},
+	}
+	for _, field := range fields {
+		if field.limit <= 0 {
+			continue
+		}
+		before := utf8.RuneCountInString(*field.value)
+		after := truncateResponseText(*field.value, field.limit)
+		if after == *field.value {
+			continue
+		}
+		*field.value = after
+		component.Truncated = true
+		*warnings = append(*warnings, fmt.Sprintf(
+			"component %s %s truncated from %d to %d runes",
+			tag, field.name, before, field.limit))
+	}
+}
+
 func fitListComponents(
 	out *ListComponentsOutput,
 	startOffset int,
@@ -242,16 +280,18 @@ func fitListComponents(
 		}
 		return
 	}
+	truncationWarnings := make([]string, 0)
 	for i := range out.Components {
-		component := &out.Components[i]
-		component.TagName = truncateResponseText(component.TagName, 100)
-		component.Summary = truncateResponseText(component.Summary, 500)
-		component.ModulePath = truncateResponseText(component.ModulePath, 300)
-		component.PackageSubpath = truncateResponseText(component.PackageSubpath, 300)
+		markComponentTruncation(&out.Components[i], &truncationWarnings, 100, 500, 300, 300)
 	}
 	baseWarnings := sanitizeWarnings(out.Resolved.Warnings)
 	if estimatedResponseBytes(out) > budget {
 		baseWarnings = summarizeWarnings(baseWarnings)
+	}
+	if len(truncationWarnings) > 0 {
+		// Truncation notices are contract-relevant. Prepend them so the
+		// warning cap and summarizeWarnings cannot hide a shortened field.
+		baseWarnings = sanitizeWarnings(append(truncationWarnings, baseWarnings...))
 	}
 	out.Resolved.Warnings = baseWarnings
 
@@ -280,9 +320,12 @@ func fitListComponents(
 		}
 	}
 	if estimatedResponseBytes(out) > budget && len(out.Components) == 1 {
-		out.Components[0].Summary = truncateResponseText(out.Components[0].Summary, 100)
-		out.Components[0].ModulePath = truncateResponseText(out.Components[0].ModulePath, 150)
-		out.Components[0].PackageSubpath = truncateResponseText(out.Components[0].PackageSubpath, 150)
+		fallbackWarnings := make([]string, 0)
+		markComponentTruncation(&out.Components[0], &fallbackWarnings, 0, 100, 150, 150)
+		if len(fallbackWarnings) > 0 {
+			out.Resolved.Warnings = sanitizeWarnings(
+				append(fallbackWarnings, out.Resolved.Warnings...))
+		}
 	}
 	if estimatedResponseBytes(out) > budget {
 		// A single component cannot be served within the budget. Never return

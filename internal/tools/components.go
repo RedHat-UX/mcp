@@ -38,6 +38,10 @@ type ComponentSummary struct {
 	PackageSubpath string `json:"packageSubpath,omitempty"`
 	Deprecated     bool   `json:"deprecated"`
 	DocsAvailable  bool   `json:"docsAvailable"`
+	// Truncated reports that the budget layer shortened at least one field in
+	// this row. The corresponding warning names each truncated field and its
+	// original rune length.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // ListComponentsOutput is the output for rhds_list_components.

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -169,6 +170,61 @@ func TestFitListComponentsCursorRoundTrip(t *testing.T) {
 	}
 	if estimatedResponseBytes(out) > 4000 {
 		t.Errorf("estimated response = %d, want <= 4000", estimatedResponseBytes(out))
+	}
+}
+
+// TestFitListComponentsMarksAndWarnsTruncation proves that the list budget
+// path never shortens a field silently: the row carries truncated=true and a
+// warning names the field and its original rune length.
+func TestFitListComponentsMarksAndWarnsTruncation(t *testing.T) {
+	longPath := strings.Repeat("p", 400)
+	out := ListComponentsOutput{
+		Resolved: ResolvedVersion{Elements: "5.0.0"},
+		Components: []ComponentSummary{{
+			TagName:        "rh-long",
+			Summary:        strings.Repeat("s", 600),
+			ModulePath:     longPath,
+			PackageSubpath: longPath,
+		}},
+		Total: 1,
+	}
+
+	fitListComponents(&out, 0, false, hardResponseBudget)
+	if out.Error != nil {
+		t.Fatalf("fitListComponents() error = %+v", out.Error)
+	}
+	if len(out.Components) != 1 {
+		t.Fatalf("components = %d, want the single row", len(out.Components))
+	}
+	component := out.Components[0]
+	if !component.Truncated {
+		t.Error("truncated = false, want true")
+	}
+	if got := utf8.RuneCountInString(component.Summary); got != 503 {
+		t.Errorf("summary runes = %d, want 503 (500 plus the marker)", got)
+	}
+	if got := utf8.RuneCountInString(component.ModulePath); got != 303 {
+		t.Errorf("module path runes = %d, want 303 (300 plus the marker)", got)
+	}
+	for _, want := range []struct {
+		field    string
+		original int
+	}{
+		{"summary", 600},
+		{"modulePath", 400},
+		{"packageSubpath", 400},
+	} {
+		found := false
+		for _, warning := range out.Resolved.Warnings {
+			if strings.Contains(warning, want.field) &&
+				strings.Contains(warning, fmt.Sprintf("from %d", want.original)) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("warnings = %v, want one naming %s and its original %d runes",
+				out.Resolved.Warnings, want.field, want.original)
+		}
 	}
 }
 
