@@ -60,8 +60,11 @@ type ParsedVersion struct {
 	HasMinor   bool
 	Prerelease string
 	Text       string
-	Partial    bool
-	OK         bool
+	// Operator is the npm range operator preceding the version: ^, ~, >, >=,
+	// <, <=, or =. An empty operator means an exact version or a bare partial.
+	Operator string
+	Partial  bool
+	OK       bool
 }
 
 // maxVersionDigits bounds each numeric component so malformed or hostile
@@ -91,10 +94,38 @@ func ParseVersionSpec(spec string) ParsedVersion {
 			continue
 		}
 		if parsed, ok := parseVersionAt(scan, i); ok {
+			parsed.Operator = operatorBefore(scan, i)
+			if parsed.Operator != "" && parsed.Operator != "=" {
+				// A range pins an operator, not an exact bundled version.
+				parsed.Partial = true
+			}
 			return parsed
 		}
 	}
 	return parsePartialSpec(spec)
+}
+
+// operatorBefore returns the range operator immediately preceding the version
+// at start, ignoring spaces.
+func operatorBefore(spec string, start int) string {
+	i := start - 1
+	for i >= 0 && (spec[i] == ' ' || spec[i] == '\t') {
+		i--
+	}
+	if i < 0 {
+		return ""
+	}
+	switch spec[i] {
+	case '^', '~', '>', '<':
+		return string(spec[i])
+	case '=':
+		if i > 0 && (spec[i-1] == '>' || spec[i-1] == '<') {
+			return string(spec[i-1]) + "="
+		}
+		return "="
+	default:
+		return ""
+	}
 }
 
 func parseVersionAt(spec string, start int) (ParsedVersion, bool) {
@@ -175,7 +206,24 @@ func parsePartialSpec(spec string) ParsedVersion {
 	if index := strings.LastIndex(text, "@rhds/elements@"); index >= 0 {
 		text = text[index+len("@rhds/elements@"):]
 	}
-	text = strings.TrimLeft(text, "^~><=| ")
+	text = strings.TrimLeft(text, " ")
+	operator := ""
+	if text != "" {
+		j := 0
+		switch text[0] {
+		case '^', '~', '=':
+			j = 1
+		case '>', '<':
+			j = 1
+			if j < len(text) && text[j] == '=' {
+				j++
+			}
+		}
+		if j > 0 {
+			operator = text[:j]
+			text = strings.TrimLeft(text[j:], " ")
+		}
+	}
 	if text == "" {
 		return ParsedVersion{}
 	}
@@ -188,14 +236,14 @@ func parsePartialSpec(spec string) ParsedVersion {
 	}
 	rest := text[index:]
 	if rest == "" {
-		return partialVersion(major, 0, false, strconv.Itoa(major))
+		return partialVersion(major, 0, false, strconv.Itoa(major), operator)
 	}
 	if rest[0] != '.' {
 		return ParsedVersion{}
 	}
 	rest = rest[1:]
 	if rest == "x" || rest == "X" || rest == "*" {
-		return partialVersion(major, 0, false, strconv.Itoa(major))
+		return partialVersion(major, 0, false, strconv.Itoa(major), operator)
 	}
 	minor, minorEnd, ok := parseNumber(rest, 0)
 	if !ok {
@@ -204,17 +252,18 @@ func parsePartialSpec(spec string) ParsedVersion {
 	rest = rest[minorEnd:]
 	if rest == "" || rest == ".x" || rest == ".X" || rest == ".*" {
 		return partialVersion(major, minor, true,
-			strconv.Itoa(major)+"."+strconv.Itoa(minor))
+			strconv.Itoa(major)+"."+strconv.Itoa(minor), operator)
 	}
 	return ParsedVersion{}
 }
 
-func partialVersion(major, minor int, hasMinor bool, text string) ParsedVersion {
+func partialVersion(major, minor int, hasMinor bool, text, operator string) ParsedVersion {
 	return ParsedVersion{
 		Major:    major,
 		Minor:    minor,
 		HasMinor: hasMinor,
 		Text:     text,
+		Operator: operator,
 		Partial:  true,
 		OK:       true,
 	}

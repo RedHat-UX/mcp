@@ -58,7 +58,7 @@ func TestExplicitVersionSkipsWorkspace(t *testing.T) {
 	})
 	result := resolveIn(t, root, "5.0.0")
 	if result.Elements != "5.0.0" {
-		t.Errorf("elements = %q, want 5.0.0", result.Elements)
+		t.Errorf("elements = %q, want the explicit 5.0.0", result.Elements)
 	}
 	if result.Source != "version argument" {
 		t.Errorf("source = %q, want version argument", result.Source)
@@ -76,7 +76,7 @@ func TestPackageLockV3Hoisted(t *testing.T) {
 	writeFiles(t, root, map[string]string{"package-lock.json": packageLockV3("5.0.0")})
 	result := resolveIn(t, root, "")
 	if result.Elements != "5.0.0" {
-		t.Errorf("elements = %q, want 5.0.0", result.Elements)
+		t.Errorf("elements = %q, want the locked 5.0.0", result.Elements)
 	}
 	if result.Source != "package-lock.json" {
 		t.Errorf("source = %q", result.Source)
@@ -176,7 +176,7 @@ func TestYarnClassicLockfile(t *testing.T) {
 	})
 	result := resolveIn(t, root, "")
 	if result.Elements != "5.0.0" {
-		t.Errorf("elements = %q, want 5.0.0", result.Elements)
+		t.Errorf("elements = %q, want the locked 5.0.0", result.Elements)
 	}
 	if result.Source != "yarn.lock" {
 		t.Errorf("source = %q", result.Source)
@@ -217,7 +217,7 @@ func TestBunLockfile(t *testing.T) {
 	})
 	result := resolveIn(t, root, "")
 	if result.Elements != "5.0.0" {
-		t.Errorf("elements = %q, want 5.0.0", result.Elements)
+		t.Errorf("elements = %q, want the locked 5.0.0", result.Elements)
 	}
 	if result.Source != "bun.lock" {
 		t.Errorf("source = %q", result.Source)
@@ -263,8 +263,8 @@ func TestWorkspacePackageJSONDependency(t *testing.T) {
 		"packages/app/package.json": `{"dependencies":{"@rhds/elements":"^4.0.0"}}`,
 	})
 	result := resolveIn(t, root, "")
-	if result.Elements != "4.0.0" {
-		t.Errorf("elements = %q, want 4.0.0", result.Elements)
+	if result.Elements != "4.2.2" {
+		t.Errorf("elements = %q, want highest matching 4.2.2", result.Elements)
 	}
 	if result.Source != "packages/app/package.json" {
 		t.Errorf("source = %q", result.Source)
@@ -279,8 +279,8 @@ func TestPNPMWorkspacePackageDependency(t *testing.T) {
 		"packages/app/package.json": `{"dependencies":{"@rhds/elements":"^5.0.0"}}`,
 	})
 	result := resolveIn(t, root, "")
-	if result.Elements != "5.0.0" {
-		t.Errorf("elements = %q, want 5.0.0 (from pnpm workspace package)", result.Elements)
+	if result.Elements != "5.1.0" {
+		t.Errorf("elements = %q, want highest matching 5.1.0 (from pnpm workspace package)", result.Elements)
 	}
 	if result.Source != "packages/app/package.json" {
 		t.Errorf("source = %q", result.Source)
@@ -367,8 +367,8 @@ func TestPNPMDefaultCatalog(t *testing.T) {
 		"pnpm-workspace.yaml": "catalog:\n  '@rhds/elements': ^5.0.0\n",
 	})
 	result := resolveIn(t, root, "")
-	if result.Elements != "5.0.0" {
-		t.Errorf("elements = %q, want the default catalog 5.0.0", result.Elements)
+	if result.Elements != "5.1.0" {
+		t.Errorf("elements = %q, want the highest bundled version matching the default catalog", result.Elements)
 	}
 }
 
@@ -387,8 +387,8 @@ catalogs:
 	if result.Ambiguity != nil {
 		t.Fatalf("ambiguity = %+v, want the unreferenced legacy catalog ignored", result.Ambiguity)
 	}
-	if result.Elements != "5.0.0" {
-		t.Errorf("elements = %q, want 5.0.0", result.Elements)
+	if result.Elements != "5.1.0" {
+		t.Errorf("elements = %q, want highest matching 5.1.0", result.Elements)
 	}
 }
 
@@ -481,7 +481,7 @@ func TestLockfileOutranksInstalledPackage(t *testing.T) {
 	}
 }
 
-func TestMinorDisagreementPicksHighestAndWarns(t *testing.T) {
+func TestMinorRangesConvergeToHighestBundled(t *testing.T) {
 	root := t.TempDir()
 	writeFiles(t, root, map[string]string{
 		"package.json": `{
@@ -497,8 +497,8 @@ func TestMinorDisagreementPicksHighestAndWarns(t *testing.T) {
 		t.Errorf("ambiguity = %+v, want nil for a minor disagreement", result.Ambiguity)
 	}
 	joined := strings.Join(result.Warnings, " ")
-	if !strings.Contains(joined, "highest") {
-		t.Errorf("warnings = %v, want a highest-version warning", result.Warnings)
+	if strings.Contains(joined, "disagree") {
+		t.Errorf("warnings = %v, want no disagreement warning", result.Warnings)
 	}
 }
 
@@ -564,6 +564,11 @@ func TestPartialRangesResolveToHighestBundled(t *testing.T) {
 		{"tilde major", "~4", "4.2.2"},
 		{"tilde minor", "~4.0", "4.0.0"},
 		{"npm alias partial", "npm:@rhds/elements@^4", "4.2.2"},
+		{"caret exact", "^4.2.0", "4.2.2"},
+		{"tilde exact", "~4.2.2", "4.2.2"},
+		{"greater or equal", ">=4.2.2", "5.1.0"},
+		{"greater than", ">4.2.2", "5.1.0"},
+		{"less than major", "<5", "4.2.2"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

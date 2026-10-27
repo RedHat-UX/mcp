@@ -631,3 +631,43 @@ func TestMarkCandidateTruncationSetsFlag(t *testing.T) {
 		t.Errorf("version length = %d, want the cap plus ellipsis", len(candidate.Version))
 	}
 }
+
+func TestErrorResponsesStayWithinBudgetWithLongWarnings(t *testing.T) {
+	warnings := make([]string, 12)
+	for i := range warnings {
+		warnings[i] = strings.Repeat("w", 400)
+	}
+	const budget = 4096
+	resolved := ResolvedVersion{Warnings: warnings}
+	failure := &ToolError{Code: "artifact_not_found", Message: "no data"}
+
+	components := ListComponentsOutput{Resolved: resolved, Error: failure}
+	fitListComponents(&components, 0, false, budget)
+	if size := estimatedResponseBytes(components); size > budget {
+		t.Errorf("component error response = %d bytes, want <= %d", size, budget)
+	}
+
+	search := SearchOutput{Resolved: resolved, Error: failure}
+	fitSearch(&search, budget)
+	if size := estimatedResponseBytes(search); size > budget {
+		t.Errorf("search error response = %d bytes, want <= %d", size, budget)
+	}
+
+	tokens := QueryTokensOutput{Resolved: resolved, Error: failure}
+	tokens = fitQueryTokens(tokens, budget)
+	if size := estimatedResponseBytes(tokens); size > budget {
+		t.Errorf("tokens error response = %d bytes, want <= %d", size, budget)
+	}
+
+	markup := ValidateMarkupOutput{Resolved: resolved, Warnings: warnings, Error: failure}
+	markup = fitValidateMarkup(markup, budget)
+	if size := estimatedResponseBytes(markup); size > budget {
+		t.Errorf("markup error response = %d bytes, want <= %d", size, budget)
+	}
+
+	api := ComponentAPIOutput{Resolved: resolved, Error: failure}
+	api = fitComponentAPI(api, budget, true)
+	if size := estimatedResponseBytes(api); size > budget {
+		t.Errorf("component API error response = %d bytes, want <= %d", size, budget)
+	}
+}

@@ -450,3 +450,28 @@ func TestListComponentsReportsDocsForMajorSnapshot(t *testing.T) {
 		t.Error("rh-card docsAvailable = true, want false: the snapshot has no rh-card page")
 	}
 }
+
+func TestListComponentsCursorAcceptsEquivalentVersionSpelling(t *testing.T) {
+	svc := fixtureService(t)
+	_, first := svc.listComponentsWithEnv(context.Background(), nil, ListComponentsInput{
+		Version:  "v5.0.0",
+		PageSize: 2,
+	})
+	if first.Error != nil {
+		t.Fatalf("first page error = %+v", first.Error)
+	}
+	if first.NextCursor == "" {
+		t.Fatal("first page has no cursor")
+	}
+	_, second := svc.listComponentsWithEnv(context.Background(), nil, ListComponentsInput{
+		Version:  "v5.0.0",
+		PageSize: 2,
+		Cursor:   first.NextCursor,
+	})
+	if second.Error != nil {
+		t.Fatalf("second page error = %+v", second.Error)
+	}
+	if len(second.Components) == 0 {
+		t.Error("second page has no components")
+	}
+}

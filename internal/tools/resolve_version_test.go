@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -360,5 +361,47 @@ func TestResolveVersionCapsWarningCount(t *testing.T) {
 	if estimatedResponseBytes(out) > defaultResponseBudget {
 		t.Errorf("estimated response = %d, want <= %d",
 			estimatedResponseBytes(out), defaultResponseBudget)
+	}
+}
+
+func TestOfferedVersionsMapToBundledVersions(t *testing.T) {
+	ambiguity := &resolve.Ambiguity{
+		Majors: []int{4, 5},
+		Candidates: []resolve.Candidate{
+			{Version: "4", Spec: "^4", Source: "package.json"},
+			{Version: "5", Spec: "^5", Source: "package.json"},
+			{Version: "6.0.0", Spec: "6.0.0", Source: "node_modules"},
+		},
+	}
+	got := offeredVersions(ambiguity, []string{"5.1.0", "4.2.2"})
+	want := []string{"4.2.2", "5.1.0"}
+	if !slices.Equal(got, want) {
+		t.Errorf("offeredVersions() = %v, want %v", got, want)
+	}
+}
+
+func TestQueryTokensWithEnvResolvesVersion(t *testing.T) {
+	_, out := fixtureService(t).queryTokensWithEnv(context.Background(), nil, QueryTokensInput{
+		Token:   "color-brand",
+		Version: "v3.2.0",
+	})
+	if out.Error != nil {
+		t.Fatalf("queryTokensWithEnv() error = %+v", out.Error)
+	}
+	if out.Resolved.Tokens != "3.2.0" {
+		t.Errorf("resolved tokens = %q, want 3.2.0", out.Resolved.Tokens)
+	}
+}
+
+func TestValidateMarkupWithEnvResolvesVersion(t *testing.T) {
+	_, out := fixtureService(t).validateMarkupWithEnv(context.Background(), nil, ValidateMarkupInput{
+		Markup:  `<rh-button variant="primary"></rh-button>`,
+		Version: "v5.0.0",
+	})
+	if out.Error != nil {
+		t.Fatalf("validateMarkupWithEnv() error = %+v", out.Error)
+	}
+	if out.Resolved.Elements != "5.0.0" {
+		t.Errorf("resolved elements = %q, want 5.0.0", out.Resolved.Elements)
 	}
 }

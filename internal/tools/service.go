@@ -68,6 +68,14 @@ type resolution struct {
 	Ambiguity  *resolve.Ambiguity
 }
 
+// mergeResolution copies workspace resolution metadata onto the version a tool
+// actually used, keeping warnings the tool added while loading data.
+func mergeResolution(dst *ResolvedVersion, src ResolvedVersion) {
+	warnings := append([]string(nil), dst.Warnings...)
+	*dst = src
+	dst.Warnings = append(dst.Warnings, warnings...)
+}
+
 // Service owns the lazy data store and parser state shared by the tools.
 type Service struct {
 	store   *data.Store
@@ -303,7 +311,8 @@ func (s *Service) resolutionFrom(
 	coupled, coupledOK := s.store.Index().TokensForElements(elementsVersion)
 	switch {
 	case tokensExplicit != "":
-		if !s.store.Has(packageTokens, tokensExplicit, kindTokens) {
+		tokensVersion = s.bundledTokensVersion(tokensExplicit)
+		if tokensVersion == "" {
 			return resolution{}, &ToolError{
 				Code: "artifact_not_found",
 				Message: fmt.Sprintf(
@@ -311,12 +320,11 @@ func (s *Service) resolutionFrom(
 				Hint: "call rhds_resolve_version to list bundled tokens versions",
 			}
 		}
-		if coupledOK && coupled != tokensExplicit {
+		if coupledOK && coupled != tokensVersion {
 			warnings = append(warnings,
 				fmt.Sprintf("tokensVersion %s overrides tokens@%s coupled to elements@%s",
-					tokensExplicit, coupled, elementsVersion))
+					tokensVersion, coupled, elementsVersion))
 		}
-		tokensVersion = tokensExplicit
 	case coupledOK:
 		tokensVersion = coupled
 	default:
@@ -431,6 +439,18 @@ func (s *Service) prepareResolution(
 // bundledVersion resolves an explicit version against the index, accepting an
 // optional leading v because docs artifacts use the tag form (v5.0.0) while
 // element and token artifacts use the bare semver form (5.0.0).
+// bundledTokensVersion resolves a requested tokens version, accepting an
+// optional leading v.
+func (s *Service) bundledTokensVersion(requested string) string {
+	trimmed := strings.TrimPrefix(requested, "v")
+	for _, candidate := range []string{requested, trimmed, "v" + trimmed} {
+		if s.store.Has(packageTokens, candidate, kindTokens) {
+			return candidate
+		}
+	}
+	return ""
+}
+
 func (s *Service) bundledVersion(pkg, kind, requested string) (string, bool) {
 	trimmed := strings.TrimPrefix(requested, "v")
 	for _, candidate := range []string{requested, trimmed, "v" + trimmed} {
@@ -697,8 +717,10 @@ func Register(server *mcp.Server, svc *Service) {
 		Description: "Checks HTML or Twig markup against bundled CEM data for unknown elements, unknown attributes, invalid enum values, and deprecated APIs. It is not full schema validation.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, request *mcp.CallToolRequest, input ValidateMarkupInput) (*mcp.CallToolResult, ValidateMarkupOutput, error) {
-		_ = request
-		out := svc.ValidateMarkup(ctx, input)
+		required, out := svc.validateMarkupWithEnv(ctx, request, input)
+		if required != nil {
+			return required, ValidateMarkupOutput{}, nil
+		}
 		if out.Error != nil {
 			return &mcp.CallToolResult{IsError: true}, out, nil
 		}
@@ -711,8 +733,10 @@ func Register(server *mcp.Server, svc *Service) {
 		Description: "Looks up bundled RHDS design tokens by name or search query. Returns the CSS custom property, type, resolved value, alias chain, and theme value.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, request *mcp.CallToolRequest, input QueryTokensInput) (*mcp.CallToolResult, QueryTokensOutput, error) {
-		_ = request
-		out := svc.QueryTokens(ctx, input)
+		required, out := svc.queryTokensWithEnv(ctx, request, input)
+		if required != nil {
+			return required, QueryTokensOutput{}, nil
+		}
 		if out.Error != nil {
 			return &mcp.CallToolResult{IsError: true}, out, nil
 		}

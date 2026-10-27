@@ -14,6 +14,7 @@ import (
 	"bennypowers.dev/cem/lsp/document"
 	cemtypes "bennypowers.dev/cem/lsp/types"
 	"bennypowers.dev/cem/manifest"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.lsp.dev/protocol"
 	"golang.org/x/net/html"
 )
@@ -581,6 +582,32 @@ func unquoteTypeLiteral(part string) string {
 		}
 	}
 	return part
+}
+
+// validateMarkupWithEnv implements rhds_validate_markup for an MCP call. It
+// resolves the workspace elements version instead of always validating
+// against the latest bundled version.
+func (s *Service) validateMarkupWithEnv(
+	ctx context.Context,
+	request *mcp.CallToolRequest,
+	input ValidateMarkupInput,
+) (*mcp.CallToolResult, ValidateMarkupOutput) {
+	resolved, required, failure := s.prepareResolution(
+		ctx, newCallEnv(request), input.Version, "", true)
+	if required != nil {
+		return required, ValidateMarkupOutput{}
+	}
+	if failure != nil {
+		out := ValidateMarkupOutput{Issues: []MarkupIssue{}, Error: failure}
+		return nil, fitValidateMarkup(out, defaultResponseBudget)
+	}
+	if resolved.Resolved.Elements == "" {
+		return nil, s.ValidateMarkup(ctx, input)
+	}
+	input.Version = resolved.Resolved.Elements
+	out := s.ValidateMarkup(ctx, input)
+	mergeResolution(&out.Resolved, resolved.Resolved)
+	return nil, out
 }
 
 func declarationsByTag(pkg *manifest.Package) map[string]*manifest.CustomElementDeclaration {

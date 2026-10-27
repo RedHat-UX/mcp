@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -225,7 +226,7 @@ func (s *Service) resolveAmbiguity(
 	if ambiguity == nil {
 		return "", nil, nil
 	}
-	offered := offeredVersions(ambiguity)
+	offered := offeredVersions(ambiguity, s.bundledElements())
 	if len(offered) == 0 {
 		return "", nil, ambiguityError(ambiguity, "")
 	}
@@ -258,14 +259,14 @@ func (s *Service) resolveAmbiguity(
 	return chosenVersion(result, offered)
 }
 
-func offeredVersions(ambiguity *resolve.Ambiguity) []string {
+// offeredVersions maps each ambiguity candidate to a bundled version the data
+// tools can actually serve. Offering a raw range text such as "5" or an
+// unbundled exact version would make the elicitation choice fail immediately.
+func offeredVersions(ambiguity *resolve.Ambiguity, bundled []string) []string {
 	seen := make(map[string]bool)
 	var versions []string
 	for _, candidate := range ambiguity.Candidates {
-		version := candidate.Version
-		if parsed := resolve.ParseVersionSpec(version); parsed.OK {
-			version = parsed.Text
-		}
+		version := bundledVersionFor(candidate, bundled)
 		if version == "" || seen[version] {
 			continue
 		}
@@ -273,6 +274,37 @@ func offeredVersions(ambiguity *resolve.Ambiguity) []string {
 		versions = append(versions, version)
 	}
 	return versions
+}
+
+func bundledVersionFor(candidate resolve.Candidate, bundled []string) string {
+	for _, text := range []string{candidate.Version, candidate.Spec} {
+		parsed := resolve.ParseVersionSpec(text)
+		if !parsed.OK {
+			continue
+		}
+		best := ""
+		var bestParsed resolve.ParsedVersion
+		for _, version := range bundled {
+			available := resolve.ParseVersionSpec(version)
+			if !available.OK || available.Major != parsed.Major {
+				continue
+			}
+			if parsed.HasMinor && available.Minor != parsed.Minor {
+				continue
+			}
+			if best == "" || resolve.CompareParsed(available, bestParsed) > 0 {
+				best = available.Text
+				bestParsed = available
+			}
+		}
+		if best != "" {
+			return best
+		}
+		if slices.Contains(bundled, text) {
+			return text
+		}
+	}
+	return ""
 }
 
 func elicitationParams(ambiguity *resolve.Ambiguity, offered []string) *mcp.ElicitParams {
