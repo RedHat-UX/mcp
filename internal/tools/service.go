@@ -243,11 +243,10 @@ func (s *Service) loadTokens(version string) ([]*token.Token, *token.Map, *ToolE
 	// Light-dark() composites are generated into the theme map instead of the
 	// DTCG document. Add them back as lookup tokens so rhds_query_tokens can
 	// find them and report their theme value.
-	themes, themeErr := s.loadThemes(version)
-	if themeErr != nil {
-		return nil, nil, themeErr
-	}
-	if themes != nil {
+	// Theme tokens are a bonus: a malformed theme map must not break token
+	// queries that never ask for a theme. QueryTokens reports the error again
+	// when a theme is requested.
+	if themes, themeErr := s.loadThemes(version); themeErr == nil && themes != nil {
 		tokens = addThemeTokens(tokens, themes)
 	}
 
