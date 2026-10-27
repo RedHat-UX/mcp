@@ -991,7 +991,7 @@ func markTokenTruncation(result *TokenResult, state *fieldTruncation) {
 		}
 		result.AliasChain[i] = after
 		result.Truncated = true
-		state.record(subject, "aliasChain entry", before, utf8.RuneCountInString(after))
+		state.record(subject, fmt.Sprintf("aliasChain[%d]", i), before, utf8.RuneCountInString(after))
 	}
 }
 

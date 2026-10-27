@@ -178,3 +178,39 @@ func TestGetUsageExamplesDocsTagReturnsFullResolvedBlock(t *testing.T) {
 		t.Error("examples = 0, want examples")
 	}
 }
+
+func TestUsageExamplesPatternWithoutArtifactIsAnError(t *testing.T) {
+	out := fixtureService(t).GetUsageExamples(context.Background(), UsageExamplesInput{
+		TagName: "rh-card",
+		Version: "v4.2.2",
+		Kind:    "pattern",
+	})
+	if out.Error == nil || out.Error.Code != "artifact_not_found" {
+		t.Fatalf("error = %+v, want artifact_not_found", out.Error)
+	}
+}
+
+func TestUsageExamplesAllWarnsWhenPatternsAreMissing(t *testing.T) {
+	out := fixtureService(t).GetUsageExamples(context.Background(), UsageExamplesInput{
+		TagName: "rh-card",
+		Version: "v4.2.2",
+		Kind:    "all",
+	})
+	if out.Error != nil {
+		t.Fatalf("GetUsageExamples() error = %+v", out.Error)
+	}
+	if !hasWarning(out.Resolved.Warnings, "pattern examples unavailable") {
+		t.Errorf("warnings = %v, want a missing pattern warning", out.Resolved.Warnings)
+	}
+}
+
+func TestUsageExamplesRejectsInvalidDetail(t *testing.T) {
+	out := fixtureService(t).GetUsageExamples(context.Background(), UsageExamplesInput{
+		TagName: "rh-button",
+		Version: "5.0.0",
+		Detail:  "verbose",
+	})
+	if out.Error == nil || out.Error.Code != "invalid_argument" {
+		t.Fatalf("error = %+v, want invalid_argument", out.Error)
+	}
+}

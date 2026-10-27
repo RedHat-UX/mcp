@@ -50,7 +50,7 @@ const (
 
 // GeneratorVersion changes whenever generation or normalization changes in a
 // way that requires regenerating an existing dist tree.
-const GeneratorVersion = 2
+const GeneratorVersion = 3
 
 // Inputs is everything generation needs. Network fetching builds this value;
 // tests construct it from fixtures.

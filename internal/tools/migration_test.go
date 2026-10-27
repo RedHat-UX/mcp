@@ -525,3 +525,41 @@ func TestBeforeAfterPairsAcceptsHeadingAndAnnotatedLabels(t *testing.T) {
 		t.Errorf("pair = %+v, want A before and B after", pairs[0])
 	}
 }
+
+func TestMigrationGuideTotalReleaseNotesSurvivesLimit(t *testing.T) {
+	out := fixtureService(t).GetMigrationGuide(context.Background(), MigrationGuideInput{
+		FromVersion: "4.0.0",
+		ToVersion:   "5.0.0",
+		Sections:    []string{"releaseNotes"},
+		Limit:       1,
+	})
+	if out.Error != nil {
+		t.Fatalf("GetMigrationGuide() error = %+v", out.Error)
+	}
+	if out.TotalReleaseNotes < 2 {
+		t.Errorf("totalReleaseNotes = %d, want at least 2", out.TotalReleaseNotes)
+	}
+	if len(out.ReleaseNotes) != 1 {
+		t.Errorf("releaseNotes = %d, want the explicit limit of 1", len(out.ReleaseNotes))
+	}
+}
+
+func TestMigrationGuideKeepsLimitCapWarning(t *testing.T) {
+	out := fixtureService(t).GetMigrationGuide(context.Background(), MigrationGuideInput{
+		FromVersion: "4.0.0",
+		ToVersion:   "5.0.0",
+		Limit:       500,
+	})
+	if out.Error != nil {
+		t.Fatalf("GetMigrationGuide() error = %+v", out.Error)
+	}
+	found := false
+	for _, warning := range out.Resolved.Warnings {
+		if strings.Contains(warning, fmt.Sprintf("limit was capped at %d", maxMigrationLimit)) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("warnings = %v, want the limit cap warning", out.Resolved.Warnings)
+	}
+}

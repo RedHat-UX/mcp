@@ -283,7 +283,7 @@ func TestFitQueryTokensPageMarksFieldTruncation(t *testing.T) {
 	if !hasWarning(fitted.Resolved.Warnings, "aliasChain truncated from 25 to 20 entries") {
 		t.Errorf("warnings = %v, want an aliasChain truncation warning", fitted.Resolved.Warnings)
 	}
-	if !hasWarning(fitted.Resolved.Warnings, "aliasChain entry truncated") {
+	if !hasWarning(fitted.Resolved.Warnings, "aliasChain[0] truncated") {
 		t.Errorf("warnings = %v, want an aliasChain entry truncation warning", fitted.Resolved.Warnings)
 	}
 	if size := wireResponseBytes(fitted); size > defaultResponseBudget {

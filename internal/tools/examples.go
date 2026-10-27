@@ -36,6 +36,7 @@ type UsageExamplesInput struct {
 	TagName string `json:"tagName" jsonschema:"Custom element tag name, for example rh-button"`
 	Version string `json:"version,omitempty" jsonschema:"RHDS elements version or docs snapshot tag; defaults to the workspace resolution, then the latest bundled version"`
 	Kind    string `json:"kind,omitempty" jsonschema:"Example kind: demo, docs, pattern, or twig; defaults to all"`
+	Detail  string `json:"detail,omitempty" jsonschema:"Detail level: summary (default, 8k budget) or full (32k budget)"`
 }
 
 // UsageExample is one usage example or template.
@@ -68,7 +69,7 @@ func (s *Service) GetUsageExamples(_ context.Context, input UsageExamplesInput) 
 	resolved, failure := s.examplesResolution(input.Version)
 	if failure != nil {
 		return fitUsageExamples(
-			UsageExamplesOutput{Examples: []UsageExample{}, Error: failure}, s.responseBudget(false))
+			UsageExamplesOutput{Examples: []UsageExample{}, Error: failure}, s.responseBudget(input.Detail == "full"))
 	}
 	return s.usageExamples(resolved, input)
 }
@@ -82,7 +83,7 @@ func (s *Service) usageExamplesWithEnv(
 		resolved, failure := s.examplesResolution(input.Version)
 		if failure != nil {
 			return nil, fitUsageExamples(
-				UsageExamplesOutput{Examples: []UsageExample{}, Error: failure}, s.responseBudget(false))
+				UsageExamplesOutput{Examples: []UsageExample{}, Error: failure}, s.responseBudget(input.Detail == "full"))
 		}
 		return nil, s.usageExamples(resolved, input)
 	}
@@ -93,7 +94,7 @@ func (s *Service) usageExamplesWithEnv(
 	}
 	if failure != nil {
 		return nil, fitUsageExamples(
-			UsageExamplesOutput{Examples: []UsageExample{}, Error: failure}, s.responseBudget(false))
+			UsageExamplesOutput{Examples: []UsageExample{}, Error: failure}, s.responseBudget(input.Detail == "full"))
 	}
 	return nil, s.usageExamples(resolved, input)
 }
@@ -154,7 +155,7 @@ func (s *Service) elementsVersionForDocsTag(tag string) (string, bool) {
 
 func (s *Service) usageExamples(resolved resolution, input UsageExamplesInput) (out UsageExamplesOutput) {
 	defer func() {
-		out = fitUsageExamples(out, s.responseBudget(false))
+		out = fitUsageExamples(out, s.responseBudget(input.Detail == "full"))
 	}()
 	out = UsageExamplesOutput{
 		Resolved: resolved.Resolved,
@@ -172,6 +173,17 @@ func (s *Service) usageExamples(resolved resolution, input UsageExamplesInput) (
 		return out
 	}
 	out.Kind = kind
+
+	detail := input.Detail
+	if detail == "" {
+		detail = "summary"
+	}
+	switch detail {
+	case "summary", "full":
+	default:
+		out.Error = invalidArgument("detail must be summary or full")
+		return out
+	}
 
 	tag := normalizeElementTag(input.TagName)
 	if tag == "" {
@@ -199,10 +211,30 @@ func (s *Service) usageExamples(resolved resolution, input UsageExamplesInput) (
 		out.Examples = append(out.Examples, demoExamples(component, resolved.Resolved.Elements)...)
 	}
 	if kind == exampleKindAll || kind == exampleKindDocs {
-		out.Examples = append(out.Examples, s.docsExamples(resolved.Resolved.Docs, tag)...)
+		examples, warnings, failure := s.docsExamples(resolved.Resolved.Docs, tag)
+		out.Examples = append(out.Examples, examples...)
+		out.Resolved.Warnings = append(out.Resolved.Warnings, warnings...)
+		if failure != nil {
+			if kind == exampleKindDocs {
+				out.Error = failure
+				return out
+			}
+			out.Resolved.Warnings = append(out.Resolved.Warnings,
+				"docs examples unavailable: "+failure.Message)
+		}
 	}
 	if kind == exampleKindAll || kind == exampleKindPattern {
-		out.Examples = append(out.Examples, s.patternExamples(resolved.Resolved.Docs, tag)...)
+		examples, warnings, failure := s.patternExamples(resolved.Resolved.Docs, tag)
+		out.Examples = append(out.Examples, examples...)
+		out.Resolved.Warnings = append(out.Resolved.Warnings, warnings...)
+		if failure != nil {
+			if kind == exampleKindPattern {
+				out.Error = failure
+				return out
+			}
+			out.Resolved.Warnings = append(out.Resolved.Warnings,
+				"pattern examples unavailable: "+failure.Message)
+		}
 	}
 	if kind == exampleKindAll || kind == exampleKindTwig {
 		out.Examples = append(out.Examples, twigExample(component, resolved.Resolved.Elements))
@@ -230,21 +262,24 @@ func demoExamples(component *cem.Component, elementsVersion string) []UsageExamp
 	return examples
 }
 
-func (s *Service) docsExamples(docsVersion, tag string) []UsageExample {
+func (s *Service) docsExamples(docsVersion, tag string) ([]UsageExample, []string, *ToolError) {
 	if docsVersion == "" {
-		return nil
+		return nil, nil, nil
 	}
 	records, failure := s.docsRecords(docsVersion)
 	if failure != nil {
-		return nil
+		return nil, nil, failure
 	}
 	var examples []UsageExample
+	var warnings []string
 	for _, record := range records {
 		if !elementDocPath(record.Path, tag) {
 			continue
 		}
 		content, err := s.store.Read(packageDocs, docsVersion, record.Kind)
 		if err != nil {
+			warnings = append(warnings, fmt.Sprintf(
+				"could not read %s from the %s docs snapshot: %v", record.Path, docsVersion, err))
 			continue
 		}
 		for _, block := range markdown.CodeBlocks(string(content)) {
@@ -262,16 +297,16 @@ func (s *Service) docsExamples(docsVersion, tag string) []UsageExample {
 			})
 		}
 	}
-	return examples
+	return examples, warnings, nil
 }
 
-func (s *Service) patternExamples(docsVersion, tag string) []UsageExample {
+func (s *Service) patternExamples(docsVersion, tag string) ([]UsageExample, []string, *ToolError) {
 	if docsVersion == "" {
-		return nil
+		return nil, nil, nil
 	}
 	records, failure := s.patternRecords(docsVersion)
 	if failure != nil {
-		return nil
+		return nil, nil, failure
 	}
 	var examples []UsageExample
 	for _, record := range records {
@@ -288,7 +323,7 @@ func (s *Service) patternExamples(docsVersion, tag string) []UsageExample {
 			Version:  docsVersion,
 		})
 	}
-	return examples
+	return examples, nil, nil
 }
 
 func twigExample(component *cem.Component, elementsVersion string) UsageExample {

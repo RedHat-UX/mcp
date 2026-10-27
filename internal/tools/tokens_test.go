@@ -368,8 +368,8 @@ func TestQueryTokensFullDetailIncludesDescriptionAndDeprecation(t *testing.T) {
 	if summary.Tokens[0].Description != "" {
 		t.Errorf("summary description = %q, want empty", summary.Tokens[0].Description)
 	}
-	if summary.Tokens[0].Deprecation != "" {
-		t.Errorf("summary deprecation = %q, want empty", summary.Tokens[0].Deprecation)
+	if summary.Tokens[0].Deprecation == "" {
+		t.Error("summary detail omitted the deprecation message")
 	}
 
 	full := svc.QueryTokens(context.Background(), QueryTokensInput{

@@ -194,11 +194,15 @@ func (s *Service) migrationGuide(input MigrationGuideInput) (out MigrationGuideO
 	toTokens, _ := s.store.Index().TokensForElements(toVersion)
 	out.FromVersion = fromVersion
 	out.ToVersion = toVersion
+	// Keep warnings collected before the resolved block is replaced, notably
+	// the limit cap notice.
+	resolutionWarnings := out.Resolved.Warnings
 	out.Resolved = ResolvedVersion{
 		Elements: toVersion,
 		Tokens:   toTokens,
 		Docs:     s.docsVersionFor(toVersion),
 		Source:   "bundled",
+		Warnings: resolutionWarnings,
 	}
 	if fromCanonical == toCanonical {
 		out.Resolved.Warnings = append(out.Resolved.Warnings,
@@ -246,14 +250,18 @@ func (s *Service) migrationGuide(input MigrationGuideInput) (out MigrationGuideO
 	}
 
 	if sections["releaseNotes"] {
-		out.ReleaseNotes = s.releaseExamples(fromVersion, toVersion, element, knownTags, limit)
-		out.TotalReleaseNotes = len(out.ReleaseNotes)
-		if limit == 0 && len(out.ReleaseNotes) >= maxMigrationReleaseExamples {
-			out.Resolved.Warnings = append(out.Resolved.Warnings,
-				fmt.Sprintf("release-note examples were capped at %d; use sections or limit to narrow",
-					maxMigrationReleaseExamples))
+		examples := s.releaseExamples(fromVersion, toVersion, element, knownTags)
+		out.TotalReleaseNotes = len(examples)
+		out.ReleaseNotes = limitSlice(examples, limit)
+		if limit == 0 {
+			out.ReleaseNotes = limitSlice(examples, maxMigrationReleaseExamples)
+			if len(examples) > maxMigrationReleaseExamples {
+				out.Truncated = true
+				out.Resolved.Warnings = append(out.Resolved.Warnings,
+					fmt.Sprintf("release-note examples were capped at %d of %d; use sections or limit to narrow",
+						maxMigrationReleaseExamples, len(examples)))
+			}
 		}
-		out.ReleaseNotes = limitSlice(out.ReleaseNotes, limit)
 	}
 
 	includeTokens := true
@@ -391,13 +399,8 @@ const maxMigrationReleaseExamples = 100
 func (s *Service) releaseExamples(
 	fromVersion, toVersion, element string,
 	knownTags map[string]bool,
-	limit int,
 ) []ReleaseNoteExample {
 	versions := versionsBetween(s.bundledElements(), fromVersion, toVersion)
-	maxExamples := limit
-	if maxExamples == 0 {
-		maxExamples = maxMigrationReleaseExamples
-	}
 	cacheSuffix := tagFingerprint(knownTags)
 	var examples []ReleaseNoteExample
 	for _, version := range versions {
@@ -421,9 +424,6 @@ func (s *Service) releaseExamples(
 				continue
 			}
 			examples = append(examples, example)
-			if len(examples) >= maxExamples {
-				return examples
-			}
 		}
 	}
 	return examples

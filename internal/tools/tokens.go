@@ -330,11 +330,13 @@ func tokenResultFor(
 		Deprecated:  tok.Deprecated,
 		Theme:       requestedTheme,
 	}
+	if tok.Deprecated && tok.DeprecationMessage != "" {
+		// Deprecation guidance is short and actionable, so keep it in the
+		// summary output; only the full description is detail-gated.
+		result.Deprecation = tok.DeprecationMessage
+	}
 	if detail == "full" {
 		result.Description = tok.Description
-		if tok.Deprecated && tok.DeprecationMessage != "" {
-			result.Deprecation = tok.DeprecationMessage
-		}
 	}
 	switch format {
 	case "css":
