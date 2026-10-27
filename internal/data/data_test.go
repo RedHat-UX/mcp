@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -36,6 +37,24 @@ func indexJSON(t *testing.T, artifacts ...Artifact) []byte {
 		t.Fatalf("marshaling index: %v", err)
 	}
 	return encoded
+}
+
+// validArtifact returns an artifact with non-empty integrity fields. It is
+// used by tests that never read the artifact.
+func validArtifact(pkg, version, kind, path string) Artifact {
+	return Artifact{
+		Package: pkg,
+		Version: version,
+		Kind:    kind,
+		Path:    path,
+		SHA256:  strings.Repeat("0", sha256.Size*2),
+		Bytes:   1,
+	}
+}
+
+func checksum(payload []byte) string {
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
 }
 
 // indexOnlyFS fails any read other than the index, proving that Open reads
@@ -83,12 +102,8 @@ func TestOpenWithNoIndexReturnsNoDataError(t *testing.T) {
 }
 
 func TestOpenReadsOnlyTheIndex(t *testing.T) {
-	fsys := &indexOnlyFS{index: indexJSON(t, Artifact{
-		Package: "elements",
-		Version: "5.0.0",
-		Kind:    "manifest",
-		Path:    "elements/5.0.0/custom-elements.json",
-	})}
+	fsys := &indexOnlyFS{index: indexJSON(t,
+		validArtifact("elements", "5.0.0", "manifest", "elements/5.0.0/custom-elements.json"))}
 
 	store, err := Open(fsys)
 	if err != nil {
@@ -105,7 +120,6 @@ func TestOpenReadsOnlyTheIndex(t *testing.T) {
 func TestReadDecompressesAndVerifiesChecksum(t *testing.T) {
 	payload := []byte(`{"schemaVersion":"2.1.0","modules":[]}`)
 	compressed := writeGzip(t, payload)
-	sum := sha256.Sum256(compressed)
 
 	fsys := fstest.MapFS{
 		IndexPath: &fstest.MapFile{Data: indexJSON(t, Artifact{
@@ -113,7 +127,7 @@ func TestReadDecompressesAndVerifiesChecksum(t *testing.T) {
 			Version: "5.0.0",
 			Kind:    "manifest",
 			Path:    "elements/5.0.0/custom-elements.json.gz",
-			SHA256:  hex.EncodeToString(sum[:]),
+			SHA256:  checksum(compressed),
 			Bytes:   int64(len(compressed)),
 		})},
 		"elements/5.0.0/custom-elements.json.gz": &fstest.MapFile{Data: compressed},
@@ -145,7 +159,8 @@ func TestReadChecksumMismatch(t *testing.T) {
 			Version: "3.2.0",
 			Kind:    "tokens",
 			Path:    "tokens/3.2.0/rhds.tokens.json",
-			SHA256:  "0000000000000000000000000000000000000000000000000000000000000000",
+			SHA256:  strings.Repeat("0", sha256.Size*2),
+			Bytes:   int64(len(payload)),
 		})},
 		"tokens/3.2.0/rhds.tokens.json": &fstest.MapFile{Data: payload},
 	}
@@ -156,6 +171,58 @@ func TestReadChecksumMismatch(t *testing.T) {
 	}
 	if _, err := store.Read("tokens", "3.2.0", "tokens"); !errors.Is(err, ErrChecksum) {
 		t.Fatalf("Read() error = %v, want ErrChecksum", err)
+	}
+}
+
+func TestReadWrongByteCount(t *testing.T) {
+	payload := []byte("payload")
+	fsys := fstest.MapFS{
+		IndexPath: &fstest.MapFile{Data: indexJSON(t, Artifact{
+			Package: "tokens",
+			Version: "3.2.0",
+			Kind:    "tokens",
+			Path:    "tokens/3.2.0/rhds.tokens.json",
+			SHA256:  checksum(payload),
+			Bytes:   int64(len(payload) + 1),
+		})},
+		"tokens/3.2.0/rhds.tokens.json": &fstest.MapFile{Data: payload},
+	}
+
+	store, err := Open(fsys)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	_, err = store.Read("tokens", "3.2.0", "tokens")
+	if !errors.Is(err, ErrChecksum) {
+		t.Fatalf("Read() error = %v, want ErrChecksum", err)
+	}
+}
+
+func TestReadCorruptGzip(t *testing.T) {
+	stored := []byte("this is not gzip")
+	fsys := fstest.MapFS{
+		IndexPath: &fstest.MapFile{Data: indexJSON(t, Artifact{
+			Package: "tokens",
+			Version: "3.2.0",
+			Kind:    "tokens",
+			Path:    "tokens/3.2.0/rhds.tokens.json.gz",
+			SHA256:  checksum(stored),
+			Bytes:   int64(len(stored)),
+		})},
+		"tokens/3.2.0/rhds.tokens.json.gz": &fstest.MapFile{Data: stored},
+	}
+
+	store, err := Open(fsys)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	_, err = store.Read("tokens", "3.2.0", "tokens")
+	var structured *Error
+	if !errors.As(err, &structured) {
+		t.Fatalf("Read() error = %T, want *Error", err)
+	}
+	if structured.Code != "artifact_read_failed" {
+		t.Errorf("error code = %q, want artifact_read_failed", structured.Code)
 	}
 }
 
@@ -179,13 +246,49 @@ func TestReadUnknownArtifactReturnsStructuredError(t *testing.T) {
 }
 
 func TestOpenRejectsArtifactPathTraversal(t *testing.T) {
-	fsys := fstest.MapFS{IndexPath: &fstest.MapFile{Data: indexJSON(t, Artifact{
-		Package: "elements",
-		Version: "5.0.0",
-		Kind:    "manifest",
-		Path:    "../secret.json",
-	})}}
+	fsys := fstest.MapFS{IndexPath: &fstest.MapFile{Data: indexJSON(t,
+		validArtifact("elements", "5.0.0", "manifest", "../secret.json"))}}
 
+	if _, err := Open(fsys); !errors.Is(err, ErrInvalidIndex) {
+		t.Fatalf("Open() error = %v, want ErrInvalidIndex", err)
+	}
+}
+
+func TestOpenRejectsMissingIntegrityFields(t *testing.T) {
+	tests := []struct {
+		name     string
+		artifact Artifact
+	}{
+		{
+			name: "missing sha256",
+			artifact: Artifact{
+				Package: "elements", Version: "5.0.0", Kind: "manifest",
+				Path: "manifest.json", Bytes: 1,
+			},
+		},
+		{
+			name: "missing bytes",
+			artifact: Artifact{
+				Package: "elements", Version: "5.0.0", Kind: "manifest",
+				Path: "manifest.json", SHA256: strings.Repeat("0", sha256.Size*2),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fsys := fstest.MapFS{IndexPath: &fstest.MapFile{Data: indexJSON(t, tt.artifact)}}
+			if _, err := Open(fsys); !errors.Is(err, ErrInvalidIndex) {
+				t.Fatalf("Open() error = %v, want ErrInvalidIndex", err)
+			}
+		})
+	}
+}
+
+func TestOpenRejectsDuplicateArtifacts(t *testing.T) {
+	fsys := fstest.MapFS{IndexPath: &fstest.MapFile{Data: indexJSON(t,
+		validArtifact("elements", "5.0.0", "manifest", "a.json"),
+		validArtifact("elements", "5.0.0", "manifest", "b.json"),
+	)}}
 	if _, err := Open(fsys); !errors.Is(err, ErrInvalidIndex) {
 		t.Fatalf("Open() error = %v, want ErrInvalidIndex", err)
 	}
@@ -193,9 +296,9 @@ func TestOpenRejectsArtifactPathTraversal(t *testing.T) {
 
 func TestIndexVersionsAreSortedNewestFirst(t *testing.T) {
 	store, err := Open(fstest.MapFS{IndexPath: &fstest.MapFile{Data: indexJSON(t,
-		Artifact{Package: "elements", Version: "4.0.0", Kind: "manifest", Path: "a"},
-		Artifact{Package: "elements", Version: "10.0.0", Kind: "manifest", Path: "b"},
-		Artifact{Package: "elements", Version: "5.0.0", Kind: "manifest", Path: "c"},
+		validArtifact("elements", "4.0.0", "manifest", "a"),
+		validArtifact("elements", "10.0.0", "manifest", "b"),
+		validArtifact("elements", "5.0.0", "manifest", "c"),
 	)}})
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)

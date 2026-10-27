@@ -22,7 +22,7 @@ type QueryTokensInput struct {
 	Token   string `json:"token,omitempty" jsonschema:"Exact token name, dot path, or CSS custom property"`
 	Version string `json:"version,omitempty" jsonschema:"RHDS tokens version; defaults to the latest bundled version"`
 	Theme   string `json:"theme,omitempty" jsonschema:"Theme to resolve: light, dark, or auto"`
-	Format  string `json:"format,omitempty" jsonschema:"Value format: value, css, or chain"`
+	Format  string `json:"format,omitempty" jsonschema:"Value format: value, css, or chain. chain puts the alias path in value"`
 }
 
 // TokenResult is one token in rhds_query_tokens output.
@@ -129,8 +129,14 @@ func (s *Service) QueryTokens(_ context.Context, input QueryTokensInput) QueryTo
 	effectiveTheme := theme
 	if theme == "auto" {
 		effectiveTheme = "light"
+		if themes != nil {
+			out.Resolved.Warnings = append(out.Resolved.Warnings,
+				"theme auto used the light theme; resolve dark values on the client")
+		}
+	}
+	if theme != "" && themes == nil {
 		out.Resolved.Warnings = append(out.Resolved.Warnings,
-			"theme auto used the light theme; resolve dark values on the client")
+			fmt.Sprintf("no theme data is bundled for tokens@%s; themeValue is omitted", version))
 	}
 
 	for _, tok := range selected {
@@ -140,7 +146,6 @@ func (s *Service) QueryTokens(_ context.Context, input QueryTokensInput) QueryTo
 			Type:        tok.Type,
 			RawValue:    rawTokenValue(tok),
 			AliasChain:  slices.Clone(tok.ResolutionChain),
-			Source:      "json",
 			Description: tok.Description,
 			Deprecated:  tok.Deprecated,
 			Theme:       theme,
@@ -152,12 +157,18 @@ func (s *Service) QueryTokens(_ context.Context, input QueryTokensInput) QueryTo
 		case "css":
 			result.Value = fmt.Sprintf("%s: %s;", tok.CSSVariableName(), tok.DisplayValue())
 		case "chain":
-			result.Value = tok.DisplayValue()
+			if len(tok.ResolutionChain) > 0 {
+				result.Value = strings.Join(tok.ResolutionChain, " -> ")
+			} else {
+				result.Value = tok.DisplayValue()
+			}
 		default:
 			result.Value = tok.DisplayValue()
 		}
+		result.Source = "json"
 		if themeValue, ok := lookupThemeValue(themes, effectiveTheme, tok); ok {
 			result.ThemeValue = themeValue
+			result.Source = "css/default-theme.css"
 		}
 		out.Tokens = append(out.Tokens, result)
 	}

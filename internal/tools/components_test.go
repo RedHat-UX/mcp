@@ -5,9 +5,14 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"os"
 	"slices"
 	"testing"
+	"testing/fstest"
 
 	"github.com/redhat-ux/mcp/internal/data"
 )
@@ -24,6 +29,60 @@ func fixtureStore(t *testing.T) *data.Store {
 func fixtureService(t *testing.T) *Service {
 	t.Helper()
 	return New(fixtureStore(t), nil)
+}
+
+func memoryService(t *testing.T, manifestJSON []byte, version string) *Service {
+	t.Helper()
+	sum := sha256.Sum256(manifestJSON)
+	index := data.Index{
+		SchemaVersion: data.SchemaVersion,
+		Artifacts: []data.Artifact{{
+			Package: "elements",
+			Version: version,
+			Kind:    "manifest",
+			Path:    "elements/custom-elements.json",
+			SHA256:  hex.EncodeToString(sum[:]),
+			Bytes:   int64(len(manifestJSON)),
+		}},
+	}
+	indexJSON, err := json.Marshal(index)
+	if err != nil {
+		t.Fatalf("marshaling index: %v", err)
+	}
+	store, err := data.Open(fstest.MapFS{
+		"index.json":                    &fstest.MapFile{Data: indexJSON},
+		"elements/custom-elements.json": &fstest.MapFile{Data: manifestJSON},
+	})
+	if err != nil {
+		t.Fatalf("opening memory store: %v", err)
+	}
+	return New(store, nil)
+}
+
+func largeManifest(t *testing.T, count int) []byte {
+	t.Helper()
+	modules := make([]any, 0, count)
+	for i := range count {
+		modules = append(modules, map[string]any{
+			"kind": "javascript-module",
+			"path": fmt.Sprintf("./rh-test-%03d.js", i),
+			"declarations": []any{map[string]any{
+				"kind":          "class",
+				"customElement": true,
+				"name":          fmt.Sprintf("RhTest%03d", i),
+				"tagName":       fmt.Sprintf("rh-test-%03d", i),
+				"summary":       "Test component.",
+			}},
+		})
+	}
+	encoded, err := json.Marshal(map[string]any{
+		"schemaVersion": "2.1.0",
+		"modules":       modules,
+	})
+	if err != nil {
+		t.Fatalf("marshaling manifest: %v", err)
+	}
+	return encoded
 }
 
 func TestListComponentsDefaultPage(t *testing.T) {
@@ -127,7 +186,7 @@ func TestListComponentsPaginatesWithOpaqueCursor(t *testing.T) {
 func TestListComponentsRejectsCursorFromAnotherVersion(t *testing.T) {
 	out := fixtureService(t).ListComponents(context.Background(), ListComponentsInput{
 		Version: "5.0.0",
-		Cursor:  encodeCursor("4.0.0", 0),
+		Cursor:  encodeCursor("4.0.0", 0, false),
 	})
 	if out.Error == nil {
 		t.Fatal("error = nil, want cursor_version_mismatch")
@@ -203,12 +262,66 @@ func findComponent(components []ComponentSummary, tagName string) (ComponentSumm
 }
 
 func TestCursorRoundTrip(t *testing.T) {
-	cursor := encodeCursor("5.0.0", 25)
+	cursor := encodeCursor("5.0.0", 25, true)
 	payload, toolErr := decodeCursor(cursor)
 	if toolErr != nil {
 		t.Fatalf("decodeCursor() error = %+v", toolErr)
 	}
-	if payload.Version != "5.0.0" || payload.Offset != 25 {
-		t.Errorf("payload = %+v, want version 5.0.0 offset 25", payload)
+	if payload.Version != "5.0.0" || payload.Offset != 25 || !payload.IncludeDeprecated {
+		t.Errorf("payload = %+v, want version 5.0.0 offset 25 includeDeprecated true", payload)
+	}
+}
+
+func TestListComponentsRejectsCursorFilterMismatch(t *testing.T) {
+	svc := fixtureService(t)
+	first := svc.ListComponents(context.Background(), ListComponentsInput{PageSize: 2})
+	if first.Error != nil {
+		t.Fatalf("first page error = %+v", first.Error)
+	}
+	if first.NextCursor == "" {
+		t.Fatal("first page has no cursor")
+	}
+
+	out := svc.ListComponents(context.Background(), ListComponentsInput{
+		Cursor:            first.NextCursor,
+		PageSize:          2,
+		IncludeDeprecated: true,
+	})
+	if out.Error == nil {
+		t.Fatal("error = nil, want cursor_filter_mismatch")
+	}
+	if out.Error.Code != "cursor_filter_mismatch" {
+		t.Errorf("error code = %q, want cursor_filter_mismatch", out.Error.Code)
+	}
+}
+
+func TestListComponentsDefaultPageSize(t *testing.T) {
+	svc := memoryService(t, largeManifest(t, 130), "5.0.0")
+	out := svc.ListComponents(context.Background(), ListComponentsInput{})
+	if out.Error != nil {
+		t.Fatalf("ListComponents() error = %+v", out.Error)
+	}
+	if out.Total != 130 {
+		t.Errorf("total = %d, want 130", out.Total)
+	}
+	if len(out.Components) != defaultPageSize {
+		t.Errorf("components = %d, want default %d", len(out.Components), defaultPageSize)
+	}
+	if out.NextCursor == "" {
+		t.Error("expected a next cursor for 130 components")
+	}
+}
+
+func TestListComponentsMaxPageSize(t *testing.T) {
+	svc := memoryService(t, largeManifest(t, 130), "5.0.0")
+	out := svc.ListComponents(context.Background(), ListComponentsInput{PageSize: 1000})
+	if out.Error != nil {
+		t.Fatalf("ListComponents() error = %+v", out.Error)
+	}
+	if len(out.Components) != maxPageSize {
+		t.Errorf("components = %d, want maximum %d", len(out.Components), maxPageSize)
+	}
+	if len(out.Resolved.Warnings) == 0 {
+		t.Error("expected a pageSize cap warning")
 	}
 }

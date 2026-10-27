@@ -46,12 +46,17 @@ type ListComponentsOutput struct {
 }
 
 type cursorPayload struct {
-	Version string `json:"v"`
-	Offset  int    `json:"o"`
+	Version           string `json:"v"`
+	Offset            int    `json:"o"`
+	IncludeDeprecated bool   `json:"d,omitempty"`
 }
 
-func encodeCursor(version string, offset int) string {
-	payload, err := json.Marshal(cursorPayload{Version: version, Offset: offset})
+func encodeCursor(version string, offset int, includeDeprecated bool) string {
+	payload, err := json.Marshal(cursorPayload{
+		Version:           version,
+		Offset:            offset,
+		IncludeDeprecated: includeDeprecated,
+	})
 	if err != nil {
 		// json.Marshal cannot fail for this struct.
 		return ""
@@ -142,6 +147,16 @@ func (s *Service) ListComponents(_ context.Context, input ListComponentsInput) L
 			}
 			return out
 		}
+		if payload.IncludeDeprecated != input.IncludeDeprecated {
+			out.Error = &ToolError{
+				Code: "cursor_filter_mismatch",
+				Message: fmt.Sprintf(
+					"cursor was created with includeDeprecated=%t but this call uses includeDeprecated=%t",
+					payload.IncludeDeprecated, input.IncludeDeprecated),
+				Hint: "restart pagination without a cursor or keep the same filter",
+			}
+			return out
+		}
 		if payload.Offset > len(entries) {
 			out.Error = invalidCursor("cursor offset is past the end of the result set")
 			return out
@@ -162,7 +177,7 @@ func (s *Service) ListComponents(_ context.Context, input ListComponentsInput) L
 	}
 	out.Total = len(entries)
 	if end < len(entries) {
-		out.NextCursor = encodeCursor(version, end)
+		out.NextCursor = encodeCursor(version, end, input.IncludeDeprecated)
 	}
 	return out
 }

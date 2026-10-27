@@ -24,6 +24,12 @@
       "$value": "{color.brand}",
       "$description": "Alias chain used by interactive surfaces.",
       "$type": "color"
+    },
+    "legacy": {
+      "$type": "color",
+      "$value": "{color.brand}",
+      "$description": "Legacy alias; do not use.",
+      "$deprecated": "Use color.brand instead."
     }
   },
   "space": {

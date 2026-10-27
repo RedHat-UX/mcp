@@ -87,6 +87,16 @@ func (i *Index) build() error {
 				Code:    "invalid_index",
 				Message: fmt.Sprintf("artifact path %q is not a clean relative path", artifact.Path),
 			}
+		case artifact.SHA256 == "":
+			return &Error{
+				Code:    "invalid_index",
+				Message: fmt.Sprintf("artifact %s is missing a sha256", artifact.Path),
+			}
+		case artifact.Bytes <= 0:
+			return &Error{
+				Code:    "invalid_index",
+				Message: fmt.Sprintf("artifact %s is missing a byte count", artifact.Path),
+			}
 		}
 		key := artifactKeyOf(artifact.Package, artifact.Version, artifact.Kind)
 		if _, exists := i.byKey[key]; exists {
@@ -293,7 +303,7 @@ func (s *Store) Read(pkg, version, kind string) ([]byte, error) {
 			Hint:    err.Error(),
 		}
 	}
-	if artifact.Bytes > 0 && int64(len(stored)) != artifact.Bytes {
+	if int64(len(stored)) != artifact.Bytes {
 		return nil, &Error{
 			Code: "checksum_mismatch",
 			Message: fmt.Sprintf(
@@ -301,14 +311,12 @@ func (s *Store) Read(pkg, version, kind string) ([]byte, error) {
 			Hint: ErrChecksum.Hint,
 		}
 	}
-	if artifact.SHA256 != "" {
-		sum := sha256.Sum256(stored)
-		if !strings.EqualFold(hex.EncodeToString(sum[:]), artifact.SHA256) {
-			return nil, &Error{
-				Code:    "checksum_mismatch",
-				Message: fmt.Sprintf("%s failed checksum verification", artifact.Path),
-				Hint:    ErrChecksum.Hint,
-			}
+	sum := sha256.Sum256(stored)
+	if !strings.EqualFold(hex.EncodeToString(sum[:]), artifact.SHA256) {
+		return nil, &Error{
+			Code:    "checksum_mismatch",
+			Message: fmt.Sprintf("%s failed checksum verification", artifact.Path),
+			Hint:    ErrChecksum.Hint,
 		}
 	}
 

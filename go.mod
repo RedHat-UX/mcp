@@ -13,6 +13,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	go.lsp.dev/protocol v1.0.1
 	golang.org/x/mod v0.36.0
+	golang.org/x/net v0.54.0
 )
 
 require (

@@ -144,6 +144,67 @@ func TestValidateMarkupUnbalancedTwigDegradesToWarnings(t *testing.T) {
 	if unknownAttr.Confidence == "high" {
 		t.Errorf("confidence = %q, want degraded confidence for unbalanced Twig", unknownAttr.Confidence)
 	}
+
+	unknownTag, ok := findIssue(out.Issues, "unknown-tag")
+	if !ok {
+		t.Fatalf("missing unknown-tag issue for unbalanced Twig: %+v", out.Issues)
+	}
+	if unknownTag.Severity != "warning" || unknownTag.Confidence != "low" {
+		t.Errorf("unknown-tag severity/confidence = %q/%q, want warning/low",
+			unknownTag.Severity, unknownTag.Confidence)
+	}
+}
+
+func TestValidateMarkupIsCaseInsensitive(t *testing.T) {
+	out := fixtureService(t).ValidateMarkup(context.Background(), ValidateMarkupInput{
+		Markup: `<RH-BUTTON VARIANT="huge" BOGUS-ATTRIBUTE="yes">Save</RH-BUTTON><RH-ALERT>Unknown</RH-ALERT>`,
+		Format: "html",
+	})
+	if out.Error != nil {
+		t.Fatalf("ValidateMarkup() error = %+v", out.Error)
+	}
+
+	unknownTag, ok := findIssue(out.Issues, "unknown-tag")
+	if !ok {
+		t.Fatalf("missing unknown-tag issue: %+v", out.Issues)
+	}
+	if unknownTag.Element != "rh-alert" {
+		t.Errorf("unknown-tag element = %q, want rh-alert", unknownTag.Element)
+	}
+
+	unknownAttributeCount := 0
+	for _, issue := range out.Issues {
+		if issue.Rule != "unknown-attribute" {
+			continue
+		}
+		unknownAttributeCount++
+		if issue.Attribute != "bogus-attribute" {
+			t.Errorf("unknown attribute = %q, want bogus-attribute", issue.Attribute)
+		}
+	}
+	if unknownAttributeCount != 1 {
+		t.Errorf("unknown-attribute issues = %d, want 1 (VARIANT must be recognized)", unknownAttributeCount)
+	}
+
+	invalidValue, ok := findIssue(out.Issues, "invalid-attribute-value")
+	if !ok {
+		t.Fatalf("missing invalid-attribute-value issue: %+v", out.Issues)
+	}
+	if invalidValue.Attribute != "variant" {
+		t.Errorf("invalid value attribute = %q, want variant", invalidValue.Attribute)
+	}
+}
+
+func TestNormalizeMarkupCasePreservesValuesAndOffsets(t *testing.T) {
+	input := `<RH-BUTTON VARIANT="HuGe" DATA-X='Y'>Text {{ Some.Value }}</RH-BUTTON>{% IF x %}`
+	want := `<rh-button variant="HuGe" data-x='Y'>Text {{ Some.Value }}</rh-button>{% IF x %}`
+	got := normalizeMarkupCase(input)
+	if got != want {
+		t.Errorf("normalizeMarkupCase() = %q, want %q", got, want)
+	}
+	if len(got) != len(input) {
+		t.Errorf("normalized length = %d, want %d", len(got), len(input))
+	}
 }
 
 func TestValidateMarkupRejectsUnknownFormat(t *testing.T) {
@@ -166,4 +227,58 @@ func TestValidateMarkupWithoutDataReturnsStructuredError(t *testing.T) {
 	if out.Error == nil || out.Error.Code != "no_bundled_data" {
 		t.Fatalf("error = %+v, want no_bundled_data", out.Error)
 	}
+}
+
+func FuzzValidateMarkup(f *testing.F) {
+	seeds := []struct {
+		markup string
+		format string
+	}{
+		{`<rh-button variant="primary">Save</rh-button>`, "html"},
+		{`<RH-BUTTON VARIANT="huge"></RH-BUTTON>`, "html"},
+		{`<rh-alert>bogus</rh-alert>`, ""},
+		{`{% if user %}<rh-card><rh-button bogus="x"></rh-button></rh-card>`, "twig"},
+		{`{% if user %}<rh-button>{{ value }}</rh-button>{% endif %}`, "twig"},
+		{``, "html"},
+	}
+	for _, seed := range seeds {
+		f.Add(seed.markup, seed.format)
+	}
+
+	store, err := data.Open(os.DirFS("testdata"))
+	if err != nil {
+		f.Fatalf("opening fixture store: %v", err)
+	}
+	svc := New(store, nil)
+
+	f.Fuzz(func(t *testing.T, markup, format string) {
+		if len(markup) > 64<<10 {
+			t.Skip()
+		}
+		out := svc.ValidateMarkup(context.Background(), ValidateMarkupInput{
+			Markup: markup,
+			Format: format,
+		})
+		if out.Error != nil {
+			if out.Error.Code != "invalid_argument" {
+				t.Fatalf("unexpected error for format %q: %+v", format, out.Error)
+			}
+			return
+		}
+		for _, issue := range out.Issues {
+			switch issue.Confidence {
+			case "high", "low":
+			default:
+				t.Errorf("invalid confidence %q in %+v", issue.Confidence, issue)
+			}
+			switch issue.Severity {
+			case "error", "warning", "info":
+			default:
+				t.Errorf("invalid severity %q in %+v", issue.Severity, issue)
+			}
+			if issue.Line < 1 || issue.Column < 1 {
+				t.Errorf("invalid position %d:%d in %+v", issue.Line, issue.Column, issue)
+			}
+		}
+	})
 }

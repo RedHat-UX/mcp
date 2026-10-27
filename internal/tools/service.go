@@ -64,6 +64,22 @@ type Service struct {
 	documents     cemtypes.Manager
 	documentsErr  error
 	docSeq        atomic.Int64
+
+	manifestMu sync.Mutex
+	manifests  map[string]*manifest.Package
+	tokenMu    sync.Mutex
+	tokenSets  map[string]*tokenSet
+	themeMu    sync.Mutex
+	themes     map[string]map[string]map[string]string
+
+	manifestParses atomic.Int64
+	tokenParses    atomic.Int64
+	themeParses    atomic.Int64
+}
+
+type tokenSet struct {
+	tokens []*token.Token
+	byName *token.Map
 }
 
 // New returns a tool service. A nil store with a nil error is treated as
@@ -73,9 +89,12 @@ func New(store *data.Store, dataErr error) *Service {
 		dataErr = data.ErrNoData
 	}
 	return &Service{
-		store:   store,
-		dataErr: dataErr,
-		logger:  slog.New(slog.DiscardHandler),
+		store:     store,
+		dataErr:   dataErr,
+		logger:    slog.New(slog.DiscardHandler),
+		manifests: make(map[string]*manifest.Package),
+		tokenSets: make(map[string]*tokenSet),
+		themes:    make(map[string]map[string]map[string]string),
 	}
 }
 
@@ -148,6 +167,13 @@ func (s *Service) resolveVersion(pkg, kind, requested string) (string, *ToolErro
 }
 
 func (s *Service) loadManifest(version string) (*manifest.Package, *ToolError) {
+	s.manifestMu.Lock()
+	defer s.manifestMu.Unlock()
+
+	if cached, ok := s.manifests[version]; ok {
+		return cached, nil
+	}
+
 	payload, err := s.store.Read(packageElements, version, kindManifest)
 	if err != nil {
 		return nil, toolErrorFrom(err)
@@ -160,10 +186,19 @@ func (s *Service) loadManifest(version string) (*manifest.Package, *ToolError) {
 			Hint:    err.Error(),
 		}
 	}
+	s.manifestParses.Add(1)
+	s.manifests[version] = &pkg
 	return &pkg, nil
 }
 
 func (s *Service) loadTokens(version string) ([]*token.Token, *token.Map, *ToolError) {
+	s.tokenMu.Lock()
+	defer s.tokenMu.Unlock()
+
+	if cached, ok := s.tokenSets[version]; ok {
+		return cached.tokens, cached.byName, nil
+	}
+
 	payload, err := s.store.Read(packageTokens, version, kindTokens)
 	if err != nil {
 		return nil, nil, toolErrorFrom(err)
@@ -193,10 +228,19 @@ func (s *Service) loadTokens(version string) ([]*token.Token, *token.Map, *ToolE
 		}
 	}
 
-	return tokens, token.NewMap(tokens, "rh"), nil
+	set := &tokenSet{tokens: tokens, byName: token.NewMap(tokens, "rh")}
+	s.tokenParses.Add(1)
+	s.tokenSets[version] = set
+	return set.tokens, set.byName, nil
 }
 
 func (s *Service) loadThemes(version string) (map[string]map[string]string, *ToolError) {
+	s.themeMu.Lock()
+	defer s.themeMu.Unlock()
+
+	if cached, ok := s.themes[version]; ok {
+		return cached, nil
+	}
 	if !s.store.Has(packageTokens, version, kindThemes) {
 		return nil, nil
 	}
@@ -212,6 +256,8 @@ func (s *Service) loadThemes(version string) (map[string]map[string]string, *Too
 			Hint:    err.Error(),
 		}
 	}
+	s.themeParses.Add(1)
+	s.themes[version] = themes
 	return themes, nil
 }
 

@@ -360,10 +360,10 @@ Phase B remeasurement, 2026-10-27, linux-x64 (Go 1.27.3, gcc, cem
 asimonim `98c22de1` / pseudo-version `v0.3.4-0.20261026144458-98c22de15b8a`,
 built with `-trimpath -ldflags="-s -w"`, with a 12.5 KB `index.json` present):
 
-- NFR-01, spawn to `initialize` response: direct binary 7.1 ms median,
-  10.1 ms p95, 14.4 ms max (n=50); through a Node 22 wrapper process 26.5 ms
-  median, 37.4 ms p95, 39.3 ms max (n=30). Budget is 150 ms
-- NFR-06, stripped binary: 22.8 MB (21.7 MiB), 6.1 MB gzipped. Budget is 40 MB.
+- NFR-01, spawn to `initialize` response: direct binary 7.4 ms median,
+  8.9 ms p95, 11.7 ms max (n=50); through a Node 22 wrapper process 25.5 ms
+  median, 30.6 ms p95, 30.6 ms max (n=30). Budget is 150 ms
+- NFR-06, stripped binary: 22.8 MB (21.8 MiB), 6.1 MB gzipped. Budget is 40 MB.
   Platform npm tarballs do not exist yet, so the 16 MB tarball gate is not
   measurable in Phase B
 - Startup read only `index.json`. The binary links cem `manifest`,
@@ -583,8 +583,9 @@ availability, total count, `nextCursor`.
 
 Paginated: `@rhds/elements@5.0.0` declares 82 custom elements, which overflows the 8k
 default budget (NFR-03) with summaries. Default `pageSize` is 25, max 100. The cursor is
-opaque (base64 of resolved version plus offset). A cursor from a different resolved
-version is rejected with a structured error.
+opaque (base64 of the resolved version, offset, and deprecated filter). A cursor from a
+different resolved version or with a different deprecated filter is rejected with a
+structured error.
 
 ### `rhds_get_component_api`
 
@@ -624,12 +625,16 @@ Limits:
 - Assume the manifest is valid
 - Never claim full schema validation
 
+Phase B note: slot-name and default-slot rules are deferred until cem#458 lands. The
+spike implements unknown tag, unknown attribute, enum value, and deprecation checks
+through `lsp/document`. HTML tag and attribute names are matched case-insensitively.
+
 ### `rhds_query_tokens`
 
 Input: `query?`, `token?`, `version?`, `theme?` (`light`, `dark`, `auto`), `format?`
 (`value`, `css`, `chain`).
 Output: token name, CSS custom property, type, value, alias chain, theme value, and
-source (`json` or `css/default-theme.css`).
+source (`json` or `css/default-theme.css`). `chain` puts the alias path in `value`.
 
 ### `rhds_get_design_guidelines`
 

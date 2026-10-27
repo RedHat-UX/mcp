@@ -6,6 +6,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"io"
 	"slices"
 	"sort"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	cemtypes "bennypowers.dev/cem/lsp/types"
 	"bennypowers.dev/cem/manifest"
 	"go.lsp.dev/protocol"
+	"golang.org/x/net/html"
 )
 
 // ValidateMarkupInput is the input for rhds_validate_markup.
@@ -100,6 +102,121 @@ func twigControlFlowUnbalanced(markup string) bool {
 	return depth != 0
 }
 
+// normalizeMarkupCase lowercases HTML tag and attribute names without
+// changing attribute values, text, or byte offsets. The tree-sitter queries in
+// cem's DocumentManager match only lowercase tag names, while HTML itself
+// treats names case-insensitively.
+func normalizeMarkupCase(markup string) string {
+	tokenizer := html.NewTokenizer(strings.NewReader(markup))
+	var normalized strings.Builder
+	normalized.Grow(len(markup))
+	for {
+		tokenType := tokenizer.Next()
+		if tokenType == html.ErrorToken {
+			if tokenizer.Err() == io.EOF {
+				break
+			}
+			// On tokenizer failure, leave the input untouched rather than
+			// returning a partial document with shifted offsets.
+			return markup
+		}
+		raw := tokenizer.Raw()
+		switch tokenType {
+		case html.StartTagToken, html.SelfClosingTagToken, html.EndTagToken:
+			normalized.Write(lowercaseRawTagNames(raw))
+		default:
+			normalized.Write(raw)
+		}
+	}
+	result := normalized.String()
+	if len(result) != len(markup) {
+		return markup
+	}
+	return result
+}
+
+// lowercaseRawTagNames lowercases the tag name and attribute names inside one
+// raw start, end, or self-closing tag token. Quoted and unquoted values are
+// copied verbatim.
+func lowercaseRawTagNames(raw []byte) []byte {
+	out := make([]byte, len(raw))
+	copy(out, raw)
+
+	i := 0
+	if i < len(out) && out[i] == '<' {
+		i++
+	}
+	if i < len(out) && out[i] == '/' {
+		i++
+	}
+	for i < len(out) && !isHTMLSpace(out[i]) && out[i] != '>' && out[i] != '/' {
+		out[i] = asciiLower(out[i])
+		i++
+	}
+
+	for i < len(out) {
+		for i < len(out) && (isHTMLSpace(out[i]) || out[i] == '/') {
+			i++
+		}
+		if i >= len(out) || out[i] == '>' {
+			break
+		}
+
+		start := i
+		for i < len(out) && !isHTMLSpace(out[i]) && out[i] != '=' && out[i] != '>' && out[i] != '/' {
+			out[i] = asciiLower(out[i])
+			i++
+		}
+		if i == start {
+			// Defensive: never spin on an unexpected byte.
+			i++
+			continue
+		}
+
+		for i < len(out) && isHTMLSpace(out[i]) {
+			i++
+		}
+		if i >= len(out) || out[i] != '=' {
+			continue
+		}
+		i++
+		for i < len(out) && isHTMLSpace(out[i]) {
+			i++
+		}
+		if i < len(out) && (out[i] == '"' || out[i] == '\'') {
+			quote := out[i]
+			i++
+			for i < len(out) && out[i] != quote {
+				i++
+			}
+			if i < len(out) {
+				i++
+			}
+			continue
+		}
+		for i < len(out) && !isHTMLSpace(out[i]) && out[i] != '>' {
+			i++
+		}
+	}
+	return out
+}
+
+func isHTMLSpace(b byte) bool {
+	switch b {
+	case ' ', '\t', '\n', '\r', '\f':
+		return true
+	default:
+		return false
+	}
+}
+
+func asciiLower(b byte) byte {
+	if b >= 'A' && b <= 'Z' {
+		return b + ('a' - 'A')
+	}
+	return b
+}
+
 func (s *Service) documentManager() (cemtypes.Manager, error) {
 	s.documentsOnce.Do(func() {
 		s.documents, s.documentsErr = document.NewDocumentManager()
@@ -160,7 +277,8 @@ func (s *Service) ValidateMarkup(_ context.Context, input ValidateMarkupInput) V
 	}
 
 	uri := fmt.Sprintf("file:///rhds-mcp/inline-%d.%s", s.docSeq.Add(1), extension)
-	doc := manager.OpenDocument(uri, input.Markup, 1)
+	markup := normalizeMarkupCase(input.Markup)
+	doc := manager.OpenDocument(uri, markup, 1)
 	defer manager.CloseDocument(uri)
 	if doc == nil {
 		out.Error = &ToolError{
@@ -188,15 +306,16 @@ func (s *Service) ValidateMarkup(_ context.Context, input ValidateMarkupInput) V
 
 	elements := declarationsByTag(pkg)
 	for _, match := range matches {
-		element, known := elements[match.TagName]
+		tagName := strings.ToLower(match.TagName)
+		element, known := elements[tagName]
 		if !known {
-			if strings.HasPrefix(match.TagName, "rh-") {
+			if strings.HasPrefix(tagName, "rh-") {
 				out.Issues = append(out.Issues, MarkupIssue{
 					Rule:       "unknown-tag",
 					Severity:   "error",
 					Confidence: "high",
-					Message:    fmt.Sprintf("unknown RHDS custom element %q", match.TagName),
-					Element:    match.TagName,
+					Message:    fmt.Sprintf("unknown RHDS custom element %q", tagName),
+					Element:    tagName,
 					Line:       lineOf(match.Range),
 					Column:     columnOf(match.Range),
 				})
@@ -209,8 +328,8 @@ func (s *Service) ValidateMarkup(_ context.Context, input ValidateMarkupInput) V
 				Rule:       "deprecated-element",
 				Severity:   "warning",
 				Confidence: "high",
-				Message:    deprecationMessage(fmt.Sprintf("%s is deprecated", match.TagName), element.Deprecated),
-				Element:    match.TagName,
+				Message:    deprecationMessage(fmt.Sprintf("%s is deprecated", tagName), element.Deprecated),
+				Element:    tagName,
 				Line:       lineOf(match.Range),
 				Column:     columnOf(match.Range),
 			})
@@ -218,11 +337,13 @@ func (s *Service) ValidateMarkup(_ context.Context, input ValidateMarkupInput) V
 
 		attributes := make(map[string]*manifest.Attribute, len(element.CustomElement.Attributes))
 		for i := range element.CustomElement.Attributes {
-			attributes[element.CustomElement.Attributes[i].Name] = &element.CustomElement.Attributes[i]
+			name := strings.ToLower(element.CustomElement.Attributes[i].Name)
+			attributes[name] = &element.CustomElement.Attributes[i]
 		}
 
-		for _, name := range sortedKeys(match.Attributes) {
-			attributeMatch := match.Attributes[name]
+		for _, rawName := range sortedKeys(match.Attributes) {
+			name := strings.ToLower(rawName)
+			attributeMatch := match.Attributes[rawName]
 			if isGlobalAttribute(name) {
 				continue
 			}
@@ -232,8 +353,8 @@ func (s *Service) ValidateMarkup(_ context.Context, input ValidateMarkupInput) V
 					Rule:       "unknown-attribute",
 					Severity:   "warning",
 					Confidence: "high",
-					Message:    fmt.Sprintf("%q is not an attribute of %s", name, match.TagName),
-					Element:    match.TagName,
+					Message:    fmt.Sprintf("%q is not an attribute of %s", name, tagName),
+					Element:    tagName,
 					Attribute:  name,
 					Line:       lineOf(attributeMatch.Range),
 					Column:     columnOf(attributeMatch.Range),
@@ -246,9 +367,9 @@ func (s *Service) ValidateMarkup(_ context.Context, input ValidateMarkupInput) V
 					Severity:   "warning",
 					Confidence: "high",
 					Message: deprecationMessage(
-						fmt.Sprintf("attribute %q on %s is deprecated", name, match.TagName),
+						fmt.Sprintf("attribute %q on %s is deprecated", name, tagName),
 						declaration.Deprecated),
-					Element:   match.TagName,
+					Element:   tagName,
 					Attribute: name,
 					Line:      lineOf(attributeMatch.Range),
 					Column:    columnOf(attributeMatch.Range),
@@ -261,8 +382,8 @@ func (s *Service) ValidateMarkup(_ context.Context, input ValidateMarkupInput) V
 					Confidence: "high",
 					Message: fmt.Sprintf(
 						"%q is not a valid value for %s attribute %q; valid values: %v",
-						attributeMatch.Value, match.TagName, name, declaration.EnumValues()),
-					Element:   match.TagName,
+						attributeMatch.Value, tagName, name, declaration.EnumValues()),
+					Element:   tagName,
 					Attribute: name,
 					Line:      lineOf(attributeMatch.Range),
 					Column:    columnOf(attributeMatch.Range),
@@ -302,7 +423,7 @@ func declarationsByTag(pkg *manifest.Package) map[string]*manifest.CustomElement
 		for _, declaration := range pkg.Modules[i].Declarations {
 			element, ok := declaration.(*manifest.CustomElementDeclaration)
 			if ok && element.TagName != "" {
-				elements[element.TagName] = element
+				elements[strings.ToLower(element.TagName)] = element
 			}
 		}
 	}
