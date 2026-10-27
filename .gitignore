@@ -7,3 +7,6 @@
 
 # Build outputs.
 /dist/
+# Ad-hoc `go build` from the repository root.
+/rhds-mcp
+/rhds-mcp.exe
