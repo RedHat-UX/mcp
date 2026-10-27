@@ -119,7 +119,6 @@ func (s *Service) componentAPI(resolved resolution, input GetComponentAPIInput) 
 		out.Error = failure
 		return out
 	}
-	out.Sections = sectionList(sections)
 
 	model, failure := s.loadModel(resolved.Resolved.Elements)
 	if failure != nil {
@@ -170,6 +169,10 @@ func (s *Service) componentAPI(resolved resolution, input GetComponentAPIInput) 
 		out.Examples = summarizeExamples(component.Examples, full)
 	}
 
+	// Sections reports what the payload actually carries. A section that the
+	// manifest leaves empty is not listed, so the field never claims data that
+	// omitempty removed.
+	out.Sections = sectionList(&out, sections)
 	return out
 }
 
@@ -197,14 +200,38 @@ func normalizeSections(requested []string) (map[string]bool, *ToolError) {
 	return selected, nil
 }
 
-func sectionList(selected map[string]bool) []string {
+func sectionList(out *ComponentAPIOutput, selected map[string]bool) []string {
 	sections := make([]string, 0, len(selected))
 	for _, section := range componentAPISections {
-		if selected[section] {
+		if selected[section] && sectionHasPayload(out, section) {
 			sections = append(sections, section)
 		}
 	}
 	return sections
+}
+
+// sectionHasPayload reports whether the output carries at least one item for
+// section. It mirrors the omitempty JSON encoding: a nil or empty slice is not
+// part of the payload.
+func sectionHasPayload(out *ComponentAPIOutput, section string) bool {
+	switch section {
+	case sectionAttributes:
+		return len(out.Attributes) > 0
+	case sectionProperties:
+		return len(out.Properties) > 0
+	case sectionEvents:
+		return len(out.Events) > 0
+	case sectionSlots:
+		return len(out.Slots) > 0
+	case sectionCSSParts:
+		return len(out.CSSParts) > 0
+	case sectionCSSProperties:
+		return len(out.CSSProperties) > 0
+	case sectionExamples:
+		return len(out.Examples) > 0
+	default:
+		return false
+	}
 }
 
 // The summarize helpers below never shorten names, types, defaults, or any

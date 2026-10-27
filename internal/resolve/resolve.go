@@ -4,8 +4,9 @@
 // Package resolve implements the version cascade described in docs/PLAN.md
 // section 6. Every workspace read is bounded and workspace content is treated
 // as evidence, never as instructions. Symlinks are resolved before reading so
-// a path can never escape the workspace root; symlinks that resolve to a
-// target inside the root are followed intentionally.
+// a path can never escape the workspace root; symlinks that resolve inside the
+// root are followed when reading package metadata, while template scanning
+// skips symlink entries deliberately.
 package resolve
 
 import (

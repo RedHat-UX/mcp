@@ -401,35 +401,47 @@ func fitComponentAPI(out ComponentAPIOutput, budget int, summary bool) Component
 	if out.Error != nil {
 		out.Error = boundError(out.Error)
 		if estimatedResponseBytes(out) > budget {
-			return ComponentAPIOutput{Resolved: out.Resolved, Error: responseTooLarge("the component API response", budget)}
+			return ComponentAPIOutput{
+				Resolved: out.Resolved,
+				Error:    responseTooLarge("the component API response", budget),
+				Sections: []string{},
+			}
 		}
 		return out
 	}
+	// Omission notices describe data that is no longer in the payload, so the
+	// warning cap must never discard them. Collect them separately and prepend
+	// them at the final sanitize pass, which keeps them ahead of lower-priority
+	// resolution warnings.
+	omissionWarnings := make([]string, 0, 3)
 	if summary {
 		for _, optional := range []struct {
 			name   string
 			drop   func()
 			active bool
 		}{
-			{name: sectionExamples, active: out.Examples != nil, drop: func() { out.Examples = nil }},
-			{name: sectionCSSProperties, active: out.CSSProperties != nil, drop: func() { out.CSSProperties = nil }},
-			{name: sectionCSSParts, active: out.CSSParts != nil, drop: func() { out.CSSParts = nil }},
+			{name: sectionExamples, active: len(out.Examples) > 0, drop: func() { out.Examples = nil }},
+			{name: sectionCSSProperties, active: len(out.CSSProperties) > 0, drop: func() { out.CSSProperties = nil }},
+			{name: sectionCSSParts, active: len(out.CSSParts) > 0, drop: func() { out.CSSParts = nil }},
 		} {
-			if estimatedResponseBytes(out) <= budget || !optional.active {
+			if componentAPIResponseBytes(out, omissionWarnings) <= budget || !optional.active {
 				continue
 			}
 			optional.drop()
 			out.Sections = withoutSection(out.Sections, optional.name)
-			out.Resolved.Warnings = sanitizeWarnings(append(out.Resolved.Warnings,
-				fmt.Sprintf("%s omitted to fit the response budget; call again with sections=[\"%s\"]",
-					optional.name, optional.name)))
+			omissionWarnings = append(omissionWarnings, fmt.Sprintf(
+				"%s omitted to fit the response budget; call again with sections=[\"%s\"]",
+				optional.name, optional.name))
 		}
+	}
+	if len(omissionWarnings) > 0 {
+		out.Resolved.Warnings = sanitizeWarnings(
+			append(omissionWarnings, out.Resolved.Warnings...))
 	}
 	if estimatedResponseBytes(out) > budget {
 		return ComponentAPIOutput{
 			Resolved: out.Resolved,
 			TagName:  out.TagName,
-			Sections: out.Sections,
 			Error: &ToolError{
 				Code: "response_too_large",
 				Message: fmt.Sprintf(
@@ -439,6 +451,7 @@ func fitComponentAPI(out ComponentAPIOutput, budget int, summary bool) Component
 					"(for example sections=[\"attributes\"]) and detail=summary; " +
 					"there is no silent truncation",
 			},
+			Sections: []string{},
 		}
 	}
 	return out
@@ -452,6 +465,21 @@ func withoutSection(sections []string, drop string) []string {
 		}
 	}
 	return result
+}
+
+// componentAPIResponseBytes measures the response as it will be sent once the
+// pending omission warnings are prepended. Budget checks inside the section
+// drop loop must include those warnings; otherwise the final warning can push
+// an otherwise-fitting response over the cap and turn it into an error.
+func componentAPIResponseBytes(out ComponentAPIOutput, pending []string) int {
+	if len(pending) == 0 {
+		return estimatedResponseBytes(out)
+	}
+	original := out.Resolved.Warnings
+	out.Resolved.Warnings = append(append([]string(nil), pending...), original...)
+	size := estimatedResponseBytes(out)
+	out.Resolved.Warnings = original
+	return size
 }
 
 func fitQueryTokens(out QueryTokensOutput, budget int) QueryTokensOutput {

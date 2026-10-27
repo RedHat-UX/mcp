@@ -6,6 +6,7 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -168,6 +169,34 @@ func TestFitListComponentsCursorRoundTrip(t *testing.T) {
 	}
 	if estimatedResponseBytes(out) > 4000 {
 		t.Errorf("estimated response = %d, want <= 4000", estimatedResponseBytes(out))
+	}
+}
+
+func TestFitComponentAPIKeepsOmissionWarnings(t *testing.T) {
+	examples := make([]cem.Example, 200)
+	for i := range examples {
+		examples[i] = cem.Example{Description: strings.Repeat("x", 40)}
+	}
+	warnings := make([]string, 0, maxResponseWarnings)
+	for i := 0; i < maxResponseWarnings; i++ {
+		warnings = append(warnings, fmt.Sprintf("resolution warning %d", i))
+	}
+	out := ComponentAPIOutput{
+		Resolved: ResolvedVersion{Elements: "5.0.0", Warnings: warnings},
+		TagName:  "rh-huge",
+		Sections: componentAPISections,
+		Examples: examples,
+	}
+
+	fitted := fitComponentAPI(out, 4096, true)
+	if slices.Contains(fitted.Sections, sectionExamples) {
+		t.Errorf("sections = %v, want examples omitted", fitted.Sections)
+	}
+	if len(fitted.Examples) != 0 {
+		t.Errorf("examples = %d, want omitted", len(fitted.Examples))
+	}
+	if !warnedForSection(fitted.Resolved.Warnings, sectionExamples) {
+		t.Errorf("warnings = %v, want one naming %s", fitted.Resolved.Warnings, sectionExamples)
 	}
 }
 

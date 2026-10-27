@@ -227,9 +227,16 @@ func TestRealComponentAPISummariesFitBudget(t *testing.T) {
 		}
 		for _, section := range componentAPISections {
 			if slices.Contains(out.Sections, section) {
+				if !sectionHasPayload(&out, section) {
+					t.Errorf("%s lists %s in Sections with no payload",
+						component.TagName, section)
+				}
 				continue
 			}
-			if componentSectionPresent(out, section) {
+			if !modelSectionHasData(modeled, section) {
+				continue
+			}
+			if sectionHasPayload(&out, section) {
 				t.Errorf("%s dropped %s from Sections but still returned its data",
 					component.TagName, section)
 			}
@@ -242,22 +249,91 @@ func TestRealComponentAPISummariesFitBudget(t *testing.T) {
 	}
 }
 
-func componentSectionPresent(out ComponentAPIOutput, section string) bool {
+// TestRealComponentAPISectionsReflectPayload checks every bundled component in
+// both detail modes: Sections must list exactly the sections carried in the
+// payload. Full detail may omit nothing for a successful response; summary
+// omissions must be named in a warning.
+func TestRealComponentAPISectionsReflectPayload(t *testing.T) {
+	if _, err := os.Stat(filepath.Join("..", "data", "dist", data.IndexPath)); err != nil {
+		t.Skip("generated data is absent; run make data")
+	}
+	dist, err := fs.Sub(data.Embedded(), "dist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := data.Open(dist)
+	if err != nil {
+		t.Fatalf("data.Open() = %v", err)
+	}
+	service := New(store, nil)
+	ctx := context.Background()
+
+	model, failure := service.loadModel("5.0.0")
+	if failure != nil {
+		t.Fatalf("loadModel(5.0.0) error = %+v", failure)
+	}
+	components, _ := allRealComponents(t, service, "5.0.0")
+	for _, component := range components {
+		modeled, ok := model.Component(component.TagName)
+		if !ok {
+			t.Errorf("%s is listed but missing from the normalized manifest", component.TagName)
+			continue
+		}
+		for _, detail := range []string{"summary", "full"} {
+			out := service.GetComponentAPI(ctx, GetComponentAPIInput{
+				TagName: component.TagName,
+				Version: "5.0.0",
+				Detail:  detail,
+			})
+			if out.Error != nil {
+				if out.Error.Code != "response_too_large" {
+					t.Errorf("%s %s error = %+v", component.TagName, detail, out.Error)
+					continue
+				}
+				if len(out.Sections) != 0 {
+					t.Errorf("%s %s returned Sections %v with no payload",
+						component.TagName, detail, out.Sections)
+				}
+				continue
+			}
+			for _, section := range out.Sections {
+				if !sectionHasPayload(&out, section) {
+					t.Errorf("%s %s lists %s in Sections with no payload",
+						component.TagName, detail, section)
+				}
+			}
+			for _, section := range componentAPISections {
+				if !modelSectionHasData(modeled, section) ||
+					slices.Contains(out.Sections, section) {
+					continue
+				}
+				if detail == "full" {
+					t.Errorf("%s full omitted populated section %s", component.TagName, section)
+				} else if !warnedForSection(out.Resolved.Warnings, section) {
+					t.Errorf("%s summary omitted populated section %s without a warning; warnings = %v",
+						component.TagName, section, out.Resolved.Warnings)
+				}
+			}
+		}
+	}
+}
+
+func modelSectionHasData(component *cem.Component, section string) bool {
 	switch section {
 	case sectionAttributes:
-		return out.Attributes != nil
+		return len(component.Attributes) > 0
 	case sectionProperties:
-		return out.Properties != nil
+		return len(component.Properties) > 0
 	case sectionEvents:
-		return out.Events != nil
+		return len(component.Events) > 0
 	case sectionSlots:
-		return out.Slots != nil
+		return len(component.Slots) > 0
 	case sectionCSSParts:
-		return out.CSSParts != nil
+		return len(component.CSSParts) > 0
 	case sectionCSSProperties:
-		return out.CSSProperties != nil
+		return len(component.CSSProperties) > 0
 	case sectionExamples:
-		return out.Examples != nil
+		return len(component.Examples) > 0
 	default:
 		return false
 	}
