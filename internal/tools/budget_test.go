@@ -492,11 +492,17 @@ func TestNewToolBudgets(t *testing.T) {
 // return a structured response_too_large error.
 func TestExistingToolsRespectServiceBudget(t *testing.T) {
 	svc := fixtureService(t)
+	markupInput := ValidateMarkupInput{
+		Markup:  `<rh-button ` + strings.Repeat(`bogus="x" `, 40) + `></rh-button>`,
+		Version: "5.0.0",
+	}
+	baselineMarkup := svc.ValidateMarkup(context.Background(), markupInput)
 	svc.maxResponseBytes = 1400
 
 	t.Run("resolve_version", func(t *testing.T) {
 		out := svc.ResolveVersion(context.Background(), ResolveVersionInput{Version: "5.0.0"})
-		assertWithinBudget(t, out, 1400, out.Truncated, out.Error)
+		hasControl := out.Truncated || (out.Error != nil && out.Error.Code == "response_too_large")
+		assertWithinBudget(t, out, 1400, out.Truncated, hasControl, out.Error)
 	})
 
 	t.Run("list_components", func(t *testing.T) {
@@ -504,7 +510,9 @@ func TestExistingToolsRespectServiceBudget(t *testing.T) {
 			Version:  "5.0.0",
 			PageSize: 100,
 		})
-		assertWithinBudget(t, out, 1400, out.Truncated || out.NextCursor != "", out.Error)
+		dropped := out.Total > len(out.Components)
+		hasControl := out.Truncated || out.NextCursor != ""
+		assertWithinBudget(t, out, 1400, dropped, hasControl, out.Error)
 	})
 
 	t.Run("search", func(t *testing.T) {
@@ -513,19 +521,19 @@ func TestExistingToolsRespectServiceBudget(t *testing.T) {
 			Version: "5.0.0",
 			Limit:   50,
 		})
-		assertWithinBudget(t, out, 1400, out.Truncated, out.Error)
+		dropped := out.Total > len(out.Hits)
+		assertWithinBudget(t, out, 1400, dropped, out.Truncated, out.Error)
 	})
 
 	t.Run("validate_markup", func(t *testing.T) {
-		out := svc.ValidateMarkup(context.Background(), ValidateMarkupInput{
-			Markup:  `<rh-button ` + strings.Repeat(`bogus="x" `, 40) + `></rh-button>`,
-			Version: "5.0.0",
-		})
-		assertWithinBudget(t, out, 1400, out.Truncated, out.Error)
+		out := svc.ValidateMarkup(context.Background(), markupInput)
+		dropped := len(out.Issues) < len(baselineMarkup.Issues)
+		hasControl := out.Truncated || (out.Error != nil && out.Error.Code == "response_too_large")
+		assertWithinBudget(t, out, 1400, dropped, hasControl, out.Error)
 	})
 }
 
-func assertWithinBudget(t *testing.T, value any, budget int, hasControl bool, toolErr *ToolError) {
+func assertWithinBudget(t *testing.T, value any, budget int, dropped, hasControl bool, toolErr *ToolError) {
 	t.Helper()
 	size := wireResponseBytes(value)
 	estimate := estimatedResponseBytes(value)
@@ -533,11 +541,163 @@ func assertWithinBudget(t *testing.T, value any, budget int, hasControl bool, to
 	if size > budget {
 		t.Errorf("response = %d bytes, over the %d byte budget", size, budget)
 	}
-	if size > budget && !hasControl && (toolErr == nil || toolErr.Code != "response_too_large") {
-		t.Error("oversized response has no explicit follow-up control")
+	if dropped && !hasControl && (toolErr == nil || toolErr.Code != "response_too_large") {
+		t.Error("dropped entries have no explicit follow-up control")
 	}
 	if toolErr != nil && toolErr.Code != "response_too_large" {
 		t.Errorf("unexpected tool error: %+v", toolErr)
+	}
+}
+
+func TestFitSearchNoticeDoesNotEmptyHits(t *testing.T) {
+	hits := make([]SearchHit, 50)
+	for i := range hits {
+		hits[i] = SearchHit{
+			Type:    "docs",
+			Title:   fmt.Sprintf("Button result %02d", i),
+			Path:    fmt.Sprintf("docs/button-%02d.md", i),
+			Version: "v5.0.0",
+			Excerpt: strings.Repeat("excerpt ", 8),
+			Score:   10,
+		}
+	}
+	// Choose a budget where 12 hits fit without the trim notice, so the
+	// notice itself pushes the payload over and must trigger one more trim.
+	const keep = 12
+	baseline := SearchOutput{
+		Resolved: ResolvedVersion{Elements: "5.0.0"},
+		Hits:     append([]SearchHit(nil), hits[:keep]...),
+		Total:    len(hits),
+	}
+	budget := estimatedResponseBytes(baseline) + 10
+	out := SearchOutput{Resolved: ResolvedVersion{Elements: "5.0.0"}, Hits: hits, Total: len(hits)}
+	fitSearch(&out, budget)
+	if out.Error != nil && out.Error.Code != "response_too_large" {
+		t.Fatalf("unexpected error = %+v", out.Error)
+	}
+	t.Logf("hits = %d, estimate = %d, budget = %d, warnings = %v",
+		len(out.Hits), estimatedResponseBytes(out), budget, out.Resolved.Warnings)
+	if len(out.Hits) == 0 {
+		t.Fatalf("hits = 0, want a non-empty page; warnings = %v", out.Resolved.Warnings)
+	}
+	if !out.Truncated {
+		t.Error("Truncated = false, want true when hits are dropped")
+	}
+	if size := wireResponseBytes(out); size > budget {
+		t.Errorf("response = %d bytes, over the %d byte budget", size, budget)
+	}
+}
+
+func TestFitResolveVersionNoticeDoesNotEmptyCandidates(t *testing.T) {
+	out := ResolveVersionOutput{Resolved: ResolvedVersion{Elements: "5.0.0"}, Candidates: manyCandidates(100)}
+	fitResolveVersion(&out, defaultResponseBudget)
+	t.Logf("candidates = %d, estimate = %d, budget = %d, warnings = %v",
+		len(out.Candidates), estimatedResponseBytes(out), defaultResponseBudget, out.Resolved.Warnings)
+	if len(out.Candidates) == 0 {
+		t.Fatalf("candidates = 0, want a non-empty page; warnings = %v error = %+v",
+			out.Resolved.Warnings, out.Error)
+	}
+	if !out.Truncated {
+		t.Error("Truncated = false, want true when candidates are dropped")
+	}
+	if size := wireResponseBytes(out); size > defaultResponseBudget {
+		t.Errorf("response = %d bytes, over the %d byte default", size, defaultResponseBudget)
+	}
+}
+
+func TestFitValidateMarkupMarksMessageTruncation(t *testing.T) {
+	out := ValidateMarkupOutput{
+		Resolved: ResolvedVersion{Elements: "5.0.0"},
+		Issues: []MarkupIssue{{
+			Rule:     "unknown-attribute",
+			Severity: "error",
+			Message:  strings.Repeat("m", 600),
+			Element:  "rh-button",
+			Line:     1,
+		}},
+	}
+	fitted := fitValidateMarkup(out, defaultResponseBudget)
+	if len(fitted.Issues) != 1 {
+		t.Fatalf("issues = %d, want one", len(fitted.Issues))
+	}
+	if !fitted.Issues[0].Truncated {
+		t.Error("issue Truncated = false, want true")
+	}
+	if !fitted.Truncated {
+		t.Error("output Truncated = false, want true")
+	}
+	if !hasWarning(fitted.Warnings, "message truncated from 600") {
+		t.Errorf("warnings = %v, want a message truncation notice", fitted.Warnings)
+	}
+	if size := wireResponseBytes(fitted); size > defaultResponseBudget {
+		t.Errorf("response = %d bytes, over the %d byte default", size, defaultResponseBudget)
+	}
+}
+
+func TestFitValidateMarkupNoticeDoesNotEmptyIssues(t *testing.T) {
+	issues := make([]MarkupIssue, 20)
+	for i := range issues {
+		issues[i] = MarkupIssue{
+			Rule:     "unknown-attribute",
+			Severity: "error",
+			Message:  strings.Repeat("m", 600),
+			Element:  "rh-button",
+			Line:     i + 1,
+		}
+	}
+	out := ValidateMarkupOutput{Resolved: ResolvedVersion{Elements: "5.0.0"}, Issues: issues}
+	fitted := fitValidateMarkup(out, 3000)
+	t.Logf("issues = %d, estimate = %d, budget = 3000, warnings = %v",
+		len(fitted.Issues), estimatedResponseBytes(fitted), fitted.Warnings)
+	if len(fitted.Issues) == 0 {
+		t.Fatalf("issues = 0, want a non-empty page; warnings = %v", fitted.Warnings)
+	}
+	if !fitted.Truncated {
+		t.Error("Truncated = false, want true when issues are dropped")
+	}
+	if size := wireResponseBytes(fitted); size > 3000 {
+		t.Errorf("response = %d bytes, over 3000", size)
+	}
+}
+
+func TestFitResolveVersionDoesNotShortenCandidatesUnderBudget(t *testing.T) {
+	long := strings.Repeat("v", 400)
+	out := ResolveVersionOutput{
+		Resolved: ResolvedVersion{Elements: "5.0.0"},
+		Candidates: []resolve.Candidate{{
+			Version: long,
+			Spec:    long,
+			Source:  long,
+			Level:   resolve.LevelBundled,
+		}},
+	}
+	fitResolveVersion(&out, defaultResponseBudget)
+	if len(out.Candidates) != 1 {
+		t.Fatalf("candidates = %d, want one", len(out.Candidates))
+	}
+	if out.Candidates[0].Version != long {
+		t.Error("candidate version shortened even though the response fits")
+	}
+	if out.Candidates[0].Truncated {
+		t.Error("candidate marked truncated even though the response fits")
+	}
+}
+
+func TestMarkCandidateTruncationSetsFlag(t *testing.T) {
+	candidate := resolve.Candidate{
+		Version: strings.Repeat("v", 400),
+		Spec:    strings.Repeat("s", 400),
+		Source:  strings.Repeat("p", 400),
+		Level:   resolve.LevelBundled,
+	}
+	if !markCandidateTruncation(&candidate) {
+		t.Fatal("markCandidateTruncation() = false, want true")
+	}
+	if !candidate.Truncated {
+		t.Error("candidate Truncated = false, want true")
+	}
+	if len(candidate.Version) > maxCandidateRunes+3 {
+		t.Errorf("version length = %d, want the cap plus ellipsis", len(candidate.Version))
 	}
 }
 
@@ -573,6 +733,9 @@ func TestFitListComponentsMarksFieldTruncation(t *testing.T) {
 	if !out.Components[0].Truncated {
 		t.Error("component Truncated = false, want true")
 	}
+	if !out.Truncated {
+		t.Error("output Truncated = false, want true")
+	}
 	if !hasWarning(out.Resolved.Warnings, "summary") {
 		t.Errorf("warnings = %v, want a summary truncation warning", out.Resolved.Warnings)
 	}
@@ -606,6 +769,9 @@ func TestFitListComponentsNoticesCountReturnedEntries(t *testing.T) {
 	}
 	if len(out.Components) == 0 || len(out.Components) == len(components) {
 		t.Fatalf("components = %d, want a trimmed non-empty page", len(out.Components))
+	}
+	if !out.Truncated {
+		t.Error("output Truncated = false, want true when components are dropped")
 	}
 	want := fmt.Sprintf("component %s summary truncated", out.Components[0].TagName)
 	if !hasWarning(out.Resolved.Warnings, want) {

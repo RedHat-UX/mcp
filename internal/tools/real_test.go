@@ -1049,3 +1049,37 @@ func TestRealManifestNormalization(t *testing.T) {
 		t.Error("rh-button has no attributes in the real manifest")
 	}
 }
+
+// TestRealSearchTruncationFlag pins that a budget-trimmed search page marks
+// the output truncated. The 5.0.0 "button" search has more hits than fit in
+// the default budget.
+func TestRealSearchTruncationFlag(t *testing.T) {
+	if _, err := os.Stat(filepath.Join("..", "data", "dist", data.IndexPath)); err != nil {
+		t.Skip("generated data is absent; run make data")
+	}
+	dist, err := fs.Sub(data.Embedded(), "dist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := data.Open(dist)
+	if err != nil {
+		t.Fatalf("data.Open() = %v", err)
+	}
+	out := New(store, nil).Search(context.Background(), SearchInput{
+		Query:   "button",
+		Version: "5.0.0",
+		Limit:   50,
+	})
+	if out.Error != nil {
+		t.Fatalf("Search() error = %+v", out.Error)
+	}
+	if out.Total <= len(out.Hits) {
+		t.Fatalf("search returned %d of %d hits; want a budget-trimmed page", len(out.Hits), out.Total)
+	}
+	if !out.Truncated {
+		t.Errorf("search dropped %d of %d hits with truncated=false", out.Total-len(out.Hits), out.Total)
+	}
+	if size := wireResponseBytes(out); size > defaultResponseBudget {
+		t.Errorf("response = %d bytes, over the %d byte default", size, defaultResponseBudget)
+	}
+}
