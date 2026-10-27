@@ -125,15 +125,11 @@ func Generate(inputs *Inputs, outDir string) (*data.Index, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := validateOutputDir(absoluteOut); err != nil {
+	resolvedOut, err := prepareOutputDir(absoluteOut)
+	if err != nil {
 		return nil, err
 	}
-	if err := os.RemoveAll(outDir); err != nil {
-		return nil, fmt.Errorf("clearing %s: %w", outDir, err)
-	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return nil, fmt.Errorf("creating %s: %w", outDir, err)
-	}
+	outDir = resolvedOut
 	// Keep the embed pattern valid even if the tree is later cleaned of
 	// generated artifacts.
 	if err := os.WriteFile(filepath.Join(outDir, ".gitkeep"), nil, 0o644); err != nil {
@@ -169,16 +165,74 @@ func Generate(inputs *Inputs, outDir string) (*data.Index, error) {
 	return index, nil
 }
 
-// validateOutputDir refuses paths whose removal could destroy the checkout or
-// the pinned lock. Generated data belongs under internal/data/dist, or in a
-// temporary directory for tests.
+// outputTreeEntries are the only top-level names gen-data writes. Clearing is
+// limited to these names, so an output directory can never lose unrelated
+// files even when it was accepted.
+var outputTreeEntries = map[string]bool{
+	".gitkeep":      true,
+	data.IndexPath:  true,
+	"elements":      true,
+	"tokens":        true,
+	"docs":          true,
+	"release-notes": true,
+}
+
+// prepareOutputDir validates outDir, refuses directories that contain anything
+// other than a previous gen-data tree, and removes only gen-data's own
+// top-level entries. It returns the resolved path to write to.
+func prepareOutputDir(absolute string) (string, error) {
+	resolved, err := resolveExisting(absolute)
+	if err != nil {
+		return "", err
+	}
+	if err := validateOutputDir(absolute); err != nil {
+		return "", err
+	}
+	entries, err := os.ReadDir(resolved)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
+		return "", fmt.Errorf("generate: cannot inspect output %q: %w", absolute, err)
+	default:
+		for _, entry := range entries {
+			if !outputTreeEntries[entry.Name()] {
+				return "", fmt.Errorf(
+					"generate: refusing to clear %q: it is not a gen-data output directory; use a dedicated output directory",
+					absolute)
+			}
+		}
+		for _, entry := range entries {
+			if err := os.RemoveAll(filepath.Join(resolved, entry.Name())); err != nil {
+				return "", fmt.Errorf("clearing %s: %w", filepath.Join(absolute, entry.Name()), err)
+			}
+		}
+	}
+	if err := os.MkdirAll(resolved, 0o755); err != nil {
+		return "", fmt.Errorf("creating %s: %w", absolute, err)
+	}
+	return resolved, nil
+}
+
+// validateOutputDir refuses paths whose contents or removal could destroy the
+// checkout, the user's home, or a shared temporary root. Generated data
+// belongs under internal/data/dist, or in a dedicated temporary subdirectory.
 func validateOutputDir(absolute string) error {
 	resolved, err := resolveExisting(absolute)
 	if err != nil {
 		return err
 	}
-	if absolute == string(filepath.Separator) || filepath.Dir(absolute) == absolute {
+	if isFilesystemRoot(absolute) || isFilesystemRoot(resolved) {
 		return fmt.Errorf("generate: refusing to clear filesystem root")
+	}
+	if protected := protectedPaths(); protected != nil {
+		for _, path := range protected {
+			if resolved == path {
+				return fmt.Errorf("generate: refusing to clear protected directory %q", path)
+			}
+		}
+		if repoRoot := protected["repo"]; repoRoot != "" && isAncestorOrSelf(resolved, repoRoot) {
+			return fmt.Errorf("generate: refusing to clear %q because it contains the repository", absolute)
+		}
 	}
 	if !isTempPath(resolved) && !isInternalDataDist(resolved) {
 		return fmt.Errorf(
@@ -192,6 +246,56 @@ func validateOutputDir(absolute string) error {
 		}
 	}
 	return nil
+}
+
+// protectedPaths returns resolved paths that must never be cleared: the temp
+// root, the user's home, the current directory, and the repository root. The
+// "repo" key is empty when no go.mod is found above the current directory.
+func protectedPaths() map[string]string {
+	paths := map[string]string{}
+	add := func(key, value string) {
+		if value == "" {
+			return
+		}
+		if resolved, err := resolveExisting(value); err == nil {
+			paths[key] = resolved
+		} else {
+			paths[key] = filepath.Clean(value)
+		}
+	}
+	add("temp", os.TempDir())
+	if home, err := os.UserHomeDir(); err == nil {
+		add("home", home)
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		add("cwd", cwd)
+		add("repo", findRepositoryRoot(cwd))
+	}
+	return paths
+}
+
+func findRepositoryRoot(start string) string {
+	dir := filepath.Clean(start)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+func isFilesystemRoot(path string) bool {
+	return filepath.Dir(path) == path
+}
+
+func isAncestorOrSelf(ancestor, target string) bool {
+	ancestor = filepath.Clean(ancestor)
+	target = filepath.Clean(target)
+	return ancestor == target || strings.HasPrefix(target, ancestor+string(filepath.Separator))
 }
 
 func isTempPath(resolved string) bool {

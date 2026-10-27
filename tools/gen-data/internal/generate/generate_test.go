@@ -267,9 +267,91 @@ func TestGenerateRejectsDocTagTraversal(t *testing.T) {
 }
 
 func TestGenerateRejectsUnsafeOutputDirectory(t *testing.T) {
-	for _, out := range []string{".", "..", "/", "internal/data", os.TempDir()} {
+	for _, out := range []string{".", "..", "/", "internal/data"} {
 		if _, err := Generate(testInputs(), out); err == nil {
 			t.Errorf("Generate(out=%q) accepted an unsafe output directory", out)
+		}
+	}
+}
+
+func TestValidateOutputDirRejectsProtectedRoots(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, out := range []string{os.TempDir(), home, string(filepath.Separator)} {
+		if err := validateOutputDir(out); err == nil {
+			t.Errorf("validateOutputDir(%q) accepted a protected directory", out)
+		}
+	}
+}
+
+func TestValidateOutputDirRejectsRepositoryRoot(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoRoot := findRepositoryRoot(cwd)
+	if repoRoot == "" {
+		t.Fatal("findRepositoryRoot() did not find the module root")
+	}
+	if err := validateOutputDir(repoRoot); err == nil {
+		t.Fatalf("validateOutputDir(%q) accepted the repository root", repoRoot)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "go.mod")); err != nil {
+		t.Fatalf("repository go.mod is missing after validation: %v", err)
+	}
+}
+
+func TestGenerateRefusesUnrelatedUserFile(t *testing.T) {
+	out, err := os.MkdirTemp("", "rhds-gen-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(out) }()
+
+	userFile := filepath.Join(out, "notes.txt")
+	if err := os.WriteFile(userFile, []byte("user data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Generate(testInputs(), out); err == nil {
+		t.Fatal("Generate() accepted a directory containing an unrelated file")
+	}
+	content, err := os.ReadFile(userFile)
+	if err != nil {
+		t.Fatalf("Generate() removed the user file: %v", err)
+	}
+	if string(content) != "user data" {
+		t.Fatalf("user file content = %q, want %q", content, "user data")
+	}
+}
+
+func TestGenerateLeavesContentsIntactWhenValidationFails(t *testing.T) {
+	out, err := os.MkdirTemp("", "rhds-gen-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(out) }()
+
+	files := map[string]string{
+		"go.mod":   "module example.test\n",
+		"keep.txt": "keep me",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(out, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Generate(testInputs(), out); err == nil {
+		t.Fatal("Generate() accepted an output directory containing go.mod")
+	}
+	for name, want := range files {
+		content, err := os.ReadFile(filepath.Join(out, name))
+		if err != nil {
+			t.Fatalf("Generate() removed %s: %v", name, err)
+		}
+		if string(content) != want {
+			t.Errorf("%s content = %q, want %q", name, content, want)
 		}
 	}
 }
