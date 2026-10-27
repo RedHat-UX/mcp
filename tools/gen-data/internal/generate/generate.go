@@ -182,10 +182,14 @@ func prepareOutputDir(absolute string) (*os.Root, error) {
 	if beforeErr != nil && !errors.Is(beforeErr, os.ErrNotExist) {
 		return nil, fmt.Errorf("generate: inspecting output %q: %w", resolved, beforeErr)
 	}
-	// A parent component can still change before the directory exists. For an
-	// existing directory, compare the inode captured here with the opened
-	// root. For a new directory the final creation window remains; all later
-	// reads, removals, and writes use the opened root descriptor.
+	// Any path component, including the final one, can change until OpenRoot.
+	// For an existing directory, the inode captured here is compared with the
+	// opened root, and confirmSameDirectory rechecks the current path and
+	// refuses a symlink after opening. A change before this stat is not
+	// detected by the inode comparison, but no mutation happens until the root
+	// is open; every later read, removal, and write uses that descriptor. When
+	// the directory does not exist yet, a swapped parent can redirect creation,
+	// and the post-open checks still bind all subsequent operations.
 	if err := os.MkdirAll(resolved, 0o755); err != nil {
 		return nil, fmt.Errorf("creating %s: %w", absolute, err)
 	}
@@ -241,6 +245,13 @@ func prepareOutputDir(absolute string) (*os.Root, error) {
 }
 
 func confirmSameDirectory(resolved string, root *os.Root) error {
+	info, err := os.Lstat(resolved)
+	if err != nil {
+		return fmt.Errorf("generate: inspecting output %q: %w", resolved, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("generate: refusing output %q because it is a symlink", resolved)
+	}
 	pathInfo, err := os.Stat(resolved)
 	if err != nil {
 		return fmt.Errorf("generate: inspecting output %q: %w", resolved, err)
@@ -315,7 +326,7 @@ func entryNames(entries []fs.DirEntry) []string {
 func findSourceFiles(root *os.Root, entries []fs.DirEntry) ([]string, error) {
 	isSource := func(name string) bool {
 		base := filepath.Base(name)
-		return base == "go.mod" || base == "sources.lock.json"
+		return base == "go.mod" || base == "sources.lock.json" || base == ".git"
 	}
 	var found []string
 	for _, entry := range entries {
@@ -329,8 +340,11 @@ func findSourceFiles(root *os.Root, entries []fs.DirEntry) ([]string, error) {
 			if err != nil {
 				return err
 			}
-			if !item.IsDir() && isSource(name) {
+			if isSource(name) {
 				found = append(found, filepath.ToSlash(name))
+				if item.IsDir() {
+					return fs.SkipDir
+				}
 			}
 			return nil
 		})
@@ -345,6 +359,7 @@ func findSourceFiles(root *os.Root, entries []fs.DirEntry) ([]string, error) {
 // resolves parent symlinks once. Callers must use the returned path for both
 // validation and directory access.
 func resolveOutputPath(absolute string) (string, error) {
+	absolute = filepath.Clean(absolute)
 	info, err := os.Lstat(absolute)
 	switch {
 	case err == nil && info.Mode()&os.ModeSymlink != 0:

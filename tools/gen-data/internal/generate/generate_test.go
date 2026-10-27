@@ -323,7 +323,7 @@ func TestValidateOutputDirFindsRepositoryRootFromOutput(t *testing.T) {
 	if err := os.Mkdir(repo, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.test\n"), 0o644); err != nil {
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	outside := t.TempDir()
@@ -416,8 +416,13 @@ func TestGenerateRefusesSymlinkOutput(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Generate(testInputs(), link); err == nil {
-		t.Fatal("Generate() accepted an output path that is a symlink")
+	if _, err := resolveOutputPath(link + string(os.PathSeparator)); err == nil {
+		t.Error("resolveOutputPath() accepted a symlink with a trailing separator")
+	}
+	for _, output := range []string{link, link + string(os.PathSeparator)} {
+		if _, err := Generate(testInputs(), output); err == nil {
+			t.Errorf("Generate() accepted an output path that is a symlink: %q", output)
+		}
 	}
 	if _, err := os.Stat(target); err != nil {
 		t.Fatalf("symlink target was removed: %v", err)
@@ -483,6 +488,35 @@ func TestGenerateRefusesUnexpectedEntryAfterValidMarker(t *testing.T) {
 	}
 	if _, err := os.Stat(unexpected); err != nil {
 		t.Fatalf("unexpected entry was removed: %v", err)
+	}
+}
+
+func TestGenerateRefusesNestedGitDirectory(t *testing.T) {
+	out, err := os.MkdirTemp("", "rhds-gen-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(out) }()
+	if _, err := Generate(testInputs(), out); err != nil {
+		t.Fatalf("first Generate() = %v", err)
+	}
+	nested := filepath.Join(out, "tokens", "nested", ".git")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(nested, "config")
+	if err := os.WriteFile(keep, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Generate(testInputs(), out)
+	if err == nil {
+		t.Fatal("Generate() accepted a nested .git directory under an output entry")
+	}
+	if !strings.Contains(err.Error(), "tokens/nested/.git") {
+		t.Errorf("Generate() error = %v, want the nested .git path", err)
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatalf("nested .git content was removed: %v", err)
 	}
 }
 
