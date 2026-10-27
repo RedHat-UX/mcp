@@ -209,21 +209,166 @@ func TestFitListComponentsMarksAndWarnsTruncation(t *testing.T) {
 	for _, want := range []struct {
 		field    string
 		original int
+		result   int
 	}{
-		{"summary", 600},
-		{"modulePath", 400},
-		{"packageSubpath", 400},
+		{"summary", 600, 503},
+		{"modulePath", 400, 303},
+		{"packageSubpath", 400, 303},
 	} {
 		found := false
 		for _, warning := range out.Resolved.Warnings {
 			if strings.Contains(warning, want.field) &&
-				strings.Contains(warning, fmt.Sprintf("from %d", want.original)) {
+				strings.Contains(warning, fmt.Sprintf("from %d to %d", want.original, want.result)) {
 				found = true
 			}
 		}
 		if !found {
-			t.Errorf("warnings = %v, want one naming %s and its original %d runes",
-				out.Resolved.Warnings, want.field, want.original)
+			t.Errorf("warnings = %v, want one naming %s, its original %d runes, and the result %d runes",
+				out.Resolved.Warnings, want.field, want.original, want.result)
+		}
+	}
+}
+
+// TestMarkComponentTruncationReportsTrueOriginalAcrossPasses covers the
+// single-row fallback: the second shortening pass must report the true
+// original length, not the already-truncated one, and must replace rather than
+// duplicate the notice.
+func TestMarkComponentTruncationReportsTrueOriginalAcrossPasses(t *testing.T) {
+	component := ComponentSummary{
+		TagName:        "rh-long",
+		Summary:        strings.Repeat("s", 600),
+		ModulePath:     strings.Repeat("p", 400),
+		PackageSubpath: strings.Repeat("p", 400),
+	}
+	state := newFieldTruncation()
+	markComponentTruncation(&component, state, 100, 500, 300, 300)
+	markComponentTruncation(&component, state, 0, 100, 150, 150)
+
+	notices := state.list()
+	if len(notices) != 3 {
+		t.Fatalf("notices = %v, want one per field", notices)
+	}
+	for _, want := range []struct {
+		field    string
+		original int
+		result   int
+	}{
+		{"summary", 600, 103},
+		{"modulePath", 400, 153},
+		{"packageSubpath", 400, 153},
+	} {
+		found := false
+		for _, notice := range notices {
+			if strings.Contains(notice, want.field) &&
+				strings.Contains(notice, fmt.Sprintf("from %d to %d", want.original, want.result)) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("notices = %v, want %s from its true original %d to %d",
+				notices, want.field, want.original, want.result)
+		}
+	}
+}
+
+// TestFitListComponentsKeepsEveryTruncationNoticeBeyondWarningCap proves that
+// the ordinary warning cap cannot hide a truncation notice, even with more
+// notices than maxResponseWarnings and a full base warning list.
+func TestFitListComponentsKeepsEveryTruncationNoticeBeyondWarningCap(t *testing.T) {
+	components := make([]ComponentSummary, 5)
+	for i := range components {
+		components[i] = ComponentSummary{
+			TagName:        fmt.Sprintf("rh-%d", i),
+			Summary:        strings.Repeat("s", 600),
+			ModulePath:     strings.Repeat("p", 400),
+			PackageSubpath: strings.Repeat("p", 400),
+		}
+	}
+	out := ListComponentsOutput{
+		Resolved:   ResolvedVersion{Elements: "5.0.0", Warnings: manyWarnings(20)},
+		Components: components,
+		Total:      len(components),
+	}
+
+	fitListComponents(&out, 0, false, 1<<20)
+	if len(out.Components) != len(components) {
+		t.Fatalf("components = %d, want %d", len(out.Components), len(components))
+	}
+	counts := make(map[string]int)
+	for _, warning := range out.Resolved.Warnings {
+		if !strings.Contains(warning, "truncated from") {
+			continue
+		}
+		for _, field := range []string{"summary", "modulePath", "packageSubpath"} {
+			if strings.Contains(warning, " "+field+" truncated from") {
+				counts[field]++
+			}
+		}
+	}
+	for _, field := range []string{"summary", "modulePath", "packageSubpath"} {
+		if counts[field] != len(components) {
+			t.Errorf("%s notices = %d, want %d; warnings = %v",
+				field, counts[field], len(components), out.Resolved.Warnings)
+		}
+	}
+	for _, component := range out.Components {
+		if !component.Truncated {
+			t.Errorf("%s truncated = false, want true", component.TagName)
+		}
+	}
+}
+
+// TestFitSearchMarksAndWarnsTruncation applies the same no-silent-truncation
+// contract to search rows.
+func TestFitSearchMarksAndWarnsTruncation(t *testing.T) {
+	out := SearchOutput{
+		Hits: []SearchHit{{
+			Type:    "doc",
+			Title:   strings.Repeat("t", 250),
+			Path:    strings.Repeat("p", 350),
+			Excerpt: strings.Repeat("e", 200),
+		}},
+		Total: 1,
+	}
+	fitSearch(&out, hardResponseBudget)
+	if out.Error != nil {
+		t.Fatalf("fitSearch() error = %+v", out.Error)
+	}
+	if len(out.Hits) != 1 {
+		t.Fatalf("hits = %d, want the single hit", len(out.Hits))
+	}
+	hit := out.Hits[0]
+	if !hit.Truncated {
+		t.Error("truncated = false, want true")
+	}
+	if got := utf8.RuneCountInString(hit.Title); got != 203 {
+		t.Errorf("title runes = %d, want 203", got)
+	}
+	if got := utf8.RuneCountInString(hit.Path); got != 303 {
+		t.Errorf("path runes = %d, want 303", got)
+	}
+	if got := utf8.RuneCountInString(hit.Excerpt); got != 183 {
+		t.Errorf("excerpt runes = %d, want 183", got)
+	}
+	for _, want := range []struct {
+		field    string
+		original int
+		result   int
+	}{
+		{"title", 250, 203},
+		{"path", 350, 303},
+		{"excerpt", 200, 183},
+	} {
+		found := false
+		for _, warning := range out.Resolved.Warnings {
+			if strings.Contains(warning, want.field) &&
+				strings.Contains(warning, fmt.Sprintf("from %d to %d", want.original, want.result)) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("warnings = %v, want one naming %s, its original %d runes, and the result %d runes",
+				out.Resolved.Warnings, want.field, want.original, want.result)
 		}
 	}
 }

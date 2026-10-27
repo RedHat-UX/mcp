@@ -199,10 +199,18 @@ func cursorVersionMismatch(cursorVersion, requestedVersion string) *ToolError {
 	}
 }
 
-func (s *Service) listComponents(resolved resolution, input ListComponentsInput) (out ListComponentsOutput) {
+func (s *Service) listComponents(resolved resolution, input ListComponentsInput) ListComponentsOutput {
+	return s.listComponentsWithBudget(resolved, input, defaultResponseBudget)
+}
+
+func (s *Service) listComponentsWithBudget(
+	resolved resolution,
+	input ListComponentsInput,
+	budget int,
+) (out ListComponentsOutput) {
 	startOffset := 0
 	defer func() {
-		fitListComponents(&out, startOffset, input.IncludeDeprecated, defaultResponseBudget)
+		fitListComponents(&out, startOffset, input.IncludeDeprecated, budget)
 	}()
 	out = ListComponentsOutput{
 		Resolved:   resolved.Resolved,

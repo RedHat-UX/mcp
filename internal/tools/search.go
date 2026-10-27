@@ -46,6 +46,10 @@ type SearchHit struct {
 	Excerpt    string `json:"excerpt,omitempty"`
 	Score      int    `json:"score"`
 	Deprecated bool   `json:"deprecated,omitempty"`
+	// Truncated reports that the budget layer shortened at least one field in
+	// this hit. The warning names each shortened field and its original rune
+	// length.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // SearchOutput is the output for rhds_search.

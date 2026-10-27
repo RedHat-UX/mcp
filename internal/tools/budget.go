@@ -53,19 +53,26 @@ func truncateResponseText(text string, limit int) string {
 // sanitizeWarnings truncates, deduplicates, and caps warning lists so a
 // hostile workspace cannot inflate a response with one warning per file.
 func sanitizeWarnings(warnings []string) []string {
+	return sanitizeWarningsLimit(warnings, maxResponseWarnings)
+}
+
+func sanitizeWarningsLimit(warnings []string, limit int) []string {
 	if len(warnings) == 0 {
 		return nil
 	}
+	if limit < 0 {
+		limit = 0
+	}
 	seen := make(map[string]bool, len(warnings))
-	out := make([]string, 0, min(len(warnings), maxResponseWarnings))
+	out := make([]string, 0, min(len(warnings), limit))
 	dropped := 0
-	for _, warning := range warnings {
-		warning = truncateResponseText(strings.TrimSpace(warning), maxWarningRunes)
+	for _, raw := range warnings {
+		warning := truncateResponseText(strings.TrimSpace(raw), maxWarningRunes)
 		if warning == "" || seen[warning] {
 			continue
 		}
 		seen[warning] = true
-		if len(out) >= maxResponseWarnings {
+		if len(out) >= limit {
 			dropped++
 			continue
 		}
@@ -73,6 +80,42 @@ func sanitizeWarnings(warnings []string) []string {
 	}
 	if dropped > 0 {
 		out = append(out, fmt.Sprintf("%d additional warnings omitted", dropped))
+	}
+	return out
+}
+
+// sanitizeWarningsWithReserved keeps every reserved notice, even when the
+// ordinary warning list fills the cap. Reserved notices come from shortened
+// response fields, so they are bounded by the payload and are never treated as
+// hostile input. Ordinary warnings are capped to the remaining slots.
+func sanitizeWarningsWithReserved(warnings, reserved []string) []string {
+	if len(reserved) == 0 {
+		return sanitizeWarnings(warnings)
+	}
+	reserved = sanitizeWarningNotices(reserved)
+	limit := maxResponseWarnings - len(reserved)
+	if limit < 0 {
+		limit = 0
+	}
+	base := sanitizeWarningsLimit(warnings, limit)
+	return sanitizeWarningNotices(append(reserved, base...))
+}
+
+// sanitizeWarningNotices truncates and deduplicates notices without dropping
+// any of them.
+func sanitizeWarningNotices(warnings []string) []string {
+	if len(warnings) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(warnings))
+	out := make([]string, 0, len(warnings))
+	for _, raw := range warnings {
+		warning := truncateResponseText(strings.TrimSpace(raw), maxWarningRunes)
+		if warning == "" || seen[warning] {
+			continue
+		}
+		seen[warning] = true
+		out = append(out, warning)
 	}
 	return out
 }
@@ -229,16 +272,62 @@ func compactStrings(values []string, limit, runes int) []string {
 	return compacted
 }
 
+// fieldTruncation tracks the original length and latest notice for each
+// shortened field of one response entry. The original is retained across
+// multiple shortening passes, so a second pass reports the true original.
+type fieldTruncation struct {
+	originals map[string]int
+	notices   map[string]string
+	order     []string
+}
+
+func newFieldTruncation() *fieldTruncation {
+	return &fieldTruncation{
+		originals: make(map[string]int),
+		notices:   make(map[string]string),
+	}
+}
+
+func (t *fieldTruncation) record(subject, field string, current, result int) {
+	original, ok := t.originals[field]
+	if !ok {
+		original = current
+		t.originals[field] = original
+		t.order = append(t.order, field)
+	}
+	t.notices[field] = fmt.Sprintf(
+		"%s %s truncated from %d to %d runes", subject, field, original, result)
+}
+
+func (t *fieldTruncation) list() []string {
+	if len(t.order) == 0 {
+		return nil
+	}
+	notices := make([]string, 0, len(t.order))
+	for _, field := range t.order {
+		notices = append(notices, t.notices[field])
+	}
+	return notices
+}
+
+func truncationNotices(states []*fieldTruncation, count int) []string {
+	var notices []string
+	for i := 0; i < count && i < len(states); i++ {
+		notices = append(notices, states[i].list()...)
+	}
+	return notices
+}
+
 // markComponentTruncation shortens the budget-controlled fields of one list
-// row. Every shortening sets Truncated and appends a warning naming the field
-// and its original rune length, so the list path never truncates silently.
+// row. Every shortening sets Truncated and records a warning naming the field,
+// its true original rune length, and the actual resulting rune length.
 // Limits of zero leave the corresponding field untouched.
 func markComponentTruncation(
 	component *ComponentSummary,
-	warnings *[]string,
+	state *fieldTruncation,
 	tagLimit, summaryLimit, moduleLimit, packageLimit int,
 ) {
-	tag := truncateResponseText(component.TagName, 100)
+	subject := "component " + truncateResponseText(component.TagName, 100)
 	fields := []struct {
 		name  string
 		value *string
@@ -260,9 +349,31 @@ func markComponentTruncation(
 		}
 		*field.value = after
 		component.Truncated = true
-		*warnings = append(*warnings, fmt.Sprintf(
-			"component %s %s truncated from %d to %d runes",
-			tag, field.name, before, field.limit))
+		state.record(subject, field.name, before, utf8.RuneCountInString(after))
+	}
+}
+
+// markSearchHitTruncation applies the same contract to one search row.
+func markSearchHitTruncation(hit *SearchHit, state *fieldTruncation) {
+	subject := "search hit " + truncateResponseText(hit.Title, 200)
+	fields := []struct {
+		name  string
+		value *string
+		limit int
+	}{
+		{"title", &hit.Title, 200},
+		{"path", &hit.Path, 300},
+		{"excerpt", &hit.Excerpt, maxExcerptRunes},
+	}
+	for _, field := range fields {
+		before := utf8.RuneCountInString(*field.value)
+		after := truncateResponseText(*field.value, field.limit)
+		if after == *field.value {
+			continue
+		}
+		*field.value = after
+		hit.Truncated = true
+		state.record(subject, field.name, before, utf8.RuneCountInString(after))
 	}
 }
 
@@ -280,29 +391,32 @@ func fitListComponents(
 		}
 		return
 	}
-	truncationWarnings := make([]string, 0)
+	states := make([]*fieldTruncation, len(out.Components))
 	for i := range out.Components {
-		markComponentTruncation(&out.Components[i], &truncationWarnings, 100, 500, 300, 300)
+		states[i] = newFieldTruncation()
+		markComponentTruncation(&out.Components[i], states[i], 100, 500, 300, 300)
 	}
 	baseWarnings := sanitizeWarnings(out.Resolved.Warnings)
 	if estimatedResponseBytes(out) > budget {
 		baseWarnings = summarizeWarnings(baseWarnings)
 	}
-	if len(truncationWarnings) > 0 {
-		// Truncation notices are contract-relevant. Prepend them so the
-		// warning cap and summarizeWarnings cannot hide a shortened field.
-		baseWarnings = sanitizeWarnings(append(truncationWarnings, baseWarnings...))
+	setWarnings := func(extra ...string) {
+		base := append([]string(nil), baseWarnings...)
+		base = append(base, extra...)
+		out.Resolved.Warnings = sanitizeWarningsWithReserved(
+			base, truncationNotices(states, len(out.Components)))
 	}
-	out.Resolved.Warnings = baseWarnings
+	setWarnings()
 
 	const trimWarning = "response limited to fit the budget; continue with nextCursor"
 	trimmed := 0
 	for estimatedResponseBytes(out) > budget && len(out.Components) > 1 {
 		out.Components = out.Components[:len(out.Components)-1]
 		trimmed++
+		setWarnings()
 	}
 	if trimmed > 0 {
-		out.Resolved.Warnings = sanitizeWarnings(append(baseWarnings, trimWarning))
+		setWarnings(trimWarning)
 		// Re-size with the trim warning and cursor included. The cursor length
 		// depends on the trimmed length, so update it on every iteration.
 		for {
@@ -317,14 +431,15 @@ func fitListComponents(
 			}
 			out.Components = out.Components[:len(out.Components)-1]
 			trimmed++
+			setWarnings(trimWarning)
 		}
 	}
 	if estimatedResponseBytes(out) > budget && len(out.Components) == 1 {
-		fallbackWarnings := make([]string, 0)
-		markComponentTruncation(&out.Components[0], &fallbackWarnings, 0, 100, 150, 150)
-		if len(fallbackWarnings) > 0 {
-			out.Resolved.Warnings = sanitizeWarnings(
-				append(fallbackWarnings, out.Resolved.Warnings...))
+		markComponentTruncation(&out.Components[0], states[0], 0, 100, 150, 150)
+		if trimmed > 0 {
+			setWarnings(trimWarning)
+		} else {
+			setWarnings()
 		}
 	}
 	if estimatedResponseBytes(out) > budget {
@@ -335,7 +450,6 @@ func fitListComponents(
 		out.Resolved.Warnings = []string{"response trimmed to fit the budget"}
 		out.Error = responseTooLarge("the component page", budget)
 	}
-	out.Resolved.Warnings = sanitizeWarnings(out.Resolved.Warnings)
 }
 
 func fitSearch(out *SearchOutput, budget int) {
@@ -348,26 +462,33 @@ func fitSearch(out *SearchOutput, budget int) {
 		}
 		return
 	}
+	states := make([]*fieldTruncation, len(out.Hits))
 	for i := range out.Hits {
-		hit := &out.Hits[i]
-		hit.Title = truncateResponseText(hit.Title, 200)
-		hit.Path = truncateResponseText(hit.Path, 300)
-		hit.Excerpt = truncateResponseText(hit.Excerpt, maxExcerptRunes)
+		states[i] = newFieldTruncation()
+		markSearchHitTruncation(&out.Hits[i], states[i])
 	}
-	out.Resolved.Warnings = sanitizeWarnings(out.Resolved.Warnings)
+	baseWarnings := sanitizeWarnings(out.Resolved.Warnings)
+	setWarnings := func(extra ...string) {
+		base := append([]string(nil), baseWarnings...)
+		base = append(base, extra...)
+		out.Resolved.Warnings = sanitizeWarningsWithReserved(
+			base, truncationNotices(states, len(out.Hits)))
+	}
+	setWarnings()
 	if estimatedResponseBytes(out) > budget {
-		out.Resolved.Warnings = summarizeWarnings(out.Resolved.Warnings)
+		baseWarnings = summarizeWarnings(baseWarnings)
+		setWarnings()
 	}
 
 	trimmed := 0
 	for estimatedResponseBytes(out) > budget && len(out.Hits) > 0 {
 		out.Hits = out.Hits[:len(out.Hits)-1]
 		trimmed++
+		setWarnings()
 	}
 	if trimmed > 0 {
-		out.Resolved.Warnings = sanitizeWarnings(append(out.Resolved.Warnings,
-			fmt.Sprintf("results trimmed from %d to %d to fit the response budget",
-				out.Total, len(out.Hits))))
+		setWarnings(fmt.Sprintf("results trimmed from %d to %d to fit the response budget",
+			out.Total, len(out.Hits)))
 	}
 	if estimatedResponseBytes(out) > budget {
 		out.Hits = nil

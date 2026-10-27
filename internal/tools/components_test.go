@@ -344,13 +344,23 @@ func TestListComponentsDefaultPageSize(t *testing.T) {
 }
 
 func TestListComponentsMaxPageSize(t *testing.T) {
-	svc := memoryService(t, largeManifest(t, 5), "5.0.0")
-	out := svc.ListComponents(context.Background(), ListComponentsInput{PageSize: 1000})
-	if out.Error != nil {
-		t.Fatalf("ListComponents() error = %+v", out.Error)
+	svc := memoryService(t, largeManifest(t, 130), "5.0.0")
+	resolved, failure := svc.bundledResolution("5.0.0", "")
+	if failure != nil {
+		t.Fatalf("bundledResolution() error = %+v", failure)
 	}
-	if out.Total != 5 || len(out.Components) != 5 {
-		t.Errorf("components = %d of %d, want all 5", len(out.Components), out.Total)
+	// Use a budget large enough that the page-size cap, not response trimming,
+	// determines the output length.
+	out := svc.listComponentsWithBudget(resolved, ListComponentsInput{PageSize: 1000}, 1<<20)
+	if out.Error != nil {
+		t.Fatalf("listComponentsWithBudget() error = %+v", out.Error)
+	}
+	if out.Total != 130 || len(out.Components) != maxPageSize {
+		t.Errorf("components = %d of %d, want %d of 130",
+			len(out.Components), out.Total, maxPageSize)
+	}
+	if out.NextCursor == "" {
+		t.Error("expected a next cursor for the remaining 30 components")
 	}
 	if !slices.ContainsFunc(out.Resolved.Warnings, func(warning string) bool {
 		return strings.Contains(warning, fmt.Sprintf("pageSize was capped at %d", maxPageSize))
