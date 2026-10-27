@@ -421,25 +421,18 @@ func serviceWithThemes(t *testing.T, themesJSON []byte) *Service {
 	return New(store, nil)
 }
 
-func TestQueryTokensLoadsThemesOnlyWhenRequested(t *testing.T) {
+// Phase C loads the theme map while building the token set so light-dark()
+// composites can be synthesized. It must still parse the map once per version.
+func TestQueryTokensParsesThemesOnce(t *testing.T) {
 	svc := fixtureService(t)
-	out := svc.QueryTokens(context.Background(), QueryTokensInput{Token: "color-brand"})
-	if out.Error != nil {
-		t.Fatalf("QueryTokens() error = %+v", out.Error)
-	}
-	if got := svc.themeParses.Load(); got != 0 {
-		t.Errorf("theme parses without a requested theme = %d, want 0", got)
-	}
-
-	out = svc.QueryTokens(context.Background(), QueryTokensInput{
-		Token: "color-brand",
-		Theme: "light",
-	})
-	if out.Error != nil {
-		t.Fatalf("QueryTokens(theme) error = %+v", out.Error)
+	for range 2 {
+		out := svc.QueryTokens(context.Background(), QueryTokensInput{Token: "color-brand"})
+		if out.Error != nil {
+			t.Fatalf("QueryTokens() error = %+v", out.Error)
+		}
 	}
 	if got := svc.themeParses.Load(); got != 1 {
-		t.Errorf("theme parses after requesting a theme = %d, want 1", got)
+		t.Errorf("theme parses = %d, want 1", got)
 	}
 }
 
