@@ -25,7 +25,7 @@ func TestManifestIsParsedOncePerVersion(t *testing.T) {
 func TestTokensAreParsedOncePerVersion(t *testing.T) {
 	svc := fixtureService(t)
 	for range 3 {
-		out := svc.QueryTokens(context.Background(), QueryTokensInput{Token: "color-brand"})
+		out := svc.QueryTokens(context.Background(), QueryTokensInput{Token: "color-brand", Theme: "light"})
 		if out.Error != nil {
 			t.Fatalf("QueryTokens() error = %+v", out.Error)
 		}
@@ -46,7 +46,7 @@ func TestArtifactCachesAreSafeUnderConcurrency(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			_ = svc.ListComponents(context.Background(), ListComponentsInput{})
-			_ = svc.QueryTokens(context.Background(), QueryTokensInput{Token: "color-brand"})
+			_ = svc.QueryTokens(context.Background(), QueryTokensInput{Token: "color-brand", Theme: "light"})
 		}()
 	}
 	wg.Wait()
