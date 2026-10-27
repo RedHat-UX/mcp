@@ -356,7 +356,7 @@ func TestQueryTokensRejectsInvalidTheme(t *testing.T) {
 	}
 }
 
-func TestQueryTokensFullDetailIncludesDescriptionAndDeprecation(t *testing.T) {
+func TestQueryTokensIncludesDescriptionAndDeprecation(t *testing.T) {
 	svc := fixtureService(t)
 	summary := svc.QueryTokens(context.Background(), QueryTokensInput{Token: "color-legacy"})
 	if summary.Error != nil {
@@ -365,8 +365,8 @@ func TestQueryTokensFullDetailIncludesDescriptionAndDeprecation(t *testing.T) {
 	if len(summary.Tokens) != 1 {
 		t.Fatalf("summary tokens = %+v, want one", summary.Tokens)
 	}
-	if summary.Tokens[0].Description != "" {
-		t.Errorf("summary description = %q, want empty", summary.Tokens[0].Description)
+	if summary.Tokens[0].Description == "" {
+		t.Error("summary detail omitted the description")
 	}
 	if summary.Tokens[0].Deprecation == "" {
 		t.Error("summary detail omitted the deprecation message")

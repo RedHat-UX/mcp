@@ -842,7 +842,7 @@ func fitUsageExamples(out UsageExamplesOutput, budget int) UsageExamplesOutput {
 	hadExamples := len(out.Examples) > 0
 	out.Truncated = true
 	out.Resolved.Warnings = append(out.Resolved.Warnings,
-		fmt.Sprintf("the response budget of %d bytes was reached; use kind to request one example kind", budget))
+		fmt.Sprintf("the response budget of %d bytes was reached; use kind to request one example kind or detail=full", budget))
 	for estimatedResponseBytes(out) > budget && len(out.Examples) > 0 {
 		out.Examples = out.Examples[:len(out.Examples)-1]
 	}
@@ -855,7 +855,7 @@ func fitUsageExamples(out UsageExamplesOutput, budget int) UsageExamplesOutput {
 		out.Error = &ToolError{
 			Code:    "response_too_large",
 			Message: fmt.Sprintf("no usage example fits the %d byte response budget", budget),
-			Hint:    "request one kind at a time",
+			Hint:    "request one kind at a time or use detail=full",
 		}
 	}
 	return out

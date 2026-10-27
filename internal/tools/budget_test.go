@@ -1051,3 +1051,25 @@ func TestUsageExamplesEchoedTagNameIsBounded(t *testing.T) {
 		t.Errorf("tag name = %d runes, want <= %d", len(out.TagName), maxCandidateRunes+3)
 	}
 }
+
+// A usable pattern whose escaped wire form exceeds 8k must remain reachable
+// through detail=full rather than being reported as impossible.
+func TestUsageExamplesPatternFitsFullDetail(t *testing.T) {
+	out := UsageExamplesOutput{
+		TagName:  "rh-accordion",
+		Kind:     "pattern",
+		Examples: []UsageExample{{Kind: "pattern", Content: strings.Repeat("x", 4500)}},
+		Total:    1,
+	}
+	summary := fitUsageExamples(out, defaultResponseBudget)
+	if summary.Error == nil || summary.Error.Code != "response_too_large" {
+		t.Fatalf("summary = %+v, want response_too_large", summary.Error)
+	}
+	full := fitUsageExamples(out, hardResponseBudget)
+	if full.Error != nil {
+		t.Fatalf("full detail error = %+v", full.Error)
+	}
+	if len(full.Examples) != 1 {
+		t.Errorf("full detail examples = %d, want 1", len(full.Examples))
+	}
+}

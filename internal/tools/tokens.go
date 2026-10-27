@@ -293,7 +293,7 @@ func (s *Service) queryTokens(resolved ResolvedVersion, input QueryTokensInput) 
 	end := min(offset+pageSize, len(selected))
 	out.Tokens = make([]TokenResult, 0, end-offset)
 	for _, tok := range selected[offset:end] {
-		out.Tokens = append(out.Tokens, tokenResultFor(tok, themes, effectiveTheme, theme, format, detail))
+		out.Tokens = append(out.Tokens, tokenResultFor(tok, themes, effectiveTheme, theme, format))
 	}
 	if end < len(selected) {
 		out.NextCursor = encodeCursor(version, end, false)
@@ -331,7 +331,7 @@ func (s *Service) resolveTokensVersion(requested string) (version, fromElements 
 func tokenResultFor(
 	tok *token.Token,
 	themes map[string]map[string]string,
-	effectiveTheme, requestedTheme, format, detail string,
+	effectiveTheme, requestedTheme, format string,
 ) TokenResult {
 	result := TokenResult{
 		Name:        tok.Name,
@@ -340,16 +340,12 @@ func tokenResultFor(
 		RawValue:    rawTokenValue(tok),
 		AliasChain:  slices.Clone(tok.ResolutionChain),
 		Source:      tokenSource(tok),
+		Description: tok.Description,
 		Deprecated:  tok.Deprecated,
 		Theme:       requestedTheme,
 	}
 	if tok.Deprecated && tok.DeprecationMessage != "" {
-		// Deprecation guidance is short and actionable, so keep it in the
-		// summary output; only the full description is detail-gated.
 		result.Deprecation = tok.DeprecationMessage
-	}
-	if detail == "full" {
-		result.Description = tok.Description
 	}
 	switch format {
 	case "css":
