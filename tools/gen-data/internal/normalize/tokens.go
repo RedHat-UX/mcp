@@ -335,6 +335,16 @@ func (n *normalizer) normalizeToken(key string, node map[string]any, path []stri
 	}
 
 	extensions := mergeExtensions(node, original)
+	if typeName == "mediaQuery" {
+		// mediaQuery is not defined by any DTCG version. Preserve it as an
+		// RHDS vendor type and record that fact; do not re-type the token.
+		vendor, _ := extensions["com.rhds.mcp"].(map[string]any)
+		if vendor == nil {
+			vendor = make(map[string]any)
+		}
+		vendor["vendorType"] = "mediaQuery"
+		extensions["com.rhds.mcp"] = vendor
+	}
 	if mappedFrom != "" && mappedFrom != typeName {
 		styleDictionary := map[string]any{"sourceType": mappedFrom}
 		if existing, ok := extensions["com.style-dictionary"].(map[string]any); ok {
@@ -356,10 +366,6 @@ func (n *normalizer) normalizeToken(key string, node map[string]any, path []stri
 func resolveType(node, original, attributes map[string]any) (typeName, mappedFrom string, err error) {
 	for _, source := range []map[string]any{node, original} {
 		if value, ok := source["$type"].(string); ok && value != "" {
-			if value == "mediaQuery" {
-				// mediaQuery is not a DTCG type. Its value is a string.
-				return token.TypeString, value, nil
-			}
 			return value, "", nil
 		}
 	}

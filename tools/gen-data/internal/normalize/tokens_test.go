@@ -152,6 +152,22 @@ func TestNormalizeEachMajor(t *testing.T) {
 				t.Errorf("color-gray-90-rgb value = %q, want a hex color", got)
 			}
 
+			// mediaQuery is an RHDS vendor type outside DTCG.
+			if got := result.Stats.Types["mediaQuery"]; got != 6 {
+				t.Errorf("mediaQuery token count = %d, want 6", got)
+			}
+			media := findToken(t, tokens, "media-2xl")
+			if media.Type != "mediaQuery" {
+				t.Errorf("media-2xl type = %q, want mediaQuery", media.Type)
+			}
+			vendor, ok := media.Extensions["com.rhds.mcp"].(map[string]any)
+			if !ok || vendor["vendorType"] != "mediaQuery" {
+				t.Errorf("media-2xl vendor extension = %#v, want vendorType mediaQuery", media.Extensions)
+			}
+			if _, exists := media.Extensions["com.style-dictionary"]; exists {
+				t.Errorf("media-2xl was re-typed as a DTCG token: %#v", media.Extensions)
+			}
+
 			// A draft group-marker token ("_") is flattened to the published
 			// name instead of emitting a trailing underscore.
 			subtle := findToken(t, tokens, "color-icon-subtle")
@@ -356,6 +372,48 @@ func hasToken(tokens []*token.Token, name string) bool {
 		}
 	}
 	return false
+}
+
+func TestMediaQueryVendorTypeIsPreserved(t *testing.T) {
+	input := []byte(`{
+		"breakpoint": {"sm": {"$type": "dimension", "$value": "768px"}},
+		"media": {"sm": {"$type": "mediaQuery", "$value": {"min-width": "{breakpoint.sm}"}}}
+	}`)
+	result, err := NormalizeTokens(input)
+	if err != nil {
+		t.Fatalf("NormalizeTokens() = %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(result.Document, &doc); err != nil {
+		t.Fatal(err)
+	}
+	media := doc["media"].(map[string]any)["sm"].(map[string]any)
+	if media["$type"] != "mediaQuery" {
+		t.Errorf("$type = %#v, want mediaQuery", media["$type"])
+	}
+	value, ok := media["$value"].(map[string]any)
+	if !ok {
+		t.Fatalf("$value = %#v, want an object", media["$value"])
+	}
+	if value["min-width"] != "{breakpoint.sm}" {
+		t.Errorf("min-width = %#v, want the unresolved reference", value["min-width"])
+	}
+	extensions := media["$extensions"].(map[string]any)
+	vendor := extensions["com.rhds.mcp"].(map[string]any)
+	if vendor["vendorType"] != "mediaQuery" {
+		t.Errorf("vendor extension = %#v", extensions)
+	}
+	if _, exists := extensions["com.style-dictionary"]; exists {
+		t.Error("mediaQuery token was re-typed as a DTCG token")
+	}
+
+	// asimonim does not resolve references nested inside composite objects.
+	tokens := parseNormalized(t, result.Document)
+	mediaToken := findToken(t, tokens, "media-sm")
+	raw, ok := mediaToken.RawValue.(map[string]any)
+	if !ok || raw["min-width"] != "{breakpoint.sm}" {
+		t.Errorf("raw media value = %#v, want the unresolved reference", mediaToken.RawValue)
+	}
 }
 
 func TestSurfacePaletteIsNotAToken(t *testing.T) {

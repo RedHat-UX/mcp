@@ -487,6 +487,10 @@ Implementation notes from Phase C:
   and would otherwise emit a trailing `-_`.
 - Keys that Style Dictionary left in camelCase (`2xsMax`) are rewritten from the token's
   published `name` to kebab case (`2xs-max`), so CSS names match the generated CSS.
+- `mediaQuery` is an RHDS vendor type, not a DTCG type. The normalizer keeps
+  `$type: "mediaQuery"` and the object value verbatim, records
+  `$extensions["com.rhds.mcp"].vendorType = "mediaQuery"`, and does not resolve nested
+  `{breakpoint.*}` references. The 3.2.0 release has six such tokens.
 - The generated `css/default-theme.css` is authoritative for the theme map. At least one
   release's token JSON disagrees with its own CSS for `rh-surface`, so a disagreement is
   not fatal. Theme-map entries that have no DTCG token are added back at load time as

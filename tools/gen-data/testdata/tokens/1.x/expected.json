@@ -1678,11 +1678,11 @@
         "com.redhat.ux": {
           "title": "Extra Extra Large"
         },
-        "com.style-dictionary": {
-          "sourceType": "mediaQuery"
+        "com.rhds.mcp": {
+          "vendorType": "mediaQuery"
         }
       },
-      "$type": "string",
+      "$type": "mediaQuery",
       "$value": {
         "min-width": "{breakpoint.2xl}"
       }
@@ -1693,11 +1693,11 @@
         "com.redhat.ux": {
           "title": "Large"
         },
-        "com.style-dictionary": {
-          "sourceType": "mediaQuery"
+        "com.rhds.mcp": {
+          "vendorType": "mediaQuery"
         }
       },
-      "$type": "string",
+      "$type": "mediaQuery",
       "$value": {
         "min-width": "{breakpoint.lg}"
       }
@@ -1708,11 +1708,11 @@
         "com.redhat.ux": {
           "title": "Medium"
         },
-        "com.style-dictionary": {
-          "sourceType": "mediaQuery"
+        "com.rhds.mcp": {
+          "vendorType": "mediaQuery"
         }
       },
-      "$type": "string",
+      "$type": "mediaQuery",
       "$value": {
         "min-width": "{breakpoint.md}"
       }
@@ -1723,11 +1723,11 @@
         "com.redhat.ux": {
           "title": "Small"
         },
-        "com.style-dictionary": {
-          "sourceType": "mediaQuery"
+        "com.rhds.mcp": {
+          "vendorType": "mediaQuery"
         }
       },
-      "$type": "string",
+      "$type": "mediaQuery",
       "$value": {
         "min-width": "{breakpoint.sm}"
       }
@@ -1738,11 +1738,11 @@
         "com.redhat.ux": {
           "title": "Extra Large"
         },
-        "com.style-dictionary": {
-          "sourceType": "mediaQuery"
+        "com.rhds.mcp": {
+          "vendorType": "mediaQuery"
         }
       },
-      "$type": "string",
+      "$type": "mediaQuery",
       "$value": {
         "min-width": "{breakpoint.xl}"
       }
@@ -1753,11 +1753,11 @@
         "com.redhat.ux": {
           "title": "Extra Small"
         },
-        "com.style-dictionary": {
-          "sourceType": "mediaQuery"
+        "com.rhds.mcp": {
+          "vendorType": "mediaQuery"
         }
       },
-      "$type": "string",
+      "$type": "mediaQuery",
       "$value": {
         "min-width": "{breakpoint.xs}"
       }
