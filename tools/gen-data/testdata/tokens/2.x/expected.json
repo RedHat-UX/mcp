@@ -80,32 +80,32 @@
       "$description": "Large box shadow",
       "$type": "shadow",
       "$value": {
-        "blur": "{length.md}",
+        "blur": "8px",
         "color": "#1515154d",
         "offsetX": "0px",
-        "offsetY": "{length.sm}",
-        "spread": "{length.3xs}"
+        "offsetY": "6px",
+        "spread": "2px"
       }
     },
     "md": {
       "$description": "Medium box shadow",
       "$type": "shadow",
       "$value": {
-        "blur": "{length.sm}",
+        "blur": "6px",
         "color": "#15151540",
         "offsetX": "0px",
-        "offsetY": "{length.xs}",
-        "spread": "{length.4xs}"
+        "offsetY": "4px",
+        "spread": "1px"
       }
     },
     "sm": {
       "$description": "Small box shadow",
       "$type": "shadow",
       "$value": {
-        "blur": "{length.xs}",
+        "blur": "4px",
         "color": "#15151533",
         "offsetX": "0px",
-        "offsetY": "{length.3xs}",
+        "offsetY": "2px",
         "spread": "0px"
       }
     },
@@ -113,11 +113,11 @@
       "$description": "Extra large box shadow",
       "$type": "shadow",
       "$value": {
-        "blur": "{length.xl}",
+        "blur": "24px",
         "color": "#15151559",
         "offsetX": "0px",
-        "offsetY": "{length.md}",
-        "spread": "{length.2xs}"
+        "offsetY": "8px",
+        "spread": "3px"
       }
     }
   },

@@ -111,7 +111,7 @@ type patternRecord struct {
 }
 
 // Generate writes the data tree and returns its index.
-func Generate(inputs *Inputs, outDir string) (*data.Index, error) {
+func Generate(inputs *Inputs, outDir string) (result *data.Index, err error) {
 	if inputs == nil {
 		return nil, errors.New("generate: no inputs")
 	}
@@ -130,6 +130,13 @@ func Generate(inputs *Inputs, outDir string) (*data.Index, error) {
 		return nil, err
 	}
 	outDir = resolvedOut
+	defer func() {
+		// A partially written tree has no index.json, so a later run would
+		// refuse to clear it. Leave only the empty marker instead.
+		if err != nil {
+			resetOutputDir(outDir)
+		}
+	}()
 	// Keep the embed pattern valid even if the tree is later cleaned of
 	// generated artifacts.
 	if err := os.WriteFile(filepath.Join(outDir, ".gitkeep"), nil, 0o644); err != nil {
@@ -175,6 +182,19 @@ var outputTreeEntries = map[string]bool{
 	"tokens":        true,
 	"docs":          true,
 	"release-notes": true,
+}
+
+// resetOutputDir removes the entries a failed generation may have written and
+// restores the .gitkeep marker, so the output directory matches a clean
+// checkout instead of leaving a tree that a later run refuses to clear.
+func resetOutputDir(dir string) {
+	for name := range outputTreeEntries {
+		if name == ".gitkeep" {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(dir, name))
+	}
+	_ = os.WriteFile(filepath.Join(dir, ".gitkeep"), nil, 0o644)
 }
 
 // prepareOutputDir validates outDir, refuses directories that contain anything
