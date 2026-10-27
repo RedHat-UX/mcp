@@ -41,11 +41,13 @@
             {
               "name": "variant",
               "type": { "text": "\"primary\" | \"secondary\" | \"tertiary\" | \"danger\" | \"link\"" },
-              "default": "primary"
+              "default": "primary",
+              "description": "Visual style."
             },
             {
               "name": "accessible-label",
-              "type": { "text": "string" }
+              "type": { "text": "string" },
+              "description": "Accessible label."
             },
             {
               "name": "color-palette",
@@ -53,12 +55,58 @@
               "deprecated": "Use variant instead."
             }
           ],
+          "members": [
+            {
+              "kind": "field",
+              "name": "variant",
+              "type": { "text": "\"primary\" | \"secondary\" | \"tertiary\" | \"danger\" | \"link\"" },
+              "default": "primary",
+              "attribute": "variant",
+              "reflects": true,
+              "description": "Visual style."
+            },
+            {
+              "kind": "field",
+              "name": "accessibleLabel",
+              "type": { "text": "string" },
+              "attribute": "accessible-label",
+              "description": "Accessible label."
+            },
+            {
+              "kind": "field",
+              "name": "internalState",
+              "type": { "text": "number" },
+              "privacy": "private"
+            },
+            {
+              "kind": "method",
+              "name": "focus"
+            }
+          ],
+          "events": [
+            {
+              "name": "click",
+              "type": { "text": "MouseEvent" },
+              "description": "Fired on activation."
+            }
+          ],
           "slots": [
             { "name": "", "description": "Button label." },
             { "name": "icon", "description": "Optional icon." }
           ],
+          "cssParts": [
+            { "name": "button", "description": "The internal button." }
+          ],
+          "cssProperties": [
+            { "name": "--rh-button-color", "default": "inherit" }
+          ],
           "demos": [
-            { "name": "Basic button", "description": "A primary button." }
+            {
+              "name": "Basic button",
+              "description": "A primary button.",
+              "url": "https://example.test/demos/button/",
+              "source": { "href": "https://example.test/demos/button/index.html" }
+            }
           ]
         }
       ]

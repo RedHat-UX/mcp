@@ -1,0 +1,37 @@
+{
+  "schemaVersion": "1.0.0",
+  "modules": [
+    {
+      "kind": "javascript-module",
+      "path": "./rhds/elements/rh-card/rh-card.js",
+      "declarations": [
+        {
+          "kind": "class",
+          "customElement": true,
+          "name": "RhCard",
+          "tagName": "rh-card",
+          "summary": "A surface that groups related content.",
+          "description": "Cards create visual hierarchy for related content.",
+          "attributes": [
+            { "name": "header", "type": { "text": "string" } },
+            { "name": "border-color", "type": { "text": "\"light\" | \"dark\"" } }
+          ],
+          "members": [
+            {
+              "kind": "field",
+              "name": "header",
+              "type": { "text": "string" },
+              "attribute": "header",
+              "description": "Optional card header text."
+            }
+          ],
+          "slots": [
+            { "name": "", "description": "Card body." },
+            { "name": "header", "description": "Card header content." },
+            { "name": "footer", "description": "Card footer content." }
+          ]
+        }
+      ]
+    }
+  ]
+}

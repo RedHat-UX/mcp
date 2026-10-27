@@ -1,0 +1,99 @@
+{
+  "schemaVersion": "2.1.0",
+  "readme": "Fixture for normalizing CEM 2.1.0.",
+  "modules": [
+    {
+      "kind": "javascript-module",
+      "path": "./rh-icon/rh-icon.js",
+      "declarations": [
+        {
+          "kind": "class",
+          "customElement": true,
+          "name": "RhIcon",
+          "tagName": "rh-icon",
+          "summary": "Displays an icon.",
+          "deprecated": "Use rh-icon-v2.",
+          "attributes": [
+            { "name": "icon", "type": { "text": "string" } },
+            {
+              "name": "legacy-set",
+              "type": { "text": "string" },
+              "deprecated": true
+            }
+          ],
+          "slots": [{ "name": "", "description": "Fallback content." }]
+        }
+      ]
+    },
+    {
+      "kind": "javascript-module",
+      "path": "./rh-button/rh-button.js",
+      "declarations": [
+        {
+          "kind": "class",
+          "customElement": true,
+          "name": "RhButton",
+          "tagName": "rh-button",
+          "summary": "Triggers an action.",
+          "description": "A button communicates an action to the user.",
+          "attributes": [
+            {
+              "name": "variant",
+              "type": { "text": "\"primary\" | \"secondary\"" },
+              "default": "primary",
+              "description": "Visual style."
+            }
+          ],
+          "members": [
+            {
+              "kind": "field",
+              "name": "variant",
+              "type": { "text": "\"primary\" | \"secondary\"" },
+              "default": "primary",
+              "attribute": "variant",
+              "reflects": true,
+              "description": "Visual style."
+            },
+            {
+              "kind": "field",
+              "name": "label",
+              "type": { "text": "string" },
+              "description": "Accessible label."
+            },
+            {
+              "kind": "field",
+              "name": "internalState",
+              "type": { "text": "number" },
+              "privacy": "private"
+            },
+            {
+              "kind": "method",
+              "name": "focus"
+            }
+          ],
+          "events": [
+            {
+              "name": "click",
+              "type": { "text": "MouseEvent" },
+              "description": "Fired on activation."
+            }
+          ],
+          "slots": [{ "name": "", "description": "Button label." }],
+          "cssParts": [
+            { "name": "button", "description": "The internal button." }
+          ],
+          "cssProperties": [
+            { "name": "--rh-button-color", "default": "inherit" }
+          ],
+          "demos": [
+            {
+              "description": "A primary button.",
+              "url": "https://example.test/demos/button/",
+              "source": { "href": "https://example.test/demos/button/index.html" }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

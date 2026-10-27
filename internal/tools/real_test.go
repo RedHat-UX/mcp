@@ -81,3 +81,44 @@ func TestRealEmbeddedData(t *testing.T) {
 		t.Errorf("camelCase CSS variable = %q", breakpoint.Tokens[0].CSSVariable)
 	}
 }
+
+// TestRealManifestNormalization exercises both CEM schema versions against the
+// generated data for the oldest and newest bundled majors.
+func TestRealManifestNormalization(t *testing.T) {
+	if _, err := os.Stat(filepath.Join("..", "data", "dist", data.IndexPath)); err != nil {
+		t.Skip("generated data is absent; run make data")
+	}
+	dist, err := fs.Sub(data.Embedded(), "dist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := data.Open(dist)
+	if err != nil {
+		t.Fatalf("data.Open() = %v", err)
+	}
+	service := New(store, nil)
+
+	for _, version := range []string{"1.0.0", "5.0.0"} {
+		if !store.Has(packageElements, version, kindManifest) {
+			t.Fatalf("elements@%s is not bundled", version)
+		}
+		model, failure := service.loadModel(version)
+		if failure != nil {
+			t.Fatalf("normalizing elements@%s: %+v", version, failure)
+		}
+		if len(model.Components) == 0 {
+			t.Errorf("elements@%s normalized to no components", version)
+		}
+	}
+
+	api := service.GetComponentAPI(context.Background(), GetComponentAPIInput{
+		TagName: "rh-button",
+		Version: "5.0.0",
+	})
+	if api.Error != nil {
+		t.Fatalf("GetComponentAPI() error = %+v", api.Error)
+	}
+	if len(api.Attributes) == 0 {
+		t.Error("rh-button has no attributes in the real manifest")
+	}
+}

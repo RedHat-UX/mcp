@@ -1,0 +1,16 @@
+[
+  {
+    "path": "get-started/introduction.md",
+    "title": "Get started",
+    "source": "RedHat-UX/red-hat-design-system@v5.0.0 get-started/introduction.md",
+    "artifact": "docs/v5.0.0/get-started/introduction.md",
+    "kind": "doc:get-started/introduction.md"
+  },
+  {
+    "path": "patterns/button.md",
+    "title": "Button patterns",
+    "source": "RedHat-UX/red-hat-design-system@v5.0.0 patterns/button.md",
+    "artifact": "docs/v5.0.0/patterns/button.md",
+    "kind": "doc:patterns/button.md"
+  }
+]

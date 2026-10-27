@@ -1,21 +1,72 @@
 {
   "schemaVersion": 1,
+  "elementsTokens": {
+    "5.0.0": "3.2.0"
+  },
   "artifacts": [
     {
       "package": "elements",
       "version": "5.0.0",
       "kind": "manifest",
       "path": "elements/custom-elements.json",
-      "sha256": "a892509db832230efa7d886a3fbd44b12f188b210aa9d8f7e172d33015d9ed73",
-      "bytes": 5509
+      "sha256": "8c13e03db3e1c8fef1c409de84e5dc975859c41f20afd1338d98d1132a77c796",
+      "bytes": 7092
+    },
+    {
+      "package": "elements",
+      "version": "4.0.0",
+      "kind": "manifest",
+      "path": "elements/4.0.0.json",
+      "sha256": "8bf9b827bb177782aeb0a13fef2112d669d6cd465c0264fc789b87ec1105016c",
+      "bytes": 1151
     },
     {
       "package": "docs",
-      "version": "5.0.0",
+      "version": "v5.0.0",
       "kind": "docs",
-      "path": "docs/5.0.0.md",
-      "sha256": "e1d4874b214c3819312fba1da36799b1efb488591f480fb468f0b055c96d153d",
-      "bytes": 139
+      "path": "docs/v5.0.0/index.json",
+      "sha256": "c8368d1c7f066c548a6ac79911a6e88cb650778f424f800c065b885f455c9c8a",
+      "bytes": 509
+    },
+    {
+      "package": "docs",
+      "version": "v5.0.0",
+      "kind": "doc:get-started/introduction.md",
+      "path": "docs/v5.0.0/get-started/introduction.md",
+      "sha256": "5aba0a500d56badef71d2f5497f34d8f0cf74ec36f9f9b722cb4c5e27e3b0d81",
+      "bytes": 163
+    },
+    {
+      "package": "docs",
+      "version": "v5.0.0",
+      "kind": "doc:patterns/button.md",
+      "path": "docs/v5.0.0/patterns/button.md",
+      "sha256": "4b094f0d96e1042d82e3990996eb885d4ca8d6371fd2082f66d29c4f27e6d98b",
+      "bytes": 122
+    },
+    {
+      "package": "docs",
+      "version": "v5.0.0",
+      "kind": "patterns",
+      "path": "docs/v5.0.0/patterns.json",
+      "sha256": "3428d8fe23613a23a50d321f6cba05fc4e82407793c3885c0d8a674a0edf9261",
+      "bytes": 448
+    },
+    {
+      "package": "docs",
+      "version": "v4.2.2",
+      "kind": "docs",
+      "path": "docs/v4.2.2/index.json",
+      "sha256": "5ab4aeded741c6c20bf5ef25454bb5c5cf22922e99adaacd8a637accdce7e9c2",
+      "bytes": 284
+    },
+    {
+      "package": "docs",
+      "version": "v4.2.2",
+      "kind": "doc:get-started/introduction.md",
+      "path": "docs/v4.2.2/get-started/introduction.md",
+      "sha256": "8b04e1d7b9f07e376904f39c00ab57cd272134b1dcb360ac4bda98725f6d391d",
+      "bytes": 80
     },
     {
       "package": "tokens",

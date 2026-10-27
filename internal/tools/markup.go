@@ -225,8 +225,13 @@ func (s *Service) documentManager() (cemtypes.Manager, error) {
 }
 
 // ValidateMarkup implements rhds_validate_markup using the interim
-// bennypowers.dev/cem/lsp/document entry point. Phase D replaces this with the
-// exported cem/validate/markup API (cem#458).
+// bennypowers.dev/cem/lsp/document entry point.
+//
+// GATE (cem#458): this stays on lsp/document until bennypowers/cem#458 is
+// merged and released in a cem tag. Do not add a replace directive, fork, or
+// vendored copy to move it earlier. When the gate opens, replace the
+// DocumentManager path below with the exported cem/validate/markup API and
+// move the HTML and Twig fixtures with it.
 //
 // Slot-name and content-model rules are intentionally deferred: CEM does not
 // encode required slots or cardinality, and the #458 API will expose the

@@ -261,6 +261,24 @@ func findComponent(components []ComponentSummary, tagName string) (ComponentSumm
 	return ComponentSummary{}, false
 }
 
+func TestListComponentsExplicitOlderVersion(t *testing.T) {
+	out := fixtureService(t).ListComponents(context.Background(), ListComponentsInput{
+		Version: "4.0.0",
+	})
+	if out.Error != nil {
+		t.Fatalf("ListComponents() error = %+v", out.Error)
+	}
+	if out.Resolved.Elements != "4.0.0" {
+		t.Errorf("elements = %q", out.Resolved.Elements)
+	}
+	if out.Resolved.Docs != "v4.2.2" {
+		t.Errorf("docs = %q, want v4.2.2", out.Resolved.Docs)
+	}
+	if out.Total != 1 || len(out.Components) != 1 || out.Components[0].TagName != "rh-card" {
+		t.Errorf("components = %+v, want only rh-card", out.Components)
+	}
+}
+
 func TestCursorRoundTrip(t *testing.T) {
 	cursor := encodeCursor("5.0.0", 25, true)
 	payload, toolErr := decodeCursor(cursor)

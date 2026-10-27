@@ -11,9 +11,11 @@ require (
 	bennypowers.dev/asimonim v0.3.4-0.20261026144458-98c22de15b8a
 	bennypowers.dev/cem v0.11.5-0.20261026202837-d497f94c5b42
 	github.com/modelcontextprotocol/go-sdk v1.8.0
+	github.com/tidwall/jsonc v0.3.3
 	go.lsp.dev/protocol v1.0.1
 	golang.org/x/mod v0.36.0
 	golang.org/x/net v0.54.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -53,7 +55,6 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
-	github.com/tidwall/jsonc v0.3.3 // indirect
 	github.com/tree-sitter/go-tree-sitter v0.25.0 // indirect
 	github.com/tree-sitter/tree-sitter-css v0.23.2 // indirect
 	github.com/tree-sitter/tree-sitter-embedded-template v0.25.0 // indirect
@@ -69,5 +70,4 @@ require (
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20190902080502-41f04d3bba15 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"sort"
 
-	"bennypowers.dev/cem/manifest"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/redhat-ux/mcp/internal/cem"
 )
 
 const (
@@ -20,7 +22,7 @@ const (
 
 // ListComponentsInput is the input for rhds_list_components.
 type ListComponentsInput struct {
-	Version           string `json:"version,omitempty" jsonschema:"RHDS elements version; defaults to the latest bundled version"`
+	Version           string `json:"version,omitempty" jsonschema:"RHDS elements version; defaults to the workspace resolution, then the latest bundled version"`
 	IncludeDeprecated bool   `json:"includeDeprecated,omitempty" jsonschema:"Include deprecated custom elements"`
 	Cursor            string `json:"cursor,omitempty" jsonschema:"Opaque cursor from a previous rhds_list_components call"`
 	PageSize          int    `json:"pageSize,omitempty" jsonschema:"Maximum components per page; default 25, maximum 100"`
@@ -91,34 +93,53 @@ type componentEntry struct {
 	deprecated     bool
 }
 
-// ListComponents implements rhds_list_components.
+// ListComponents implements rhds_list_components for direct service calls.
 func (s *Service) ListComponents(_ context.Context, input ListComponentsInput) ListComponentsOutput {
-	out := ListComponentsOutput{Components: []ComponentSummary{}}
-	if failure := s.dataFailure(); failure != nil {
-		out.Error = failure
-		return out
+	resolved, failure := s.bundledResolution(input.Version, "")
+	if failure != nil {
+		return ListComponentsOutput{Components: []ComponentSummary{}, Error: failure}
+	}
+	return s.listComponents(resolved, input)
+}
+
+// listComponentsWithEnv implements rhds_list_components for an MCP call,
+// including workspace resolution and elicitation.
+func (s *Service) listComponentsWithEnv(
+	ctx context.Context,
+	request *mcp.CallToolRequest,
+	input ListComponentsInput,
+) (*mcp.CallToolResult, ListComponentsOutput) {
+	resolved, required, failure := s.prepareResolution(
+		ctx, newCallEnv(request), input.Version, "", true)
+	if required != nil {
+		return required, ListComponentsOutput{}
+	}
+	if failure != nil {
+		return nil, ListComponentsOutput{Components: []ComponentSummary{}, Error: failure}
+	}
+	return nil, s.listComponents(resolved, input)
+}
+
+func (s *Service) listComponents(resolved resolution, input ListComponentsInput) ListComponentsOutput {
+	out := ListComponentsOutput{
+		Resolved:   resolved.Resolved,
+		Components: []ComponentSummary{},
 	}
 	if input.PageSize < 0 {
 		out.Error = invalidArgument("pageSize must be zero or positive")
 		return out
 	}
 
-	version, failure := s.resolveVersion(packageElements, kindManifest, input.Version)
-	if failure != nil {
-		out.Error = failure
-		return out
-	}
-	out.Resolved = ResolvedVersion{Elements: version, Source: "bundled"}
-
-	pkg, failure := s.loadManifest(version)
+	version := resolved.Resolved.Elements
+	model, failure := s.loadModel(version)
 	if failure != nil {
 		out.Error = failure
 		return out
 	}
 
-	entries := collectComponents(pkg, input.IncludeDeprecated)
-	docsAvailable := s.store.Has(packageDocs, version, kindDocs) ||
-		s.store.Has(packageDocs, "v"+version, kindDocs)
+	entries := collectComponents(model, input.IncludeDeprecated)
+	docsAvailable := resolved.Resolved.Docs != "" &&
+		s.store.Has(packageDocs, resolved.Resolved.Docs, kindDocs)
 
 	pageSize := input.PageSize
 	if pageSize == 0 {
@@ -182,26 +203,23 @@ func (s *Service) ListComponents(_ context.Context, input ListComponentsInput) L
 	return out
 }
 
-func collectComponents(pkg *manifest.Package, includeDeprecated bool) []componentEntry {
+func collectComponents(model *cem.Model, includeDeprecated bool) []componentEntry {
+	if model == nil {
+		return nil
+	}
 	entries := make([]componentEntry, 0)
-	for _, module := range pkg.Modules {
-		for _, declaration := range module.Declarations {
-			element, ok := declaration.(*manifest.CustomElementDeclaration)
-			if !ok || element.TagName == "" {
-				continue
-			}
-			isDeprecated := element.IsDeprecated()
-			if isDeprecated && !includeDeprecated {
-				continue
-			}
-			entries = append(entries, componentEntry{
-				tagName:        element.TagName,
-				summary:        element.Summary,
-				modulePath:     module.Path,
-				packageSubpath: trimPackagePath(module.Path),
-				deprecated:     isDeprecated,
-			})
+	for _, component := range model.Components {
+		isDeprecated := component.Deprecated != nil
+		if isDeprecated && !includeDeprecated {
+			continue
 		}
+		entries = append(entries, componentEntry{
+			tagName:        component.TagName,
+			summary:        component.Summary,
+			modulePath:     component.ModulePath,
+			packageSubpath: component.PackageSubpath,
+			deprecated:     isDeprecated,
+		})
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].tagName < entries[j].tagName

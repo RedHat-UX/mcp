@@ -1,0 +1,9 @@
+[
+  {
+    "path": "get-started/introduction.md",
+    "title": "Get started with RHDS 4",
+    "source": "RedHat-UX/red-hat-design-system@v4.2.2 get-started/introduction.md",
+    "artifact": "docs/v4.2.2/get-started/introduction.md",
+    "kind": "doc:get-started/introduction.md"
+  }
+]

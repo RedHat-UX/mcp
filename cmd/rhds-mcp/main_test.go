@@ -356,7 +356,14 @@ func TestPhaseBToolsAreRegistered(t *testing.T) {
 			t.Errorf("tool %q is not marked read-only", tool.Name)
 		}
 	}
-	want := []string{"rhds_list_components", "rhds_query_tokens", "rhds_validate_markup"}
+	want := []string{
+		"rhds_resolve_version",
+		"rhds_list_components",
+		"rhds_get_component_api",
+		"rhds_search",
+		"rhds_query_tokens",
+		"rhds_validate_markup",
+	}
 	for _, name := range want {
 		if !slices.Contains(names, name) {
 			t.Errorf("tools/list is missing %q: %v", name, names)
@@ -375,7 +382,10 @@ func TestDataToolsReturnStructuredErrorWithoutData(t *testing.T) {
 		name string
 		args map[string]any
 	}{
+		{"rhds_resolve_version", map[string]any{}},
 		{"rhds_list_components", map[string]any{}},
+		{"rhds_get_component_api", map[string]any{"tagName": "rh-button"}},
+		{"rhds_search", map[string]any{"query": "button"}},
 		{"rhds_validate_markup", map[string]any{"markup": "<rh-button></rh-button>"}},
 		{"rhds_query_tokens", map[string]any{"token": "color-brand"}},
 	}
