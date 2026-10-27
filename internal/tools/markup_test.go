@@ -195,6 +195,154 @@ func TestValidateMarkupIsCaseInsensitive(t *testing.T) {
 	}
 }
 
+// singleQuotedManifest rewrites the fixture's double-quoted union literals to
+// single quotes, matching what the published @rhds/elements manifests contain.
+func singleQuotedManifest(t *testing.T) []byte {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/elements/custom-elements.json")
+	if err != nil {
+		t.Fatalf("reading fixture manifest: %v", err)
+	}
+	replaced := strings.ReplaceAll(string(raw),
+		`\"primary\" | \"secondary\" | \"tertiary\" | \"danger\" | \"link\"`,
+		`'primary' | 'secondary' | 'tertiary' | 'danger' | 'link'`)
+	if replaced == string(raw) {
+		t.Fatal("fixture manifest did not contain the expected union type; update the test")
+	}
+	return []byte(replaced)
+}
+
+func TestValidateMarkupAcceptsSingleQuotedEnumValues(t *testing.T) {
+	svc := memoryService(t, singleQuotedManifest(t), "5.0.0")
+
+	valid := svc.ValidateMarkup(context.Background(), ValidateMarkupInput{
+		Markup: `<rh-button variant="primary"></rh-button>`,
+	})
+	if valid.Error != nil {
+		t.Fatalf("ValidateMarkup() error = %+v", valid.Error)
+	}
+	if issue, ok := findIssue(valid.Issues, "invalid-attribute-value"); ok {
+		t.Errorf("valid value flagged invalid: %+v", issue)
+	}
+
+	invalid := svc.ValidateMarkup(context.Background(), ValidateMarkupInput{
+		Markup: `<rh-button variant="huge"></rh-button>`,
+	})
+	if _, ok := findIssue(invalid.Issues, "invalid-attribute-value"); !ok {
+		t.Errorf("invalid value not flagged: %+v", invalid.Issues)
+	}
+}
+
+func TestValidateMarkupFlagsEmptyEnumValues(t *testing.T) {
+	for _, markup := range []string{
+		`<rh-button variant></rh-button>`,
+		`<rh-button variant=""></rh-button>`,
+	} {
+		out := fixtureService(t).ValidateMarkup(context.Background(), ValidateMarkupInput{
+			Markup: markup,
+		})
+		if out.Error != nil {
+			t.Fatalf("ValidateMarkup(%q) error = %+v", markup, out.Error)
+		}
+		if _, ok := findIssue(out.Issues, "invalid-attribute-value"); !ok {
+			t.Errorf("empty enum value not flagged for %q: %+v", markup, out.Issues)
+		}
+	}
+}
+
+func TestValidateMarkupSelfClosingCustomElements(t *testing.T) {
+	// cem's tree-sitter query reports no matches for self-closing custom
+	// elements, so these must still be validated after normalization.
+	out := fixtureService(t).ValidateMarkup(context.Background(), ValidateMarkupInput{
+		Markup: `<rh-button variant="huge" /><rh-alert />`,
+	})
+	if out.Error != nil {
+		t.Fatalf("ValidateMarkup() error = %+v", out.Error)
+	}
+	if _, ok := findIssue(out.Issues, "invalid-attribute-value"); !ok {
+		t.Errorf("invalid value on self-closing element not flagged: %+v", out.Issues)
+	}
+	if _, ok := findIssue(out.Issues, "unknown-tag"); !ok {
+		t.Errorf("unknown self-closing element not flagged: %+v", out.Issues)
+	}
+
+	valid := fixtureService(t).ValidateMarkup(context.Background(), ValidateMarkupInput{
+		Markup: `<rh-button variant="primary" />`,
+	})
+	if len(valid.Issues) != 0 {
+		t.Errorf("valid self-closing element produced issues: %+v", valid.Issues)
+	}
+}
+
+func TestValidateMarkupAllowsGlobalAttributes(t *testing.T) {
+	markup := `<rh-button popover="auto" enterkeyhint="next" autocorrect="off" ` +
+		`anchor="save" writingsuggestions="true" virtualkeyboardpolicy="auto" ` +
+		`onclick="save()">Save</rh-button>`
+	out := fixtureService(t).ValidateMarkup(context.Background(), ValidateMarkupInput{
+		Markup: markup,
+	})
+	if out.Error != nil {
+		t.Fatalf("ValidateMarkup() error = %+v", out.Error)
+	}
+	for _, issue := range out.Issues {
+		if issue.Rule == "unknown-attribute" {
+			t.Errorf("global attribute flagged unknown: %+v", issue)
+		}
+	}
+}
+
+func TestTwigControlFlowUnbalanced(t *testing.T) {
+	tests := []struct {
+		name   string
+		markup string
+		want   bool
+	}{
+		{name: "if balanced", markup: `{% if x %}{% endif %}`, want: false},
+		{name: "if unclosed", markup: `{% if x %}`, want: true},
+		{name: "end without open", markup: `{% endif %}`, want: true},
+		{name: "block", markup: `{% block title %}{% endblock %}`, want: false},
+		{name: "block shorthand", markup: `{% block title page_title|title %}`, want: false},
+		{name: "scoped block", markup: `{% block title scoped %}{% endblock %}`, want: false},
+		{name: "set assignment", markup: `{% set x = 1 %}`, want: false},
+		{name: "set block", markup: `{% set x %}{% endset %}`, want: false},
+		{name: "sandbox", markup: `{% sandbox %}{% endsandbox %}`, want: false},
+		{name: "cache", markup: `{% cache "key" %}{% endcache %}`, want: false},
+		{name: "comment containing tag", markup: `{# {% if x %} #}`, want: false},
+		{name: "raw content", markup: `{% raw %}{% if x %}{% endraw %}`, want: false},
+		{name: "unclosed raw", markup: `{% raw %}{% if x %}`, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := twigControlFlowUnbalanced(tt.markup); got != tt.want {
+				t.Errorf("twigControlFlowUnbalanced(%q) = %t, want %t", tt.markup, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateMarkupTwigBlockShorthandIsBalanced(t *testing.T) {
+	out := fixtureService(t).ValidateMarkup(context.Background(), ValidateMarkupInput{
+		Markup: `{% block title page_title|title %}<rh-button variant="huge"></rh-button>`,
+		Format: "twig",
+	})
+	if out.Error != nil {
+		t.Fatalf("ValidateMarkup() error = %+v", out.Error)
+	}
+	for _, warning := range out.Warnings {
+		if strings.Contains(warning, "unbalanced") {
+			t.Errorf("block shorthand reported as unbalanced: %q", warning)
+		}
+	}
+	issue, ok := findIssue(out.Issues, "invalid-attribute-value")
+	if !ok {
+		t.Fatalf("missing invalid-attribute-value issue: %+v", out.Issues)
+	}
+	if issue.Severity != "error" || issue.Confidence != "high" {
+		t.Errorf("severity/confidence = %q/%q, want error/high",
+			issue.Severity, issue.Confidence)
+	}
+}
+
 func TestNormalizeMarkupCasePreservesValuesAndOffsets(t *testing.T) {
 	input := `<RH-BUTTON VARIANT="HuGe" DATA-X='Y'>Text {{ Some.Value }}</RH-BUTTON>{% IF x %}`
 	want := `<rh-button variant="HuGe" data-x='Y'>Text {{ Some.Value }}</rh-button>{% IF x %}`

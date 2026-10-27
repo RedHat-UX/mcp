@@ -50,12 +50,15 @@ type ValidateMarkupOutput struct {
 }
 
 // globalAttributes may appear on any HTML element and are not declared in CEM.
+// The list follows the HTML Standard global attributes; event handler content
+// attributes (on*) are matched separately.
 var globalAttributes = []string{
-	"accesskey", "autocapitalize", "autofocus", "class", "contenteditable",
-	"dir", "draggable", "exportparts", "hidden", "id", "inert", "inputmode",
-	"is", "itemid", "itemprop", "itemref", "itemscope", "itemtype", "lang",
-	"nonce", "part", "role", "slot", "spellcheck", "style", "tabindex",
-	"title", "translate",
+	"accesskey", "anchor", "autocapitalize", "autocorrect", "autofocus", "class",
+	"contenteditable", "dir", "draggable", "enterkeyhint", "exportparts", "hidden",
+	"id", "inert", "inputmode", "is", "itemid", "itemprop", "itemref",
+	"itemscope", "itemtype", "lang", "nonce", "part", "popover", "role", "slot",
+	"spellcheck", "style", "tabindex", "title", "translate",
+	"virtualkeyboardpolicy", "writingsuggestions",
 }
 
 func isGlobalAttribute(name string) bool {
@@ -63,17 +66,27 @@ func isGlobalAttribute(name string) bool {
 	if slices.Contains(globalAttributes, lower) {
 		return true
 	}
-	return strings.HasPrefix(lower, "aria-") || strings.HasPrefix(lower, "data-")
+	if strings.HasPrefix(lower, "aria-") || strings.HasPrefix(lower, "data-") {
+		return true
+	}
+	// Event handler content attributes are global and are not declared in CEM.
+	return strings.HasPrefix(lower, "on") && len(lower) > len("on")
 }
 
 // twigBlockOpeners are Jinja/Twig block tags that require a matching end tag.
 var twigBlockOpeners = []string{
-	"apply", "autoescape", "block", "call", "embed", "filter", "for", "if",
-	"macro", "raw", "trans", "verbatim", "with",
+	"apply", "autoescape", "cache", "call", "embed", "filter", "for", "if",
+	"macro", "raw", "sandbox", "spaceless", "trans", "verbatim", "with",
 }
 
+// twigVerbatimOpeners hold their body as literal text, so tags inside them must
+// not affect the balance count.
+var twigVerbatimOpeners = []string{"raw", "verbatim"}
+
 func twigControlFlowUnbalanced(markup string) bool {
+	markup = stripTwigComments(markup)
 	depth := 0
+	verbatim := ""
 	remaining := markup
 	for {
 		start := strings.Index(remaining, "{%")
@@ -92,6 +105,25 @@ func twigControlFlowUnbalanced(markup string) bool {
 		if len(fields) > 0 {
 			word := fields[0]
 			switch {
+			case verbatim != "":
+				if word == "end"+verbatim {
+					depth--
+					verbatim = ""
+				}
+			case slices.Contains(twigVerbatimOpeners, word):
+				depth++
+				verbatim = word
+			case word == "block":
+				// {% block name %} opens a block; {% block name expr %} is the
+				// inline shorthand and has no endblock. scoped blocks open.
+				if len(fields) == 2 || (len(fields) == 3 && fields[2] == "scoped") {
+					depth++
+				}
+			case word == "set":
+				// {% set name = value %} assigns; {% set name %} opens a block.
+				if !strings.Contains(tag, "=") {
+					depth++
+				}
 			case slices.Contains(twigBlockOpeners, word):
 				depth++
 			case strings.HasPrefix(word, "end"):
@@ -106,6 +138,28 @@ func twigControlFlowUnbalanced(markup string) bool {
 	return depth != 0
 }
 
+// stripTwigComments removes {# ... #} comments so tags inside them do not
+// affect the balance count.
+func stripTwigComments(markup string) string {
+	var out strings.Builder
+	out.Grow(len(markup))
+	for {
+		start := strings.Index(markup, "{#")
+		if start < 0 {
+			out.WriteString(markup)
+			return out.String()
+		}
+		out.WriteString(markup[:start])
+		rest := markup[start+2:]
+		end := strings.Index(rest, "#}")
+		if end < 0 {
+			// An unclosed comment consumes the rest of the input.
+			return out.String()
+		}
+		markup = rest[end+2:]
+	}
+}
+
 // normalizeMarkupCase lowercases HTML tag and attribute names without
 // changing attribute values, text, or byte offsets. The tree-sitter queries in
 // cem's DocumentManager match only lowercase tag names, while HTML itself
@@ -114,6 +168,7 @@ func normalizeMarkupCase(markup string) string {
 	tokenizer := html.NewTokenizer(strings.NewReader(markup))
 	var normalized strings.Builder
 	normalized.Grow(len(markup))
+	var closings []string
 	for {
 		tokenType := tokenizer.Next()
 		if tokenType == html.ErrorToken {
@@ -126,17 +181,45 @@ func normalizeMarkupCase(markup string) string {
 		}
 		raw := tokenizer.Raw()
 		switch tokenType {
-		case html.StartTagToken, html.SelfClosingTagToken, html.EndTagToken:
+		case html.StartTagToken, html.EndTagToken:
 			normalized.Write(lowercaseRawTagNames(raw))
+		case html.SelfClosingTagToken:
+			lowered := lowercaseRawTagNames(raw)
+			if name, ok := selfClosingCustomElementName(lowered); ok {
+				closings = append(closings, name)
+			}
+			normalized.Write(normalizeSelfClosingCustomElement(lowered))
 		default:
 			normalized.Write(raw)
 		}
 	}
-	result := normalized.String()
-	if len(result) != len(markup) {
-		return markup
+	// Closing tags are appended after the original input, so every byte offset
+	// in the input still points at the same source position. They let the HTML
+	// grammar build element nodes for the converted start tags; without them,
+	// adjacent self-closing custom elements are not reported at all.
+	for i := len(closings) - 1; i >= 0; i-- {
+		normalized.WriteString("</")
+		normalized.WriteString(closings[i])
+		normalized.WriteString(">")
 	}
-	return result
+	return normalized.String()
+}
+
+// selfClosingCustomElementName returns the lowercased tag name when raw is a
+// self-closing tag for a custom element.
+func selfClosingCustomElementName(raw []byte) (string, bool) {
+	i := 0
+	if i < len(raw) && raw[i] == '<' {
+		i++
+	}
+	start := i
+	for i < len(raw) && !isHTMLSpace(raw[i]) && raw[i] != '>' && raw[i] != '/' {
+		i++
+	}
+	if i == start || !strings.Contains(string(raw[start:i]), "-") {
+		return "", false
+	}
+	return string(raw[start:i]), true
 }
 
 // lowercaseRawTagNames lowercases the tag name and attribute names inside one
@@ -203,6 +286,39 @@ func lowercaseRawTagNames(raw []byte) []byte {
 		}
 	}
 	return out
+}
+
+// normalizeSelfClosingCustomElement rewrites a self-closing custom-element tag
+// into an equivalent start tag without changing its length. cem's tree-sitter
+// query returns no matches for self-closing custom elements, so without this
+// <rh-icon /> would be skipped and never validated. The slash is replaced with
+// a space, preserving every byte offset and therefore every reported position.
+func normalizeSelfClosingCustomElement(raw []byte) []byte {
+	i := 0
+	if i < len(raw) && raw[i] == '<' {
+		i++
+	}
+	start := i
+	for i < len(raw) && !isHTMLSpace(raw[i]) && raw[i] != '>' && raw[i] != '/' {
+		i++
+	}
+	custom := false
+	for _, b := range raw[start:i] {
+		if b == '-' {
+			custom = true
+			break
+		}
+	}
+	if !custom {
+		return raw
+	}
+	for j := len(raw) - 1; j > 0; j-- {
+		if raw[j] == '/' && j+1 < len(raw) && raw[j+1] == '>' {
+			raw[j] = ' '
+			break
+		}
+	}
+	return raw
 }
 
 func isHTMLSpace(b byte) bool {
@@ -385,14 +501,14 @@ func (s *Service) ValidateMarkup(_ context.Context, input ValidateMarkupInput) (
 					Column:    columnOf(attributeMatch.Range),
 				})
 			}
-			if attributeMatch.Value != "" && !declaration.IsValidValue(attributeMatch.Value) {
+			if !isValidAttributeValue(declaration, attributeMatch.Value) {
 				out.Issues = append(out.Issues, MarkupIssue{
 					Rule:       "invalid-attribute-value",
 					Severity:   "error",
 					Confidence: "high",
 					Message: fmt.Sprintf(
 						"%q is not a valid value for %s attribute %q; valid values: %v",
-						attributeMatch.Value, tagName, name, declaration.EnumValues()),
+						attributeMatch.Value, tagName, name, enumValueLabels(declaration)),
 					Element:   tagName,
 					Attribute: name,
 					Line:      lineOf(attributeMatch.Range),
@@ -425,6 +541,46 @@ func (s *Service) ValidateMarkup(_ context.Context, input ValidateMarkupInput) (
 		return a.Message < b.Message
 	})
 	return out
+}
+
+// isValidAttributeValue reports whether value is valid for attribute. It
+// replaces manifest.Attribute.IsValidValue, which strips only double quotes:
+// published RHDS manifests declare union literals with single quotes, so its
+// check rejects every valid enum value.
+func isValidAttributeValue(attribute *manifest.Attribute, value string) bool {
+	parts := attribute.EnumValues()
+	if parts == nil {
+		return true
+	}
+	for _, part := range parts {
+		if value == unquoteTypeLiteral(part) {
+			return true
+		}
+	}
+	return false
+}
+
+// enumValueLabels returns the union members without their literal quotes, for
+// display in diagnostics.
+func enumValueLabels(attribute *manifest.Attribute) []string {
+	parts := attribute.EnumValues()
+	labels := make([]string, len(parts))
+	for i, part := range parts {
+		labels[i] = unquoteTypeLiteral(part)
+	}
+	return labels
+}
+
+// unquoteTypeLiteral removes one matching pair of single or double quotes from
+// a TypeScript string literal.
+func unquoteTypeLiteral(part string) string {
+	if len(part) >= 2 {
+		first, last := part[0], part[len(part)-1]
+		if (first == '"' && last == '"') || (first == '\'' && last == '\'') {
+			return part[1 : len(part)-1]
+		}
+	}
+	return part
 }
 
 func declarationsByTag(pkg *manifest.Package) map[string]*manifest.CustomElementDeclaration {

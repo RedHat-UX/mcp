@@ -90,10 +90,13 @@ func (s *Service) QueryTokens(_ context.Context, input QueryTokensInput) (out Qu
 		return out
 	}
 
-	themes, failure := s.loadThemes(version)
-	if failure != nil {
-		out.Error = failure
-		return out
+	var themes map[string]map[string]string
+	if theme != "" {
+		themes, failure = s.loadThemes(version)
+		if failure != nil {
+			out.Error = failure
+			return out
+		}
 	}
 
 	var selected []*token.Token

@@ -165,15 +165,15 @@ func (s *Service) resolveVersion(pkg, kind, requested string) (string, *ToolErro
 		return "", s.dataFailure()
 	}
 	if requested != "" {
-		if !s.store.Has(pkg, requested, kind) {
-			return "", &ToolError{
-				Code: "artifact_not_found",
-				Message: fmt.Sprintf(
-					"no %s data for %s@%s", kind, pkg, requested),
-				Hint: "call rhds_resolve_version to list bundled versions",
-			}
+		if version, ok := s.bundledVersion(pkg, kind, requested); ok {
+			return version, nil
 		}
-		return requested, nil
+		return "", &ToolError{
+			Code: "artifact_not_found",
+			Message: fmt.Sprintf(
+				"no %s data for %s@%s", kind, pkg, requested),
+			Hint: "call rhds_resolve_version to list bundled versions",
+		}
 	}
 
 	versions := s.store.Index().Versions(pkg, kind)
@@ -458,6 +458,19 @@ func (s *Service) prepareResolution(
 
 	resolved, failure := s.resolutionFrom(result, tokensExplicit, requireBundled)
 	return resolved, nil, failure
+}
+
+// bundledVersion resolves an explicit version against the index, accepting an
+// optional leading v because docs artifacts use the tag form (v5.0.0) while
+// element and token artifacts use the bare semver form (5.0.0).
+func (s *Service) bundledVersion(pkg, kind, requested string) (string, bool) {
+	trimmed := strings.TrimPrefix(requested, "v")
+	for _, candidate := range []string{requested, trimmed, "v" + trimmed} {
+		if s.store.Has(pkg, candidate, kind) {
+			return candidate, true
+		}
+	}
+	return "", false
 }
 
 func (s *Service) loadManifest(version string) (*manifest.Package, *ToolError) {

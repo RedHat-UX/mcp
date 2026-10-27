@@ -368,3 +368,18 @@ func TestListComponentsMaxPageSize(t *testing.T) {
 		t.Errorf("warnings = %v, want the pageSize cap", out.Resolved.Warnings)
 	}
 }
+
+func TestListComponentsAcceptsVPrefixedVersion(t *testing.T) {
+	out := fixtureService(t).ListComponents(context.Background(), ListComponentsInput{
+		Version: "v5.0.0",
+	})
+	if out.Error != nil {
+		t.Fatalf("ListComponents() error = %+v", out.Error)
+	}
+	if out.Resolved.Elements != "5.0.0" {
+		t.Errorf("resolved version = %q, want 5.0.0", out.Resolved.Elements)
+	}
+	if out.Total == 0 {
+		t.Error("total = 0, want components")
+	}
+}
