@@ -74,19 +74,39 @@ func isGlobalAttribute(name string) bool {
 	return strings.HasPrefix(lower, "on") && len(lower) > len("on")
 }
 
-// twigBlockOpeners are Jinja/Twig block tags that require a matching end tag.
-var twigBlockOpeners = []string{
-	"apply", "autoescape", "cache", "call", "embed", "filter", "for", "if",
-	"macro", "raw", "sandbox", "spaceless", "trans", "verbatim", "with",
+// twigOpenerClosers maps each Jinja/Twig block opener to the end tag that
+// closes it. Block and set openers are handled conditionally below because
+// their inline forms have no matching end tag.
+var twigOpenerClosers = map[string]string{
+	"apply":      "endapply",
+	"autoescape": "endautoescape",
+	"block":      "endblock",
+	"cache":      "endcache",
+	"call":       "endcall",
+	"embed":      "endembed",
+	"filter":     "endfilter",
+	"for":        "endfor",
+	"if":         "endif",
+	"macro":      "endmacro",
+	"sandbox":    "endsandbox",
+	"set":        "endset",
+	"spaceless":  "endspaceless",
+	"switch":     "endswitch",
+	"trans":      "endtrans",
+	"with":       "endwith",
 }
 
 // twigVerbatimOpeners hold their body as literal text, so tags inside them must
-// not affect the balance count.
+// not affect the balance.
 var twigVerbatimOpeners = []string{"raw", "verbatim"}
 
+// twigControlFlowUnbalanced reports whether Twig tags nest incorrectly. The
+// check is deliberately conservative: it reports definite mismatches between a
+// known opener and its closer, but ignores unfamiliar tags rather than guessing
+// at their semantics.
 func twigControlFlowUnbalanced(markup string) bool {
 	markup = stripTwigComments(markup)
-	depth := 0
+	var stack []string // expected end tags, innermost last
 	verbatim := ""
 	remaining := markup
 	for {
@@ -108,35 +128,54 @@ func twigControlFlowUnbalanced(markup string) bool {
 			switch {
 			case verbatim != "":
 				if word == "end"+verbatim {
-					depth--
+					stack = stack[:len(stack)-1]
 					verbatim = ""
 				}
 			case slices.Contains(twigVerbatimOpeners, word):
-				depth++
+				stack = append(stack, "end"+word)
 				verbatim = word
+			case word == "else" || word == "elseif" || word == "elif":
+				// Branch markers do not change nesting.
 			case word == "block":
 				// {% block name %} opens a block; {% block name expr %} is the
 				// inline shorthand and has no endblock. scoped blocks open.
 				if len(fields) == 2 || (len(fields) == 3 && fields[2] == "scoped") {
-					depth++
+					stack = append(stack, "endblock")
 				}
 			case word == "set":
 				// {% set name = value %} assigns; {% set name %} opens a block.
 				if !strings.Contains(tag, "=") {
-					depth++
+					stack = append(stack, "endset")
 				}
-			case slices.Contains(twigBlockOpeners, word):
-				depth++
+			case twigOpenerClosers[word] != "":
+				stack = append(stack, twigOpenerClosers[word])
 			case strings.HasPrefix(word, "end"):
-				depth--
-				if depth < 0 {
+				if len(stack) == 0 {
+					// A closer for a tag we do not recognize is not a definite
+					// mismatch; ignore it rather than warn on unfamiliar syntax.
+					if isKnownTwigCloser(word) {
+						return true
+					}
+				} else if stack[len(stack)-1] != word {
 					return true
+				} else {
+					stack = stack[:len(stack)-1]
 				}
 			}
 		}
 		remaining = rest[end+2:]
 	}
-	return depth != 0
+	return len(stack) != 0 || verbatim != ""
+}
+
+// isKnownTwigCloser reports whether word is the end tag of a known opener.
+func isKnownTwigCloser(word string) bool {
+	for _, closer := range twigOpenerClosers {
+		if closer == word {
+			return true
+		}
+	}
+	return word == "endraw" || word == "endverbatim"
 }
 
 // stripTwigComments removes {# ... #} comments so tags inside them do not
@@ -549,6 +588,11 @@ func (s *Service) ValidateMarkup(_ context.Context, input ValidateMarkupInput) (
 // published RHDS manifests declare union literals with single quotes, so its
 // check rejects every valid enum value.
 func isValidAttributeValue(attribute *manifest.Attribute, value string) bool {
+	// A templated value is resolved at render time, so its static text cannot be
+	// compared against the declared enum.
+	if isDynamicAttributeValue(value) {
+		return true
+	}
 	parts := attribute.EnumValues()
 	if parts == nil {
 		return true
@@ -559,6 +603,14 @@ func isValidAttributeValue(attribute *manifest.Attribute, value string) bool {
 		}
 	}
 	return false
+}
+
+// isDynamicAttributeValue reports whether value contains Twig interpolation,
+// statement, or comment syntax.
+func isDynamicAttributeValue(value string) bool {
+	return strings.Contains(value, "{{") ||
+		strings.Contains(value, "{%") ||
+		strings.Contains(value, "{#")
 }
 
 // enumValueLabels returns the union members without their literal quotes, for

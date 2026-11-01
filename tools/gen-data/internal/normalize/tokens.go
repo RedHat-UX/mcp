@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strconv"
 	"strings"
@@ -54,7 +55,11 @@ func NormalizeTokens(input []byte) (*Result, error) {
 	if err := decoder.Decode(&root); err != nil {
 		return nil, fmt.Errorf("parsing Style Dictionary JSON: %w", err)
 	}
-	if decoder.More() {
+	// A second decode must hit EOF. decoder.More() alone rejects concatenated
+	// documents, but a malformed trailing token such as "]" is not reported by
+	// it, so make the end-of-input requirement explicit.
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return nil, errors.New("style dictionary JSON has trailing content")
 	}
 

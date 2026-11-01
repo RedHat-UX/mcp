@@ -246,6 +246,110 @@ func TestIsUpToDate(t *testing.T) {
 	}
 }
 
+func TestIsUpToDateDetectsSameSizeContentChange(t *testing.T) {
+	out := t.TempDir()
+	if _, err := Generate(testInputs(), out); err != nil {
+		t.Fatal(err)
+	}
+	index, err := readIndex(filepath.Join(out, data.IndexPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(index.Artifacts) == 0 {
+		t.Fatal("no artifacts")
+	}
+	artifactPath := filepath.Join(out, filepath.FromSlash(index.Artifacts[0].Path))
+	content, err := os.ReadFile(artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(content) == 0 {
+		t.Fatal("artifact is empty")
+	}
+	// Mutate the content without changing the size. A size-only check would
+	// wrongly report the tree as up to date.
+	mutated := append([]byte(nil), content...)
+	mutated[len(mutated)/2] ^= 0xff
+	if err := os.WriteFile(artifactPath, mutated, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() != index.Artifacts[0].Bytes {
+		t.Fatalf("mutation changed artifact size: %d != %d", info.Size(), index.Artifacts[0].Bytes)
+	}
+	if upToDate, err := IsUpToDate(out, lockDigest); err != nil || upToDate {
+		t.Fatalf("IsUpToDate(mutated artifact) = %v, %v; want false", upToDate, err)
+	}
+}
+
+func TestGeneratePreservesPreviousTreeOnFailure(t *testing.T) {
+	out, err := os.MkdirTemp("", "rhds-gen-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(out) }()
+	if _, err := Generate(testInputs(), out); err != nil {
+		t.Fatalf("first Generate() = %v", err)
+	}
+	before := listFiles(t, out)
+	beforeContent := make(map[string][]byte, len(before))
+	for _, name := range before {
+		content, err := os.ReadFile(filepath.Join(out, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		beforeContent[name] = content
+	}
+
+	// Fail after elements and tokens have been written: writeDocsSnapshot
+	// rejects the traversal tag.
+	inputs := testInputs()
+	inputs.Docs[0].Tag = "../escape"
+	if _, err := Generate(inputs, out); err == nil {
+		t.Fatal("Generate() accepted a traversal doc tag")
+	}
+
+	after := listFiles(t, out)
+	if len(after) != len(before) {
+		t.Fatalf("failed generation changed the tree: %d files, want %d", len(after), len(before))
+	}
+	for _, name := range before {
+		content, err := os.ReadFile(filepath.Join(out, name))
+		if err != nil {
+			t.Fatalf("failed generation removed %s: %v", name, err)
+		}
+		if !bytes.Equal(content, beforeContent[name]) {
+			t.Errorf("failed generation changed %s", name)
+		}
+	}
+	store, err := data.Open(os.DirFS(out))
+	if err != nil {
+		t.Fatalf("previous tree is unreadable: %v", err)
+	}
+	if _, err := store.Read("elements", "3.0.0", "manifest"); err != nil {
+		t.Fatalf("previous artifacts are unreadable: %v", err)
+	}
+	if upToDate, err := IsUpToDate(out, lockDigest); err != nil || !upToDate {
+		t.Fatalf("IsUpToDate(previous tree) = %v, %v; want true", upToDate, err)
+	}
+
+	// The staging directory must be cleaned up, not left beside the output.
+	parent := filepath.Dir(out)
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := "." + filepath.Base(out) + ".stage-"
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), prefix) {
+			t.Errorf("failed generation left staging directory %q", entry.Name())
+		}
+	}
+}
+
 func TestGenerateRejectsUnparseablePackageJSON(t *testing.T) {
 	inputs := testInputs()
 	inputs.Elements["3.0.0"] = ElementInput{

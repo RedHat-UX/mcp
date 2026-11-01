@@ -311,6 +311,45 @@ func TestNormalizeRejectsMalformedJSON(t *testing.T) {
 	}
 }
 
+func TestNormalizeRejectsConcatenatedJSON(t *testing.T) {
+	input := []byte(normalizeTestTokenJSON + `{"color":{}}`)
+	_, err := NormalizeTokens(input)
+	if err == nil {
+		t.Fatal("NormalizeTokens() accepted concatenated JSON documents")
+	}
+	if !strings.Contains(err.Error(), "trailing content") {
+		t.Errorf("NormalizeTokens() error = %v, want a trailing-content error", err)
+	}
+}
+
+func TestNormalizeRejectsTrailingBytes(t *testing.T) {
+	input := []byte(normalizeTestTokenJSON + `}]`)
+	_, err := NormalizeTokens(input)
+	if err == nil {
+		t.Fatal("NormalizeTokens() accepted trailing bytes after the JSON document")
+	}
+	if !strings.Contains(err.Error(), "trailing content") {
+		t.Errorf("NormalizeTokens() error = %v, want a trailing-content error", err)
+	}
+}
+
+func TestNormalizeAcceptsTrailingWhitespace(t *testing.T) {
+	input := []byte(normalizeTestTokenJSON + "\n\t  \n")
+	if _, err := NormalizeTokens(input); err != nil {
+		t.Fatalf("NormalizeTokens() rejected trailing whitespace: %v", err)
+	}
+}
+
+const normalizeTestTokenJSON = `{
+	"color": {
+		"brand": {
+			"$type": "color",
+			"$value": "#ff0000",
+			"attributes": {"category": "color"}
+		}
+	}
+}`
+
 func TestNormalizeRejectsTokenWithoutType(t *testing.T) {
 	input := []byte(`{
 		"mystery": {"$value": "1"}

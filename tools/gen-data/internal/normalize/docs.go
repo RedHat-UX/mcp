@@ -487,13 +487,13 @@ func stripMarkdownImages(line string) (string, bool) {
 		var end int
 		switch {
 		case next < len(line) && line[next] == '(':
-			closing := strings.IndexByte(line[next+1:], ')')
-			if closing < 0 {
+			closing, ok := scanImageDestination(line, next)
+			if !ok {
 				builder.WriteByte(line[i])
 				i++
 				continue
 			}
-			end = next + 1 + closing + 1
+			end = closing
 		case next < len(line) && line[next] == '[':
 			closing := strings.IndexByte(line[next+1:], ']')
 			if closing < 0 {
@@ -512,6 +512,53 @@ func stripMarkdownImages(line string) (string, bool) {
 		i = end
 	}
 	return builder.String(), removed
+}
+
+// scanImageDestination returns the index just past the closing parenthesis of
+// an inline image destination starting at open, where line[open] == '('. It
+// balances nested parentheses and honors backslash escapes, so destinations
+// such as "images/foo_(dark).png" are not truncated. Optional title text is
+// skipped, including a quoted title that itself contains parentheses.
+// Unbalanced input reports ok=false so the caller can leave the text untouched.
+func scanImageDestination(line string, open int) (int, bool) {
+	depth := 0
+	titleQuote := byte(0)
+	for i := open + 1; i < len(line); i++ {
+		c := line[i]
+		if c == '\\' {
+			if i+1 >= len(line) {
+				return 0, false
+			}
+			i++ // Skip the escaped byte.
+			continue
+		}
+		if titleQuote != 0 {
+			if c == titleQuote {
+				titleQuote = 0
+			}
+			continue
+		}
+		switch c {
+		case '"', '\'':
+			// A quoted title follows the destination after whitespace.
+			// Parentheses inside it must not affect balancing.
+			if depth == 0 && i > open+1 && isSpaceOrTab(line[i-1]) {
+				titleQuote = c
+			}
+		case '(':
+			depth++
+		case ')':
+			if depth == 0 {
+				return i + 1, true
+			}
+			depth--
+		}
+	}
+	return 0, false
+}
+
+func isSpaceOrTab(c byte) bool {
+	return c == ' ' || c == '\t'
 }
 
 // stripHTMLImages removes <img> tags and keeps their alt text. It uses the
