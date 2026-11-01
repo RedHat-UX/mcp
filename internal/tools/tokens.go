@@ -183,7 +183,6 @@ func tokenMatches(tok *token.Token, needle string) bool {
 		strings.ToLower(tok.Name),
 		strings.ToLower(tok.CSSVariableName()),
 		strings.ToLower(tok.Description),
-		strings.ToLower(tok.Type),
 	}
 	for _, haystack := range haystacks {
 		if strings.Contains(haystack, needle) {
