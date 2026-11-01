@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "artifacts": [
+    {
+      "package": "elements",
+      "version": "5.0.0",
+      "kind": "manifest",
+      "path": "elements/custom-elements.json",
+      "sha256": "a892509db832230efa7d886a3fbd44b12f188b210aa9d8f7e172d33015d9ed73",
+      "bytes": 5509
+    },
+    {
+      "package": "docs",
+      "version": "5.0.0",
+      "kind": "docs",
+      "path": "docs/5.0.0.md",
+      "sha256": "e1d4874b214c3819312fba1da36799b1efb488591f480fb468f0b055c96d153d",
+      "bytes": 139
+    },
+    {
+      "package": "tokens",
+      "version": "3.2.0",
+      "kind": "tokens",
+      "path": "tokens/rhds.tokens.json",
+      "sha256": "031eb5383a633efc22e872b68af7b14031ede152ff01f52e00440a614deb3442",
+      "bytes": 1752
+    },
+    {
+      "package": "tokens",
+      "version": "3.2.0",
+      "kind": "themes",
+      "path": "tokens/themes.json",
+      "sha256": "2b108af2c2e80823cd555dec857a898bce9a794481140fd154fc4fe3db7f3012",
+      "bytes": 216
+    }
+  ]
+}

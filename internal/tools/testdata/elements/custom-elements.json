@@ -1,0 +1,190 @@
+{
+  "schemaVersion": "2.1.0",
+  "readme": "RHDS fixture manifest for Phase B tests.",
+  "modules": [
+    {
+      "kind": "javascript-module",
+      "path": "./rhds/elements/rh-accordion/rh-accordion.js",
+      "declarations": [
+        {
+          "kind": "class",
+          "customElement": true,
+          "name": "RhAccordion",
+          "tagName": "rh-accordion",
+          "summary": "Vertically stacked sections that expand and collapse.",
+          "description": "Use an accordion to reveal secondary content on demand.",
+          "attributes": [
+            {
+              "name": "heading-level",
+              "type": { "text": "\"h1\" | \"h2\" | \"h3\" | \"h4\" | \"h5\" | \"h6\"" },
+              "default": "h3"
+            }
+          ],
+          "slots": [
+            { "name": "", "description": "Accordion panels." }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "javascript-module",
+      "path": "./rhds/elements/rh-button/rh-button.js",
+      "declarations": [
+        {
+          "kind": "class",
+          "customElement": true,
+          "name": "RhButton",
+          "tagName": "rh-button",
+          "summary": "Triggers an action when activated.",
+          "description": "A button communicates an action to the user.",
+          "attributes": [
+            {
+              "name": "variant",
+              "type": { "text": "\"primary\" | \"secondary\" | \"tertiary\" | \"danger\" | \"link\"" },
+              "default": "primary"
+            },
+            {
+              "name": "accessible-label",
+              "type": { "text": "string" }
+            },
+            {
+              "name": "color-palette",
+              "type": { "text": "string" },
+              "deprecated": "Use variant instead."
+            }
+          ],
+          "slots": [
+            { "name": "", "description": "Button label." },
+            { "name": "icon", "description": "Optional icon." }
+          ],
+          "demos": [
+            { "name": "Basic button", "description": "A primary button." }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "javascript-module",
+      "path": "./rhds/elements/rh-card/rh-card.js",
+      "declarations": [
+        {
+          "kind": "class",
+          "customElement": true,
+          "name": "RhCard",
+          "tagName": "rh-card",
+          "summary": "A surface that groups related content.",
+          "description": "Cards create visual hierarchy for related content.",
+          "attributes": [
+            {
+              "name": "header",
+              "type": { "text": "string" }
+            },
+            {
+              "name": "border-color",
+              "type": { "text": "\"light\" | \"dark\"" }
+            }
+          ],
+          "slots": [
+            { "name": "", "description": "Card body." },
+            { "name": "header", "description": "Card header content." },
+            { "name": "footer", "description": "Card footer content." }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "javascript-module",
+      "path": "./rhds/elements/rh-dialog/rh-dialog.js",
+      "declarations": [
+        {
+          "kind": "class",
+          "customElement": true,
+          "name": "RhDialog",
+          "tagName": "rh-dialog",
+          "summary": "A modal dialog.",
+          "description": "Deprecated in favor of rh-dialog-v2.",
+          "deprecated": "Use rh-dialog-v2 instead.",
+          "attributes": [
+            {
+              "name": "open",
+              "type": { "text": "boolean" }
+            }
+          ],
+          "slots": [
+            { "name": "", "description": "Dialog content." }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "javascript-module",
+      "path": "./rhds/elements/rh-icon/rh-icon.js",
+      "declarations": [
+        {
+          "kind": "class",
+          "customElement": true,
+          "name": "RhIcon",
+          "tagName": "rh-icon",
+          "summary": "Displays an icon from the RHDS icon set.",
+          "attributes": [
+            {
+              "name": "icon",
+              "type": { "text": "string" }
+            },
+            {
+              "name": "set",
+              "type": { "text": "\"standard\" | \"ui\"" },
+              "default": "standard"
+            }
+          ],
+          "slots": [
+            { "name": "", "description": "Fallback content." }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "javascript-module",
+      "path": "./rhds/elements/rh-spinner/rh-spinner.js",
+      "declarations": [
+        {
+          "kind": "class",
+          "customElement": true,
+          "name": "RhSpinner",
+          "tagName": "rh-spinner",
+          "summary": "Indicates loading progress.",
+          "attributes": [
+            {
+              "name": "size",
+              "type": { "text": "\"sm\" | \"md\" | \"lg\"" },
+              "default": "md"
+            }
+          ],
+          "slots": []
+        }
+      ]
+    },
+    {
+      "kind": "javascript-module",
+      "path": "./rhds/elements/rh-tabs/rh-tabs.js",
+      "declarations": [
+        {
+          "kind": "class",
+          "customElement": true,
+          "name": "RhTabs",
+          "tagName": "rh-tabs",
+          "summary": "Organizes content into selectable panels.",
+          "attributes": [
+            {
+              "name": "vertical",
+              "type": { "text": "boolean" }
+            }
+          ],
+          "slots": [
+            { "name": "", "description": "Tab panels." }
+          ]
+        }
+      ]
+    }
+  ]
+}
