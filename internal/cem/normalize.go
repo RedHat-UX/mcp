@@ -204,7 +204,10 @@ func normalizeComponent(
 		Deprecated:     deprecated,
 	}
 
-	attributes := element.OwnAttributes()
+	// The flattened getters include members supplied by mixins and
+	// superclasses. Those entries carry InheritedFrom, which the normalized
+	// model preserves.
+	attributes := element.Attributes()
 	for i := range attributes {
 		attribute := &attributes[i]
 		component.Attributes = append(component.Attributes, Attribute{
@@ -222,7 +225,7 @@ func normalizeComponent(
 	for _, member := range element.Members {
 		switch field := member.(type) {
 		case *manifest.CustomElementField:
-			if field == nil || isPrivate(field.Privacy) {
+			if field == nil || isPrivate(field.Privacy) || field.Static {
 				continue
 			}
 			component.Properties = append(component.Properties, Property{
@@ -238,7 +241,7 @@ func normalizeComponent(
 				Deprecated:    deprecationOf(field.Deprecated),
 			})
 		case *manifest.ClassField:
-			if field == nil || isPrivate(field.Privacy) {
+			if field == nil || isPrivate(field.Privacy) || field.Static {
 				continue
 			}
 			component.Properties = append(component.Properties, Property{
@@ -254,7 +257,7 @@ func normalizeComponent(
 		}
 	}
 
-	events := element.OwnEvents()
+	events := element.Events()
 	for i := range events {
 		event := &events[i]
 		component.Events = append(component.Events, Event{
@@ -267,7 +270,7 @@ func normalizeComponent(
 		})
 	}
 
-	slots := element.OwnSlots()
+	slots := element.Slots()
 	for i := range slots {
 		slot := &slots[i]
 		component.Slots = append(component.Slots, Slot{
@@ -279,7 +282,7 @@ func normalizeComponent(
 		})
 	}
 
-	parts := element.OwnCssParts()
+	parts := element.CssParts()
 	for i := range parts {
 		part := &parts[i]
 		component.CSSParts = append(component.CSSParts, CSSPart{
@@ -291,7 +294,7 @@ func normalizeComponent(
 		})
 	}
 
-	properties := element.OwnCssProperties()
+	properties := element.CssProperties()
 	for i := range properties {
 		property := &properties[i]
 		component.CSSProperties = append(component.CSSProperties, CSSProperty{

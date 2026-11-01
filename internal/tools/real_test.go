@@ -555,20 +555,29 @@ func TestRealComponentAPIFullPreservesManifestText(t *testing.T) {
 		}
 	})
 
-	t.Run("audio player property default", func(t *testing.T) {
-		component, ok := model.Component("rh-audio-player")
+	t.Run("non-static property default", func(t *testing.T) {
+		audio, ok := model.Component("rh-audio-player")
 		if !ok {
 			t.Fatal("rh-audio-player missing")
 		}
-		expected, ok := findModelProperty(component.Properties, "enUS")
-		if !ok {
-			t.Fatal("rh-audio-player property enUS missing")
+		// enUS is a static class field, not an instance property.
+		if _, found := findModelProperty(audio.Properties, "enUS"); found {
+			t.Error("static field enUS must not be reported as an instance property")
 		}
-		if got := utf8.RuneCountInString(expected.Default); got != 452 {
-			t.Fatalf("manifest enUS default = %d runes, want 452", got)
+
+		component, ok := model.Component("rh-footer")
+		if !ok {
+			t.Fatal("rh-footer missing")
+		}
+		expected, ok := findModelProperty(component.Properties, "screenSize")
+		if !ok {
+			t.Fatal("rh-footer property screenSize missing")
+		}
+		if got := utf8.RuneCountInString(expected.Default); got != 113 {
+			t.Fatalf("manifest screenSize default = %d runes, want 113", got)
 		}
 		out := service.GetComponentAPI(ctx, GetComponentAPIInput{
-			TagName:  "rh-audio-player",
+			TagName:  "rh-footer",
 			Version:  "5.0.0",
 			Sections: []string{"properties"},
 			Detail:   "full",
@@ -576,16 +585,16 @@ func TestRealComponentAPIFullPreservesManifestText(t *testing.T) {
 		if out.Error != nil {
 			t.Fatalf("error = %+v", out.Error)
 		}
-		actual, ok := findProperty(out.Properties, "enUS")
+		actual, ok := findProperty(out.Properties, "screenSize")
 		if !ok {
-			t.Fatal("enUS missing from output")
+			t.Fatal("screenSize missing from output")
 		}
 		if actual.Default != expected.Default {
-			t.Errorf("enUS default differs from the manifest:\ngot  %q\nwant %q",
+			t.Errorf("screenSize default differs from the manifest:\ngot  %q\nwant %q",
 				actual.Default, expected.Default)
 		}
-		if got := utf8.RuneCountInString(actual.Default); got != 452 {
-			t.Errorf("full enUS default = %d runes, want 452", got)
+		if got := utf8.RuneCountInString(actual.Default); got != 113 {
+			t.Errorf("full screenSize default = %d runes, want 113", got)
 		}
 	})
 
