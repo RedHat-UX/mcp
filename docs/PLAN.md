@@ -281,6 +281,10 @@ manifest; a missing workspace skips cem without failing startup. asimonim mounts
 nil config so each session resolves its own config from MCP roots. Per-mount disable
 lists remove exact tool names, resource URIs, or URI templates after registration.
 
+asimonim resolves per-session config through `ServerSession.ListRoots`, so per-client
+roots work on `2025-06-18` and `2025-11-25`. On `2026-07-28` it falls back to the process
+working directory until asimonim implements MRTR input requests.
+
 Where tree-sitter is used (checked against cem `13100d50`):
 
 - `cem/manifest` imports `internal/tstype`, which uses the TypeScript grammar.
