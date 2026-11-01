@@ -54,8 +54,9 @@ size-check: build
 	./hack/check-size.sh --self-test
 	./hack/check-size.sh $(DIST_DIR)/$(BINARY_NAME)
 
-# Allowlist from docs/PLAN.md section 9.3: GPL-3.0, MIT, Apache-2.0, BSD.
-LICENSE_ALLOWLIST := MIT,Apache-2.0,BSD-2-Clause,BSD-3-Clause,GPL-3.0
+# Allowlist from docs/PLAN.md section 9.3: GPL-3.0, MIT, Apache-2.0, BSD, and
+# MPL-2.0 (cem/mcp pulls gosimple/slug through generate/demodiscovery).
+LICENSE_ALLOWLIST := MIT,Apache-2.0,BSD-2-Clause,BSD-3-Clause,GPL-3.0,MPL-2.0
 license-check:
 	go run github.com/google/go-licenses@v1.6.0 check ./... \
 		--allowed_licenses=$(LICENSE_ALLOWLIST)

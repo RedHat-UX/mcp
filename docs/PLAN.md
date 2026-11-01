@@ -793,8 +793,13 @@ Wrapper behavior:
 | Reproducibility       | Pin Go toolchain, dependency versions, and cgo toolchain                                                |
 | Release workflow      | Use `go-release-workflows` `fix/license-compliance`, merged and tagged; do not float on `@main`          |
 
-Run a dependency license check in CI with an allowlist for GPL-3.0, MIT, Apache-2.0, and
-BSD. Anything else fails the build.
+Run a dependency license check in CI with an allowlist for GPL-3.0, MIT, Apache-2.0,
+BSD, and MPL-2.0. Anything else fails the build.
+
+MPL-2.0 is allowed for `github.com/gosimple/slug`, which `bennypowers.dev/cem/mcp`
+pulls in through `cem/generate/demodiscovery`. MPL-2.0 is compatible with
+`GPL-3.0-or-later`, so the combined binary keeps one license. Its copyright line and
+license are recorded in `NOTICE`.
 
 Embedded data licenses (checked 2026-10-26). All are MIT, which can be combined with
 GPL. Reproduce each copyright line and the MIT text in NOTICE:
