@@ -16,8 +16,11 @@ func TestRequestStateRejectsForgery(t *testing.T) {
 	if !ok {
 		t.Fatal("decodeRequestState() rejected a state this process encoded")
 	}
-	if decoded != state {
+	if decoded.Stage != state.Stage || decoded.Root != state.Root {
 		t.Errorf("decoded = %+v, want %+v", decoded, state)
+	}
+	if !decoded.authenticated {
+		t.Error("decoded state is not marked authenticated")
 	}
 
 	tampered := encoded + "A"
@@ -77,6 +80,33 @@ func TestAcquireRootIgnoresUnnegotiatedStateRootWithRootsCapability(t *testing.T
 	}
 	if root != workingDirectory {
 		t.Errorf("root = %q, want the working directory fallback %q", root, workingDirectory)
+	}
+}
+
+func TestAcquireRootAcceptsAuthenticatedElicitationRoot(t *testing.T) {
+	negotiated := t.TempDir()
+	state, ok := decodeRequestState(encodeRequestState(requestState{
+		Stage: "elicit",
+		Root:  negotiated,
+	}))
+	if !ok {
+		t.Fatal("decodeRequestState() rejected a signed elicitation state")
+	}
+	service := New(nil, nil)
+
+	root, warning, required, failure := service.acquireRoot(
+		context.Background(),
+		&callEnv{rootsCapability: true, protocolVersion: protocolVersion20260728},
+		state,
+	)
+	if failure != nil || required != nil {
+		t.Fatalf("acquireRoot() failure = %+v required = %+v", failure, required)
+	}
+	if root != negotiated {
+		t.Errorf("root = %q, want the negotiated root %q", root, negotiated)
+	}
+	if warning != "" {
+		t.Errorf("warning = %q, want none", warning)
 	}
 }
 

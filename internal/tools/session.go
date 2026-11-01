@@ -85,6 +85,11 @@ func (e *callEnv) supportsMRTR() bool {
 type requestState struct {
 	Stage string `json:"stage"`
 	Root  string `json:"root,omitempty"`
+
+	// authenticated is set only by decodeRequestState after the HMAC verifies.
+	// It is never serialized, so a directly constructed state cannot pass the
+	// root check in acquireRoot.
+	authenticated bool
 }
 
 // maxRequestStateBytes bounds client-supplied retry state. The encoded state
@@ -136,6 +141,7 @@ func decodeRequestState(raw string) (requestState, bool) {
 	if err := json.Unmarshal(payload, &state); err != nil {
 		return requestState{}, false
 	}
+	state.authenticated = true
 	return state, true
 }
 
@@ -158,7 +164,7 @@ func (s *Service) acquireRoot(
 	// even authentic state only carries a root that came from the negotiated
 	// roots flow. Accept it only for the elicitation retry of an MRTR-capable
 	// session; never let state bypass roots negotiation on its own.
-	if state.Root != "" && env != nil && env.rootsCapability &&
+	if state.Root != "" && state.authenticated && env != nil && env.rootsCapability &&
 		env.supportsMRTR() && state.Stage == "elicit" {
 		if info, err := os.Stat(state.Root); err == nil && info.IsDir() {
 			return state.Root, "", nil, nil
