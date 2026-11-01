@@ -1,7 +1,7 @@
-bennypowers.dev/asimonim v0.3.5-0.20261101150257-8afcc3408441 h1:Q/UT3gGw46pzLt4vHSUIeRyYFtRTqxyJOFEU/K/6bDA=
-bennypowers.dev/asimonim v0.3.5-0.20261101150257-8afcc3408441/go.mod h1:wwXgg6sP2+WOFe9oHW8GRXSDFgtbFzudmNVnHYUiKuU=
-bennypowers.dev/cem v0.11.6-0.20261101150237-7852f10ea36b h1:SISrgukLwzew2LN5fh6DDNatB5wpLVAv0DgqzzOVB4o=
-bennypowers.dev/cem v0.11.6-0.20261101150237-7852f10ea36b/go.mod h1:EdtDgbSNwCtj0/jxxAK2j8uFiSXJvUJ2bLR+lSkuz9w=
+bennypowers.dev/asimonim v0.3.5-0.20261101173919-298bace6dcd1 h1:Zi4zdKZZQW4sKDTRcqLnp8At2W8WTrruvPG/2Y7rUCA=
+bennypowers.dev/asimonim v0.3.5-0.20261101173919-298bace6dcd1/go.mod h1:wwXgg6sP2+WOFe9oHW8GRXSDFgtbFzudmNVnHYUiKuU=
+bennypowers.dev/cem v0.11.6-0.20261101173853-b04ffdec00ac h1:uLIaTXyJDMVVLC+8yrwcI+6DNgfijsPa8I+lWSX4CeE=
+bennypowers.dev/cem v0.11.6-0.20261101173853-b04ffdec00ac/go.mod h1:EdtDgbSNwCtj0/jxxAK2j8uFiSXJvUJ2bLR+lSkuz9w=
 bennypowers.dev/tree-sitter-handlebars v0.1.1 h1:JqzXwslMjbtH1Z73iJbtqTCW/ET0MFkvVw02jlvFZLk=
 bennypowers.dev/tree-sitter-handlebars v0.1.1/go.mod h1:U2HyV0nhqQZAWU5SjpvTKT/ahOcLHYAQgM1z6nJ3YJI=
 bennypowers.dev/tree-sitter-jinja-dialects v0.1.1 h1:04RG/fGUgOQnmI0NzkBFTY249y/s+xAG1lP35T5QJaM=

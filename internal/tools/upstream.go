@@ -4,6 +4,7 @@
 package tools
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -17,7 +18,14 @@ import (
 
 // MountOptions controls which upstream surfaces are exposed. Each list holds
 // exact tool names, resource URIs, or URI templates. Matching is exact, not by
-// prefix or glob, so a caller removes precisely the entries it names.
+// prefix or glob, so a caller excludes precisely the entries it names.
+//
+// The lists are mapped to each upstream's registration Selection before
+// anything is registered, so an excluded entry is never mounted. Entries that
+// name no item of a given upstream are ignored, which lets one deny list cover
+// both upstreams and stay stable as their surfaces change. Only upstream
+// surfaces are affected: a host tool, resource, or template that shares a name
+// with a denied entry is left alone.
 type MountOptions struct {
 	DisableTools     []string
 	DisableResources []string
@@ -56,7 +64,10 @@ func (w *MountWarning) Unwrap() error {
 // and returned as a *MountWarning. asimonim is always mounted with a nil
 // config, so each MCP session resolves its own config from the client's roots.
 //
-// Disable lists are applied after mounting. Diagnostics go to stderr only.
+// Disable lists are passed to each upstream as registration exclusions, so the
+// excluded surface is never registered. Both upstreams use their default
+// conflict policy (ConflictReplace), matching the behavior before registration
+// options existed. Diagnostics go to stderr only.
 func MountUpstreams(server *mcp.Server, opts MountOptions) error {
 	if server == nil {
 		return fmt.Errorf("server must not be nil")
@@ -69,26 +80,59 @@ func MountUpstreams(server *mcp.Server, opts MountOptions) error {
 		warning = &MountWarning{Package: "cem", Err: getwdErr}
 		slog.Warn("skipping cem upstream tools", "error", getwdErr)
 	default:
-		if err := mountCEM(server, cwd); err != nil {
+		if err := mountCEM(server, cwd, opts); err != nil {
 			warning = err
 			slog.Warn("skipping cem upstream tools", "error", err)
 		}
 	}
 
-	asimmcp.Register(server, asimfs.NewOSFileSystem(), nil, cwd)
-
-	server.RemoveTools(opts.DisableTools...)
-	server.RemoveResources(opts.DisableResources...)
-	server.RemoveResourceTemplates(opts.DisableTemplates...)
+	if _, err := asimmcp.Register(server, asimfs.NewOSFileSystem(), nil, cwd, asimonimRegisterOptions(opts)...); err != nil {
+		slog.Warn("skipping asimonim upstream tools", "error", err)
+		warning = errors.Join(warning, &MountWarning{Package: "asimonim", Err: err})
+	}
 
 	return warning
+}
+
+// cemRegisterOptions maps MountOptions to cem's registration selection.
+//
+// Empty names are dropped before they reach downstream: cem rejects them as
+// invalid selections, while the previous remove-by-name path treated them as a
+// no-op. Dropping them keeps a malformed deny list from failing startup.
+func cemRegisterOptions(opts MountOptions) []cemmcp.RegisterOption {
+	return []cemmcp.RegisterOption{
+		cemmcp.WithTools(cemmcp.Selection{Exclude: nonEmpty(opts.DisableTools)}),
+		cemmcp.WithResources(cemmcp.Selection{Exclude: nonEmpty(opts.DisableResources)}),
+		cemmcp.WithTemplates(cemmcp.Selection{Exclude: nonEmpty(opts.DisableTemplates)}),
+	}
+}
+
+// asimonimRegisterOptions maps MountOptions to asimonim's registration
+// selection. See cemRegisterOptions for the empty-name handling.
+func asimonimRegisterOptions(opts MountOptions) []asimmcp.RegisterOption {
+	return []asimmcp.RegisterOption{
+		asimmcp.WithTools(asimmcp.Selection{Exclude: nonEmpty(opts.DisableTools)}),
+		asimmcp.WithResources(asimmcp.Selection{Exclude: nonEmpty(opts.DisableResources)}),
+		asimmcp.WithTemplates(asimmcp.Selection{Exclude: nonEmpty(opts.DisableTemplates)}),
+	}
+}
+
+// nonEmpty returns the non-empty names in names, preserving order.
+func nonEmpty(names []string) []string {
+	filtered := make([]string, 0, len(names))
+	for _, name := range names {
+		if name != "" {
+			filtered = append(filtered, name)
+		}
+	}
+	return filtered
 }
 
 // mountCEM registers cem's surface when cwd has a custom elements manifest.
 //
 // A manifest that exists but fails to decode is left to cem's handlers, which
 // report per-request errors: only a missing manifest skips mounting.
-func mountCEM(server *mcp.Server, cwd string) error {
+func mountCEM(server *mcp.Server, cwd string, opts MountOptions) error {
 	workspace, err := cemworkspace.NewFileSystemWorkspaceContext(cwd)
 	if err != nil {
 		return &MountWarning{Package: "cem", Err: err}
@@ -106,7 +150,9 @@ func mountCEM(server *mcp.Server, cwd string) error {
 		return nil
 	}
 
-	if err := cemmcp.Register(server, workspace, cemmcp.ServerConfig{}); err != nil {
+	// The Registration handle is discarded: no reload hook consumes it yet.
+	// A future reload integration can return it from here instead.
+	if _, err := cemmcp.Register(server, workspace, cemmcp.ServerConfig{}, cemRegisterOptions(opts)...); err != nil {
 		return &MountWarning{Package: "cem", Err: err}
 	}
 	return nil

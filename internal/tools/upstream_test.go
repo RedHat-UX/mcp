@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -141,7 +142,8 @@ func TestMountUpstreamsToolUnion(t *testing.T) {
 func TestMountUpstreamsDisablesTools(t *testing.T) {
 	t.Chdir(projectWithManifest(t))
 	session := connectServer(t, newMountedServer(t, MountOptions{
-		DisableTools: []string{"validate_html", "search_tokens"},
+		// The empty entry is a no-op, not an invalid selection.
+		DisableTools: []string{"", "validate_html", "search_tokens"},
 	}))
 
 	names := listToolNames(t, session)
@@ -208,6 +210,158 @@ func TestMountUpstreamsDisablesResourcesAndTemplates(t *testing.T) {
 		URI: "cem://element/rh-button/slots",
 	}); err == nil {
 		t.Error("ReadResource(cem://element/rh-button/slots) error = nil, want an unknown-resource error")
+	}
+}
+
+// TestMountUpstreamsDisableListDoesNotRemoveHostTools guards the contract that
+// MountOptions filters only the upstream surfaces. A host tool that happens to
+// share a name with an upstream tool, or that merely appears in a stale deny
+// list, must survive mounting.
+func TestMountUpstreamsDisableListDoesNotRemoveHostTools(t *testing.T) {
+	// No manifest, so cem is skipped and its surface cannot be the reason a
+	// host tool with the same name exists.
+	t.Chdir(t.TempDir())
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.0.0"}, nil)
+	server.AddTool(&mcp.Tool{
+		Name:        "validate_html",
+		Description: "host-owned tool",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: "host-owned"}},
+		}, nil
+	})
+
+	err := MountUpstreams(server, MountOptions{DisableTools: []string{"validate_html"}})
+	if err != nil {
+		t.Fatalf("MountUpstreams() error = %v, want nil", err)
+	}
+
+	session := connectServer(t, server)
+	names := listToolNames(t, session)
+	if !slices.Contains(names, "validate_html") {
+		t.Fatalf("tools/list lost the host tool named in the disable list: %v", names)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "validate_html",
+		Arguments: map[string]any{"html": "<x-y></x-y>"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool(validate_html) error = %v", err)
+	}
+	if got := contentText(result); got != "host-owned" {
+		t.Errorf("CallTool(validate_html) = %q, want the host handler's response", got)
+	}
+}
+
+// TestMountUpstreamsDisableListRegistersNoTransientSurface asserts that an
+// excluded name is never registered at all: the final surface omits it, calling
+// it fails as unknown, and a client that connects after mounting observes no
+// list-changed churn.
+func TestMountUpstreamsDisableListRegistersNoTransientSurface(t *testing.T) {
+	t.Chdir(projectWithManifest(t))
+	server := newMountedServer(t, MountOptions{
+		DisableTools:     []string{"validate_html"},
+		DisableResources: []string{"cem://elements"},
+		DisableTemplates: []string{"cem://element/{tagName}/slots"},
+	})
+
+	var toolChanges, resourceChanges atomic.Int32
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	serverSession, err := server.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatalf("connecting server: %v", err)
+	}
+	t.Cleanup(func() { _ = serverSession.Close() })
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "upstream-test", Version: "0.0.0"}, &mcp.ClientOptions{
+		ToolListChangedHandler: func(context.Context, *mcp.ToolListChangedRequest) {
+			toolChanges.Add(1)
+		},
+		ResourceListChangedHandler: func(context.Context, *mcp.ResourceListChangedRequest) {
+			resourceChanges.Add(1)
+		},
+	})
+	clientSession, err := client.Connect(ctx, clientTransport, &mcp.ClientSessionOptions{
+		ProtocolVersion: "2025-11-25",
+	})
+	if err != nil {
+		t.Fatalf("connecting client: %v", err)
+	}
+	t.Cleanup(func() { _ = clientSession.Close() })
+
+	if names := listToolNames(t, clientSession); slices.Contains(names, "validate_html") {
+		t.Errorf("tools/list contains the excluded tool: %v", names)
+	}
+	if _, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "validate_html",
+		Arguments: map[string]any{"html": "<rh-button></rh-button>"},
+	}); err == nil || !strings.Contains(err.Error(), "unknown tool") {
+		t.Errorf("CallTool(validate_html) error = %v, want an unknown-tool error", err)
+	}
+
+	// Give any delayed notification a chance to arrive; mounting happens
+	// before the session exists, so there must be no churn to replay.
+	time.Sleep(100 * time.Millisecond)
+	if got := toolChanges.Load(); got != 0 {
+		t.Errorf("client received %d tool list-changed notifications, want 0", got)
+	}
+	if got := resourceChanges.Load(); got != 0 {
+		t.Errorf("client received %d resource list-changed notifications, want 0", got)
+	}
+}
+
+// TestMountUpstreamsReplacesConflictingToolsByDefault pins the documented
+// default conflict policy: a pre-existing tool with the same name is replaced
+// by the upstream tool.
+func TestMountUpstreamsReplacesConflictingToolsByDefault(t *testing.T) {
+	t.Chdir(projectWithManifest(t))
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.0.0"}, nil)
+	server.AddTool(&mcp.Tool{
+		Name:        "validate_html",
+		Description: "pre-existing tool",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: "pre-existing"}},
+		}, nil
+	})
+
+	if err := MountUpstreams(server, MountOptions{}); err != nil {
+		t.Fatalf("MountUpstreams() error = %v", err)
+	}
+
+	session := connectServer(t, server)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	tools, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	for _, tool := range tools.Tools {
+		if tool.Name == "validate_html" && tool.Description == "pre-existing tool" {
+			t.Error("tools/list still describes the pre-existing validate_html tool; the upstream tool did not replace it")
+		}
+	}
+
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "validate_html",
+		Arguments: map[string]any{"html": "<rh-button></rh-button>"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool(validate_html) error = %v", err)
+	}
+	if got := contentText(result); strings.Contains(got, "pre-existing") {
+		t.Errorf("CallTool(validate_html) = %q, want the upstream handler's response", got)
 	}
 }
 
