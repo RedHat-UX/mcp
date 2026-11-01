@@ -171,26 +171,46 @@ func (r *workspaceReader) readOne(relative string, maxBytes int64) ([]byte, erro
 	return payload, nil
 }
 
-// readDir reads a directory only when its resolved target stays under the
-// workspace root.
-func (r *workspaceReader) readDir(relative string) ([]os.DirEntry, error) {
+// readDir reads at most limit entries from a directory, only when its resolved
+// target stays under the workspace root. It reports truncated when the
+// directory holds more entries than limit; the caller must then surface a
+// warning instead of treating the listing as complete. A negative limit reads
+// the whole directory.
+func (r *workspaceReader) readDir(relative string, limit int) ([]os.DirEntry, bool, error) {
 	path := filepath.Join(r.root, filepath.FromSlash(relative))
 	if !withinRoot(r.root, path) {
-		return nil, fmt.Errorf("%w: %q", errPathEscape, relative)
+		return nil, false, fmt.Errorf("%w: %q", errPathEscape, relative)
 	}
 	realPath, err := r.resolveWithin(path)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	entries, err := os.ReadDir(realPath)
+	directory, err := os.Open(realPath)
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	defer func() { _ = directory.Close() }()
+
+	// Ask for one entry past the limit so truncation is observable without
+	// enumerating the rest of a potentially huge directory.
+	readLimit := -1
+	if limit >= 0 {
+		readLimit = limit + 1
+	}
+	entries, err := directory.ReadDir(readLimit)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, false, err
+	}
+	truncated := false
+	if limit >= 0 && len(entries) > limit {
+		entries = entries[:limit]
+		truncated = true
 	}
 	again, err := filepath.EvalSymlinks(path)
 	if err != nil || again != realPath {
-		return nil, fmt.Errorf("workspace directory %q changed while it was read", relative)
+		return nil, false, fmt.Errorf("workspace directory %q changed while it was read", relative)
 	}
-	return entries, nil
+	return entries, truncated, nil
 }
 
 func (r *workspaceReader) resolveWithin(path string) (string, error) {
@@ -202,4 +222,34 @@ func (r *workspaceReader) resolveWithin(path string) (string, error) {
 		return "", fmt.Errorf("%w: %q resolves to %q", errPathEscape, path, realPath)
 	}
 	return realPath, nil
+}
+
+// isDirectory reports whether relative resolves to a directory inside the
+// workspace root.
+func (r *workspaceReader) isDirectory(relative string) bool {
+	info, ok := r.statWithin(relative)
+	return ok && info.IsDir()
+}
+
+// isRegularFile reports whether relative resolves to a regular file inside the
+// workspace root.
+func (r *workspaceReader) isRegularFile(relative string) bool {
+	info, ok := r.statWithin(relative)
+	return ok && info.Mode().IsRegular()
+}
+
+func (r *workspaceReader) statWithin(relative string) (os.FileInfo, bool) {
+	path := filepath.Join(r.root, filepath.FromSlash(relative))
+	if !withinRoot(r.root, path) {
+		return nil, false
+	}
+	realPath, err := r.resolveWithin(path)
+	if err != nil {
+		return nil, false
+	}
+	info, err := os.Lstat(realPath)
+	if err != nil {
+		return nil, false
+	}
+	return info, true
 }

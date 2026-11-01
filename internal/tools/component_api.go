@@ -53,6 +53,7 @@ type ComponentAPIOutput struct {
 	PackageSubpath string            `json:"packageSubpath,omitempty"`
 	Deprecated     *cem.Deprecation  `json:"deprecated,omitempty"`
 	Sections       []string          `json:"sections"`
+	Omitted        []string          `json:"omitted,omitempty"`
 	Attributes     []cem.Attribute   `json:"attributes,omitempty"`
 	Properties     []cem.Property    `json:"properties,omitempty"`
 	Events         []cem.Event       `json:"events,omitempty"`
@@ -60,7 +61,13 @@ type ComponentAPIOutput struct {
 	CSSParts       []cem.CSSPart     `json:"cssParts,omitempty"`
 	CSSProperties  []cem.CSSProperty `json:"cssProperties,omitempty"`
 	Examples       []cem.Example     `json:"examples,omitempty"`
+	Truncated      bool              `json:"truncated,omitempty"`
 	Error          *ToolError        `json:"error,omitempty"`
+
+	// requestedSections is the explicit sections filter, or nil for the
+	// default all-sections request. The budget layer uses it to avoid
+	// silently dropping a section the caller asked for.
+	requestedSections map[string]bool
 }
 
 // GetComponentAPI implements rhds_get_component_api for direct service calls.
@@ -118,6 +125,11 @@ func (s *Service) componentAPI(resolved resolution, input GetComponentAPIInput) 
 	if failure != nil {
 		out.Error = failure
 		return out
+	}
+	if len(input.Sections) > 0 {
+		// Remember the explicit filter so budget fitting never drops one of
+		// these sections without naming it and offering a real follow-up.
+		out.requestedSections = sections
 	}
 
 	model, failure := s.loadModel(resolved.Resolved.Elements)

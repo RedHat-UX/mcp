@@ -141,6 +141,103 @@ func TestNormalizeSchema1_0(t *testing.T) {
 	}
 }
 
+func TestNormalizeIncludesInheritedMembers(t *testing.T) {
+	model, err := Parse(readFixture(t, "mixins.json"))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	fancy := component(t, model, "rh-fancy")
+
+	tests := []struct {
+		section       string
+		name          string
+		inheritedFrom string
+		found         func() bool
+	}{
+		{"attributes", "fancy", "FancyMixin", func() bool {
+			for _, item := range fancy.Attributes {
+				if item.Name == "fancy" {
+					return item.InheritedFrom == "FancyMixin"
+				}
+			}
+			return false
+		}},
+		{"events", "fancy-change", "FancyMixin", func() bool {
+			for _, item := range fancy.Events {
+				if item.Name == "fancy-change" {
+					return item.InheritedFrom == "FancyMixin"
+				}
+			}
+			return false
+		}},
+		{"slots", "fancy-slot", "FancyMixin", func() bool {
+			for _, item := range fancy.Slots {
+				if item.Name == "fancy-slot" {
+					return item.InheritedFrom == "FancyMixin"
+				}
+			}
+			return false
+		}},
+		{"cssParts", "fancy-part", "FancyMixin", func() bool {
+			for _, item := range fancy.CSSParts {
+				if item.Name == "fancy-part" {
+					return item.InheritedFrom == "FancyMixin"
+				}
+			}
+			return false
+		}},
+		{"cssProperties", "--fancy-color", "FancyMixin", func() bool {
+			for _, item := range fancy.CSSProperties {
+				if item.Name == "--fancy-color" {
+					return item.InheritedFrom == "FancyMixin"
+				}
+			}
+			return false
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.section, func(t *testing.T) {
+			if !test.found() {
+				t.Errorf("inherited %s %q missing or lacks inheritedFrom %q",
+					test.section, test.name, test.inheritedFrom)
+			}
+		})
+	}
+	if len(fancy.Attributes) != 2 {
+		t.Errorf("attributes = %+v, want the own and inherited entries", fancy.Attributes)
+	}
+}
+
+func TestNormalizeSkipsStaticFields(t *testing.T) {
+	payload := []byte(`{
+		"schemaVersion": "2.1.0",
+		"modules": [{
+			"kind": "javascript-module",
+			"path": "./rh-static.js",
+			"declarations": [{
+				"kind": "class",
+				"customElement": true,
+				"name": "RhStatic",
+				"tagName": "rh-static",
+				"members": [
+					{"kind": "field", "name": "styles", "static": true},
+					{"kind": "field", "name": "version", "static": true},
+					{"kind": "field", "name": "staticAttribute", "static": true, "attribute": "static-attribute"},
+					{"kind": "field", "name": "variant", "attribute": "variant"}
+				]
+			}]
+		}]
+	}`)
+	model, err := Parse(payload)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	static := component(t, model, "rh-static")
+	if len(static.Properties) != 1 || static.Properties[0].Name != "variant" {
+		t.Errorf("properties = %+v, want only the instance field variant", static.Properties)
+	}
+}
+
 func TestNormalizeRejectsUnknownSchemaVersion(t *testing.T) {
 	_, err := Parse([]byte(`{"schemaVersion":"3.0.0","modules":[]}`))
 	if err == nil {

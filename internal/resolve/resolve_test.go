@@ -5,6 +5,7 @@ package resolve
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -796,6 +797,135 @@ func containsDiffSource(candidates []Candidate, source string) bool {
 		}
 	}
 	return false
+}
+
+// countingDirReader is a fake bounded directory reader. It records the limit
+// it was given and how many entries it materialized, so a test can prove the
+// caller stopped enumerating at the cap instead of reading the whole tree.
+type countingDirReader struct {
+	total     int
+	limit     int
+	generated int
+}
+
+func (r *countingDirReader) readDir(_ string, limit int) ([]os.DirEntry, bool, error) {
+	r.limit = limit
+	entries := make([]os.DirEntry, 0, min(r.total, limit+1))
+	for i := 0; i < r.total && i <= limit; i++ {
+		r.generated++
+		entries = append(entries, fakeDirEntry{
+			name: fmt.Sprintf("@rhds+elements@5.0.%d", i),
+			dir:  true,
+		})
+	}
+	return entries, r.total > limit, nil
+}
+
+type fakeDirEntry struct {
+	name string
+	dir  bool
+}
+
+func (e fakeDirEntry) Name() string      { return e.name }
+func (e fakeDirEntry) IsDir() bool       { return e.dir }
+func (e fakeDirEntry) Type() fs.FileMode { return e.dirType() }
+func (e fakeDirEntry) Info() (fs.FileInfo, error) {
+	return nil, fmt.Errorf("fake entry has no file info")
+}
+
+func (e fakeDirEntry) dirType() fs.FileMode {
+	if e.dir {
+		return fs.ModeDir
+	}
+	return 0
+}
+
+func TestPNPMStorePackagesStopsAtEntryLimit(t *testing.T) {
+	reader := &countingDirReader{total: 10_000}
+	var warnings []string
+
+	packages := pnpmStorePackages(reader, &warnings)
+
+	if reader.limit != maxWorkspacePackages {
+		t.Errorf("readDir limit = %d, want %d", reader.limit, maxWorkspacePackages)
+	}
+	if reader.generated != maxWorkspacePackages+1 {
+		t.Errorf("fake reader materialized %d entries, want %d (limit plus one probe)",
+			reader.generated, maxWorkspacePackages+1)
+	}
+	if len(packages) > maxWorkspacePackages {
+		t.Errorf("packages = %d, want at most %d", len(packages), maxWorkspacePackages)
+	}
+	if !strings.Contains(strings.Join(warnings, " "), "pnpm") {
+		t.Errorf("warnings = %v, want a pnpm scan cap warning", warnings)
+	}
+}
+
+func TestWorkspaceReadDirStopsAtLimit(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 20; i++ {
+		if err := os.Mkdir(filepath.Join(root, fmt.Sprintf("entry-%02d", i)), 0o755); err != nil {
+			t.Fatalf("creating directory: %v", err)
+		}
+	}
+	reader := newWorkspaceReader(root, DefaultLimits())
+
+	entries, truncated, err := reader.readDir(".", 5)
+	if err != nil {
+		t.Fatalf("readDir() error = %v", err)
+	}
+	if !truncated {
+		t.Error("truncated = false, want true when the directory has more entries")
+	}
+	if len(entries) != 5 {
+		t.Errorf("entries = %d, want the 5 entry limit", len(entries))
+	}
+}
+
+func TestWorkspaceGlobRespectsScanEntryLimit(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"package.json": `{"private":true,"workspaces":["packages/**"]}`,
+	}
+	for i := 0; i < 50; i++ {
+		files[fmt.Sprintf("packages/pkg%02d/package.json", i)] =
+			`{"dependencies":{"@rhds/elements":"^5.0.0"}}`
+	}
+	writeFiles(t, root, files)
+
+	limits := DefaultLimits()
+	limits.MaxScanEntries = 10
+	result, err := Resolve(Options{Root: root, BundledElements: testBundled, Limits: limits})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	joined := strings.Join(result.Warnings, " ")
+	if !strings.Contains(joined, "workspace discovery stopped") {
+		t.Errorf("warnings = %v, want a workspace scan limit warning", result.Warnings)
+	}
+	if !strings.Contains(joined, "entries") {
+		t.Errorf("warnings = %v, want the warning to name the entry limit", result.Warnings)
+	}
+}
+
+func TestNegatedWorkspacePatternExcludesPackage(t *testing.T) {
+	root := t.TempDir()
+	writeFiles(t, root, map[string]string{
+		"package.json":                 `{"private":true,"workspaces":["packages/*","!packages/legacy"]}`,
+		"packages/app/package.json":    `{"dependencies":{"@rhds/elements":"^4.0.0"}}`,
+		"packages/legacy/package.json": `{"dependencies":{"@rhds/elements":"^5.0.0"}}`,
+	})
+
+	result := resolveIn(t, root, "")
+	if result.Ambiguity != nil {
+		t.Fatalf("ambiguity = %+v, want the excluded package ignored", result.Ambiguity)
+	}
+	if result.Elements != "4.2.2" {
+		t.Errorf("elements = %q, want the included package's 4.2.2", result.Elements)
+	}
+	if hasCandidate(result, "packages/legacy/package.json", "5.0.0") {
+		t.Errorf("candidates = %+v, want no evidence from the excluded package", result.Candidates)
+	}
 }
 
 func TestUnparseableLockfileFallsBackToPackageJSON(t *testing.T) {

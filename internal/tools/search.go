@@ -92,6 +92,13 @@ func (s *Service) searchWithEnv(
 	request *mcp.CallToolRequest,
 	input SearchInput,
 ) (*mcp.CallToolResult, SearchOutput) {
+	// Validate before roots negotiation, workspace scans, or elicitation. An
+	// invalid query must never prompt the user or read the workspace.
+	if _, failure := validateSearchInput(input); failure != nil {
+		out := SearchOutput{Hits: []SearchHit{}, Error: failure}
+		fitSearch(&out, s.responseBudget(false))
+		return nil, out
+	}
 	resolved, required, failure := s.prepareResolution(
 		ctx, newCallEnv(request), input.Version, "", true)
 	if required != nil {
@@ -105,18 +112,19 @@ func (s *Service) searchWithEnv(
 	return nil, s.search(resolved, input)
 }
 
-func (s *Service) search(resolved resolution, input SearchInput) (out SearchOutput) {
-	defer func() { fitSearch(&out, s.responseBudget(false)) }()
-	out = SearchOutput{
-		Resolved: resolved.Resolved,
-		Hits:     []SearchHit{},
-	}
+// searchOptions is validated search input. Validation is separate so
+// searchWithEnv can reject bad input before any resolution work.
+type searchOptions struct {
+	query string
+	scope string
+	limit int
+}
+
+func validateSearchInput(input SearchInput) (searchOptions, *ToolError) {
 	query := strings.TrimSpace(input.Query)
 	if query == "" {
-		out.Error = invalidArgument("query is required")
-		return out
+		return searchOptions{}, invalidArgument("query is required")
 	}
-
 	scope := input.Scope
 	if scope == "" {
 		scope = scopeAll
@@ -124,21 +132,37 @@ func (s *Service) search(resolved resolution, input SearchInput) (out SearchOutp
 	switch scope {
 	case scopeComponents, scopeTokens, scopeDocs, scopeExamples, scopeAll:
 	default:
-		out.Error = invalidArgument("scope must be components, tokens, docs, examples, or all")
-		return out
+		return searchOptions{}, invalidArgument("scope must be components, tokens, docs, examples, or all")
 	}
-	out.Scope = scope
-
+	if input.Limit < 0 {
+		return searchOptions{}, invalidArgument("limit must be zero or positive")
+	}
 	limit := input.Limit
-	if limit < 0 {
-		out.Error = invalidArgument("limit must be zero or positive")
-		return out
-	}
 	if limit == 0 {
 		limit = defaultSearchLimit
 	}
 	if limit > maxSearchLimit {
 		limit = maxSearchLimit
+	}
+	return searchOptions{query: query, scope: scope, limit: limit}, nil
+}
+
+func (s *Service) search(resolved resolution, input SearchInput) (out SearchOutput) {
+	defer func() { fitSearch(&out, s.responseBudget(false)) }()
+	out = SearchOutput{
+		Resolved: resolved.Resolved,
+		Hits:     []SearchHit{},
+	}
+	options, failure := validateSearchInput(input)
+	if failure != nil {
+		out.Error = failure
+		return out
+	}
+	query := options.query
+	scope := options.scope
+	out.Scope = scope
+	limit := options.limit
+	if input.Limit > maxSearchLimit {
 		out.Resolved.Warnings = append(out.Resolved.Warnings,
 			fmt.Sprintf("limit was capped at %d", maxSearchLimit))
 	}
@@ -260,10 +284,17 @@ func (s *Service) searchDocs(version, needle string, warnings *[]string) []Searc
 		return nil
 	}
 	hits := make([]SearchHit, 0)
+	unavailable := 0
+	var readFailure string
 	for _, record := range records {
 		excerpt := ""
 		if content, err := s.store.Read(packageDocs, version, record.Kind); err == nil {
 			excerpt = excerptText(string(content), needle, maxExcerptRunes)
+		} else {
+			unavailable++
+			if readFailure == "" {
+				readFailure = err.Error()
+			}
 		}
 		hit := SearchHit{
 			Type:    "doc",
@@ -276,6 +307,11 @@ func (s *Service) searchDocs(version, needle string, warnings *[]string) []Searc
 			hit.Score = score
 			hits = append(hits, hit)
 		}
+	}
+	if unavailable > 0 {
+		*warnings = append(*warnings, fmt.Sprintf(
+			"docs content unavailable for %d pages; matched on title and path only: %s",
+			unavailable, readFailure))
 	}
 	return hits
 }
@@ -306,6 +342,7 @@ func (s *Service) searchExamples(elementsVersion, docsVersion, needle string, wa
 
 	model, failure := s.loadModel(elementsVersion)
 	if failure != nil {
+		*warnings = append(*warnings, "component example search skipped: "+failure.Message)
 		return hits
 	}
 	for _, component := range model.Components {

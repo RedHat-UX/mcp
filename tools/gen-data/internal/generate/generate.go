@@ -128,18 +128,36 @@ func Generate(inputs *Inputs, outDir string) (result *data.Index, err error) {
 	if err != nil {
 		return nil, err
 	}
-	root, err := prepareOutputDir(absoluteOut)
+	resolved, err := prepareOutputPath(absoluteOut)
+	if err != nil {
+		return nil, err
+	}
+	// Generate into a sibling staging directory and swap it in only after
+	// validation and every write succeed. A failed run leaves the previous tree
+	// untouched.
+	staging, root, err := createStagingDir(resolved)
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
-		// A partially written tree has no index.json, so a later run would
-		// refuse to clear it. Leave only the empty marker instead.
-		if err != nil {
-			resetOutputDir(root)
-		}
 		_ = root.Close()
+		_ = os.RemoveAll(staging)
 	}()
+	index, err := writeOutputTree(inputs, root)
+	if err != nil {
+		return nil, err
+	}
+	if err := root.Close(); err != nil {
+		return nil, fmt.Errorf("closing staging directory: %w", err)
+	}
+	if err := commitStaging(staging, resolved); err != nil {
+		return nil, err
+	}
+	return index, nil
+}
+
+// writeOutputTree writes a complete data tree into root.
+func writeOutputTree(inputs *Inputs, root *os.Root) (*data.Index, error) {
 	// Keep the embed pattern valid even if the tree is later cleaned of
 	// generated artifacts.
 	if err := root.WriteFile(".gitkeep", nil, 0o644); err != nil {
@@ -175,95 +193,119 @@ func Generate(inputs *Inputs, outDir string) (result *data.Index, err error) {
 	return index, nil
 }
 
-// resetOutputDir removes every entry from a failed generation and restores the
-// .gitkeep marker so the output directory matches a clean checkout.
-func resetOutputDir(root *os.Root) {
-	entries, err := fs.ReadDir(root.FS(), ".")
-	if err != nil {
-		return
-	}
-	for _, entry := range entries {
-		_ = root.RemoveAll(entry.Name())
-	}
-	_ = root.WriteFile(".gitkeep", nil, 0o644)
-}
-
-// prepareOutputDir validates outDir, requires positive gen-data provenance
-// before clearing a non-empty directory, and removes only a prior gen-data
-// tree. The returned Root binds all later reads, removals, and writes to the
-// same opened directory descriptor.
-func prepareOutputDir(absolute string) (*os.Root, error) {
+// prepareOutputPath validates outDir, requires positive gen-data provenance
+// before it may be replaced, and returns the resolved output path. It does not
+// modify the directory: Generate writes to a sibling staging directory that is
+// swapped in only after every write succeeds.
+func prepareOutputPath(absolute string) (string, error) {
 	resolved, err := resolveOutputPath(absolute)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	if err := validateOutputPath(absolute, resolved); err != nil {
-		return nil, err
+		return "", err
 	}
 	before, beforeErr := os.Stat(resolved)
 	if beforeErr != nil && !errors.Is(beforeErr, os.ErrNotExist) {
-		return nil, fmt.Errorf("generate: inspecting output %q: %w", resolved, beforeErr)
+		return "", fmt.Errorf("generate: inspecting output %q: %w", resolved, beforeErr)
+	}
+	if beforeErr != nil {
+		// Nothing exists yet; staging plus a rename creates the directory.
+		return resolved, nil
 	}
 	// Any path component, including the final one, can change until OpenRoot.
 	// For an existing directory, the inode captured here is compared with the
 	// opened root, and confirmSameDirectory rechecks the current path and
-	// refuses a symlink after opening. A change before this stat is not
-	// detected by the inode comparison, but no mutation happens until the root
-	// is open; every later read, removal, and write uses that descriptor. When
-	// the directory does not exist yet, a swapped parent can redirect creation,
-	// and the post-open checks still bind all subsequent operations.
-	if err := os.MkdirAll(resolved, 0o755); err != nil {
-		return nil, fmt.Errorf("creating %s: %w", absolute, err)
-	}
+	// refuses a symlink after opening. Every later read uses that descriptor.
 	root, err := os.OpenRoot(resolved)
 	if err != nil {
-		return nil, fmt.Errorf("opening %s: %w", absolute, err)
+		return "", fmt.Errorf("opening %s: %w", absolute, err)
 	}
-	if beforeErr == nil {
-		rootInfo, err := root.Stat(".")
-		if err != nil || !os.SameFile(before, rootInfo) {
-			_ = root.Close()
-			return nil, fmt.Errorf("generate: refusing output %q because it changed while opening", resolved)
-		}
+	defer func() { _ = root.Close() }()
+	rootInfo, err := root.Stat(".")
+	if err != nil || !os.SameFile(before, rootInfo) {
+		return "", fmt.Errorf("generate: refusing output %q because it changed while opening", resolved)
 	}
 	if err := confirmSameDirectory(resolved, root); err != nil {
-		_ = root.Close()
-		return nil, err
+		return "", err
 	}
 	if err := validateOutputContents(root, absolute); err != nil {
-		_ = root.Close()
-		return nil, err
+		return "", err
 	}
 	entries, err := fs.ReadDir(root.FS(), ".")
 	if err != nil {
-		_ = root.Close()
-		return nil, fmt.Errorf("generate: cannot inspect output %q: %w", absolute, err)
+		return "", fmt.Errorf("generate: cannot inspect output %q: %w", absolute, err)
 	}
 	if isEmptyOutput(entries) {
-		return root, nil
+		return resolved, nil
 	}
 	if err := checkProvenance(root, entries, absolute); err != nil {
-		_ = root.Close()
-		return nil, err
+		return "", err
 	}
 	sources, err := findSourceFiles(root, entries)
 	if err != nil {
-		_ = root.Close()
-		return nil, fmt.Errorf("generate: scanning output %q: %w", absolute, err)
+		return "", fmt.Errorf("generate: scanning output %q: %w", absolute, err)
 	}
 	if len(sources) > 0 {
-		_ = root.Close()
-		return nil, fmt.Errorf(
-			"generate: refusing to clear %q because it contains %s",
+		return "", fmt.Errorf(
+			"generate: refusing to replace %q because it contains %s",
 			absolute, strings.Join(sources, ", "))
 	}
-	for _, entry := range entries {
-		if err := root.RemoveAll(entry.Name()); err != nil {
-			_ = root.Close()
-			return nil, fmt.Errorf("clearing %s: %w", filepath.Join(absolute, entry.Name()), err)
-		}
+	return resolved, nil
+}
+
+// createStagingDir creates a fresh sibling directory for a generation run.
+// Being a sibling keeps the final rename on the same filesystem.
+func createStagingDir(resolved string) (string, *os.Root, error) {
+	parent := filepath.Dir(resolved)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return "", nil, fmt.Errorf("creating %s: %w", parent, err)
 	}
-	return root, nil
+	staging, err := os.MkdirTemp(parent, "."+filepath.Base(resolved)+".stage-")
+	if err != nil {
+		return "", nil, fmt.Errorf("creating staging directory: %w", err)
+	}
+	root, err := os.OpenRoot(staging)
+	if err != nil {
+		_ = os.RemoveAll(staging)
+		return "", nil, fmt.Errorf("opening staging directory: %w", err)
+	}
+	return staging, root, nil
+}
+
+// commitStaging replaces resolved with the staged tree. The previous tree is
+// moved aside first, so if the staged tree cannot be installed the previous one
+// is restored.
+func commitStaging(staging, resolved string) error {
+	info, err := os.Lstat(resolved)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		if err := os.Rename(staging, resolved); err != nil {
+			return fmt.Errorf("installing staged output: %w", err)
+		}
+		return nil
+	case err != nil:
+		return fmt.Errorf("generate: inspecting output %q: %w", resolved, err)
+	case info.Mode()&os.ModeSymlink != 0:
+		return fmt.Errorf("generate: refusing output %q because it is a symlink", resolved)
+	case !info.IsDir():
+		return fmt.Errorf("generate: refusing output %q because it is not a directory", resolved)
+	}
+	// staging is unique, so staging+".old" cannot already exist.
+	backup := staging + ".old"
+	if err := os.Rename(resolved, backup); err != nil {
+		return fmt.Errorf("moving previous output aside: %w", err)
+	}
+	if err := os.Rename(staging, resolved); err != nil {
+		if restoreErr := os.Rename(backup, resolved); restoreErr != nil {
+			return fmt.Errorf("installing staged output: %v (restoring previous output: %v)", err, restoreErr)
+		}
+		return fmt.Errorf("installing staged output: %w", err)
+	}
+	if err := os.RemoveAll(backup); err != nil {
+		return fmt.Errorf("removing previous output: %w", err)
+	}
+	return nil
 }
 
 func confirmSameDirectory(resolved string, root *os.Root) error {
@@ -875,7 +917,8 @@ func gzipBytes(payload []byte) ([]byte, error) {
 }
 
 // IsUpToDate reports whether outDir has an index for the lock digest and every
-// artifact it names exists with the recorded size. It reads no artifact.
+// artifact it names is readable and matches its recorded SHA-256. Content is
+// read, not just sized, so a same-size change still forces regeneration.
 func IsUpToDate(outDir, lockDigest string) (bool, error) {
 	if lockDigest == "" {
 		return false, nil
@@ -892,11 +935,15 @@ func IsUpToDate(outDir, lockDigest string) (bool, error) {
 		return false, nil
 	}
 	for _, artifact := range index.Artifacts {
-		info, err := os.Stat(filepath.Join(outDir, filepath.FromSlash(artifact.Path)))
-		if err != nil || info.IsDir() {
+		if !isLowerHexDigest(artifact.SHA256) {
 			return false, nil
 		}
-		if artifact.Bytes > 0 && info.Size() != artifact.Bytes {
+		content, err := os.ReadFile(filepath.Join(outDir, filepath.FromSlash(artifact.Path)))
+		if err != nil {
+			return false, nil
+		}
+		sum := sha256.Sum256(content)
+		if hex.EncodeToString(sum[:]) != artifact.SHA256 {
 			return false, nil
 		}
 	}

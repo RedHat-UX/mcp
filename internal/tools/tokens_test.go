@@ -115,6 +115,22 @@ func TestQueryTokensSearch(t *testing.T) {
 	}
 }
 
+func TestQueryTokensSearchDoesNotMatchType(t *testing.T) {
+	out := fixtureService(t).QueryTokens(context.Background(), QueryTokensInput{
+		Query: "number",
+	})
+	if out.Error != nil {
+		t.Fatalf("QueryTokens() error = %+v", out.Error)
+	}
+	if out.Total != 0 {
+		names := make([]string, len(out.Tokens))
+		for i, tok := range out.Tokens {
+			names[i] = tok.Name
+		}
+		t.Errorf("query %q matched by token type: %v, want no results", "number", names)
+	}
+}
+
 func TestQueryTokensFormatCSS(t *testing.T) {
 	out := fixtureService(t).QueryTokens(context.Background(), QueryTokensInput{
 		Token:  "color-brand",

@@ -250,6 +250,31 @@ func TestValidateMarkupFlagsEmptyEnumValues(t *testing.T) {
 	}
 }
 
+func TestValidateMarkupAcceptsTemplatedAttributeValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		markup string
+	}{
+		{name: "interpolation", markup: `<rh-button variant="{{ variant }}"></rh-button>`},
+		{name: "statement", markup: `<rh-button variant="{% if x %}primary{% endif %}"></rh-button>`},
+		{name: "comment", markup: `<rh-button variant="{# comment #}primary"></rh-button>`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := fixtureService(t).ValidateMarkup(context.Background(), ValidateMarkupInput{
+				Markup: tt.markup,
+				Format: "twig",
+			})
+			if out.Error != nil {
+				t.Fatalf("ValidateMarkup() error = %+v", out.Error)
+			}
+			if issue, ok := findIssue(out.Issues, "invalid-attribute-value"); ok {
+				t.Errorf("templated value flagged invalid: %+v", issue)
+			}
+		})
+	}
+}
+
 func TestValidateMarkupSelfClosingCustomElements(t *testing.T) {
 	// cem's tree-sitter query reports no matches for self-closing custom
 	// elements, so these must still be validated after normalization.
@@ -300,13 +325,23 @@ func TestTwigControlFlowUnbalanced(t *testing.T) {
 		{name: "if balanced", markup: `{% if x %}{% endif %}`, want: false},
 		{name: "if unclosed", markup: `{% if x %}`, want: true},
 		{name: "end without open", markup: `{% endif %}`, want: true},
+		{name: "mismatched closer", markup: `{% if user %}{% endfor %}`, want: true},
+		{name: "mismatched nested closer", markup: `{% if a %}{% for x in y %}{% endif %}{% endfor %}`, want: true},
+		{name: "correct nesting", markup: `{% if a %}{% for x in y %}{% endfor %}{% endif %}`, want: false},
+		{name: "else no-op", markup: `{% if x %}{% else %}{% endif %}`, want: false},
+		{name: "elseif no-op", markup: `{% if x %}{% elseif y %}{% endif %}`, want: false},
+		{name: "for else no-op", markup: `{% for x in y %}{% else %}{% endfor %}`, want: false},
 		{name: "block", markup: `{% block title %}{% endblock %}`, want: false},
+		{name: "named block", markup: `{% block title %}{% endblock title %}`, want: false},
 		{name: "block shorthand", markup: `{% block title page_title|title %}`, want: false},
 		{name: "scoped block", markup: `{% block title scoped %}{% endblock %}`, want: false},
 		{name: "set assignment", markup: `{% set x = 1 %}`, want: false},
 		{name: "set block", markup: `{% set x %}{% endset %}`, want: false},
 		{name: "sandbox", markup: `{% sandbox %}{% endsandbox %}`, want: false},
 		{name: "cache", markup: `{% cache "key" %}{% endcache %}`, want: false},
+		{name: "spaceless", markup: `{% spaceless %}{% endspaceless %}`, want: false},
+		{name: "unknown tag pair", markup: `{% guard foo %}{% endguard %}`, want: false},
+		{name: "unknown closer", markup: `{% endguard %}`, want: false},
 		{name: "comment containing tag", markup: `{# {% if x %} #}`, want: false},
 		{name: "raw content", markup: `{% raw %}{% if x %}{% endraw %}`, want: false},
 		{name: "unclosed raw", markup: `{% raw %}{% if x %}`, want: true},

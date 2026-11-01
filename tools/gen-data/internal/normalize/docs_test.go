@@ -151,6 +151,65 @@ func TestProcessMarkdownCodeBlockThenImage(t *testing.T) {
 	}
 }
 
+func TestStripMarkdownImagesBalancedParentheses(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		want      string
+		wantFound bool
+	}{
+		{
+			name:      "balanced parentheses in destination",
+			input:     "before ![dark](images/foo_(dark).png) after",
+			want:      "before dark after",
+			wantFound: true,
+		},
+		{
+			name:      "balanced parentheses already at top level",
+			input:     "![logo](images/logo.png) rest",
+			want:      "logo rest",
+			wantFound: true,
+		},
+		{
+			name:      "escaped closing parenthesis",
+			input:     `before ![odd](images/foo\)bar.png) after`,
+			want:      "before odd after",
+			wantFound: true,
+		},
+		{
+			name:      "title text with parentheses",
+			input:     `before ![dark](images/foo_(dark).png "Dark theme (preview)") after`,
+			want:      "before dark after",
+			wantFound: true,
+		},
+		{
+			name:      "unbalanced input degrades safely",
+			input:     "before ![dark](images/foo_(dark.png) after",
+			want:      "before ![dark](images/foo_(dark.png) after",
+			wantFound: false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, found := stripMarkdownImages(test.input)
+			if found != test.wantFound {
+				t.Errorf("stripMarkdownImages() found = %v, want %v", found, test.wantFound)
+			}
+			if got != test.want {
+				t.Errorf("stripMarkdownImages() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestProcessMarkdownBalancedImageDestination(t *testing.T) {
+	input := "# X\n\nSee ![dark](images/foo_(dark).png) and text.\n"
+	result := ProcessMarkdown([]byte(input), "src")
+	if !strings.Contains(string(result.Content), "See dark and text.") {
+		t.Errorf("Content = %q, want the image replaced by its alt text", result.Content)
+	}
+}
+
 func TestStripHTMLImagesIgnoresNonTagTokens(t *testing.T) {
 	input := `img before <img src="x.png" alt="ALT"> after <!--img--> done`
 	got := stripHTMLImages(input)
