@@ -8,8 +8,8 @@ go 1.26.4
 toolchain go1.26.10
 
 require (
-	bennypowers.dev/asimonim v0.3.5-0.20261101173919-298bace6dcd1
-	bennypowers.dev/cem v0.11.6-0.20261101173853-b04ffdec00ac
+	bennypowers.dev/asimonim v0.3.5-0.20261101184455-cfad370a1344
+	bennypowers.dev/cem v0.11.6-0.20261101184531-5b926b887473
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/tidwall/jsonc v0.3.3
 	go.lsp.dev/protocol v1.0.1

@@ -64,6 +64,14 @@ func newMountedServer(t *testing.T, opts MountOptions) *mcp.Server {
 
 func connectServer(t *testing.T, server *mcp.Server, roots ...*mcp.Root) *mcp.ClientSession { //nolint:staticcheck // roots are required by PLAN section 8.1
 	t.Helper()
+	return connectServerWithProtocol(t, server, "2025-11-25", roots...)
+}
+
+// connectServerWithProtocol connects a roots-capable client that negotiates
+// protocol explicitly. Revisions from 2026-07-28 on resolve roots through
+// multi-round-trip requests rather than a direct roots/list request.
+func connectServerWithProtocol(t *testing.T, server *mcp.Server, protocol string, roots ...*mcp.Root) *mcp.ClientSession { //nolint:staticcheck // roots are required by PLAN section 8.1
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
 
@@ -85,7 +93,7 @@ func connectServer(t *testing.T, server *mcp.Server, roots ...*mcp.Root) *mcp.Cl
 		client.AddRoots(roots...) //nolint:staticcheck // roots are required by PLAN section 8.1
 	}
 	clientSession, err := client.Connect(ctx, clientTransport, &mcp.ClientSessionOptions{
-		ProtocolVersion: "2025-11-25",
+		ProtocolVersion: protocol,
 	})
 	if err != nil {
 		t.Fatalf("connecting client: %v", err)
@@ -434,6 +442,59 @@ func TestMountUpstreamsAsimonimResolvesConfigFromSessionRoots(t *testing.T) {
 	}
 }
 
+// TestMountUpstreamsAsimonimResolvesRootsThroughMRTR covers protocol revision
+// 2026-07-28, where the server may not issue a direct roots/list request. Each
+// session's workspace must still come from its own roots through multi-round-trip
+// requests, never from the cwd fallback.
+func TestMountUpstreamsAsimonimResolvesRootsThroughMRTR(t *testing.T) {
+	rootA := tokenProject(t, "alpha", "#ff0000")
+	rootB := tokenProject(t, "beta", "#0000ff")
+
+	// The cwd has no token config, so only the roots can resolve a workspace.
+	t.Chdir(t.TempDir())
+	server := newMountedServer(t, MountOptions{})
+
+	sessionA := connectServerWithProtocol(t, server, "2026-07-28", &mcp.Root{URI: fileURI(rootA)}) //nolint:staticcheck // roots are required by PLAN section 8.1
+	sessionB := connectServerWithProtocol(t, server, "2026-07-28", &mcp.Root{URI: fileURI(rootB)}) //nolint:staticcheck // roots are required by PLAN section 8.1
+
+	result := searchTokensResult(t, sessionA, "alpha")
+	if got := contentText(result); !strings.Contains(got, "alpha") {
+		t.Errorf("client A search for alpha = %s, want its root's token", got)
+	}
+	if got := searchTokens(t, sessionA, "beta"); strings.Contains(got, "beta") {
+		t.Errorf("client A search for beta = %s, want no token from client B's root", got)
+	}
+	if got := searchTokens(t, sessionB, "beta"); !strings.Contains(got, "beta") {
+		t.Errorf("client B search for beta = %s, want its root's token", got)
+	}
+	if got := searchTokens(t, sessionB, "alpha"); strings.Contains(got, "alpha") {
+		t.Errorf("client B search for alpha = %s, want no token from client A's root", got)
+	}
+
+	// The result must record where its workspace came from: the client root,
+	// not the cwd fallback.
+	raw, ok := result.GetMeta()[workspaceMetaKey]
+	if !ok {
+		t.Fatalf("search_tokens result is missing %q in _meta: %#v", workspaceMetaKey, result.GetMeta())
+	}
+	meta, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("%q in _meta = %T, want a JSON object", workspaceMetaKey, raw)
+	}
+	if got := meta["source"]; got != "roots" {
+		t.Errorf("workspace meta source = %v, want roots", got)
+	}
+	if got := meta["root"]; got != rootA {
+		t.Errorf("workspace meta root = %v, want %q", got, rootA)
+	}
+	if warning, ok := meta["warning"]; ok {
+		t.Errorf("workspace meta has warning %v, want none for resolved roots", warning)
+	}
+}
+
+// workspaceMetaKey is the _meta key asimonim uses for workspace provenance.
+const workspaceMetaKey = "asimonim/workspace"
+
 // tokenProject writes an asimonim config and token file under root.
 func tokenProject(t *testing.T, name, value string) string {
 	t.Helper()
@@ -465,6 +526,11 @@ func fileURI(path string) string {
 
 func searchTokens(t *testing.T, session *mcp.ClientSession, query string) string {
 	t.Helper()
+	return contentText(searchTokensResult(t, session, query))
+}
+
+func searchTokensResult(t *testing.T, session *mcp.ClientSession, query string) *mcp.CallToolResult {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{
@@ -477,7 +543,7 @@ func searchTokens(t *testing.T, session *mcp.ClientSession, query string) string
 	if result.IsError {
 		t.Fatalf("CallTool(search_tokens, %q) IsError = true: %s", query, contentText(result))
 	}
-	return contentText(result)
+	return result
 }
 
 func contentText(result *mcp.CallToolResult) string {
