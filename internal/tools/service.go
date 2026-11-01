@@ -586,8 +586,10 @@ func (s *Service) loadTokens(version string) ([]*token.Token, *token.Map, *ToolE
 }
 
 // addThemeTokens synthesizes tokens for theme-map entries that are not in the
-// DTCG document. The light value is the token's base value; the dark value is
-// reported through TokenResult.ThemeValue.
+// DTCG document. Entries from the light map carry the token's base value; the
+// dark value is reported through TokenResult.ThemeValue. Entries that appear
+// only in a non-light map have no base value, so they are marked with their
+// defining theme and omitted unless that theme is requested.
 func addThemeTokens(tokens []*token.Token, themes map[string]map[string]string) []*token.Token {
 	existing := make(map[string]bool, len(tokens))
 	for _, tok := range tokens {
@@ -610,6 +612,12 @@ func addThemeTokens(tokens []*token.Token, themes map[string]map[string]string) 
 				continue
 			}
 			value := themes[themeName][cssName]
+			extensions := map[string]any{"themeComposite": true}
+			// A token that appears only in a non-light theme has no base
+			// value. Mark it so queries can include it only for that theme.
+			if themeName != "light" {
+				extensions[themeOnlyExtension] = themeName
+			}
 			result = append(result, &token.Token{
 				Name:          name,
 				Value:         value,
@@ -619,7 +627,7 @@ func addThemeTokens(tokens []*token.Token, themes map[string]map[string]string) 
 				Type:          token.TypeColor,
 				Prefix:        "rh",
 				Extensions: map[string]any{
-					"com.redhat.ux": map[string]any{"themeComposite": true},
+					"com.redhat.ux": extensions,
 				},
 			})
 			existing[name] = true

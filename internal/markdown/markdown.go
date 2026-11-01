@@ -225,7 +225,12 @@ func closesFence(line, marker string) bool {
 	for run < len(trimmed) && trimmed[run] == character {
 		run++
 	}
-	return run >= len(marker)
+	if run < len(marker) {
+		return false
+	}
+	// A closing fence carries no info string. Only spaces and tabs may follow
+	// the closing run, so "```html" cannot close a block opened with "```".
+	return strings.TrimLeft(trimmed[run:], " \t") == ""
 }
 
 func atxHeading(line string) (text string, level int, ok bool) {

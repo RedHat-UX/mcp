@@ -5,6 +5,8 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -61,6 +63,38 @@ type QueryTokensOutput struct {
 	NextCursor string          `json:"nextCursor,omitempty"`
 	Truncated  bool            `json:"truncated"`
 	Error      *ToolError      `json:"error,omitempty"`
+
+	// cursorFingerprint binds any cursor this response emits to the filters
+	// that produced it. It is internal and never serialized.
+	cursorFingerprint string
+}
+
+// tokenCursorFingerprint is a stable hash of the filters that shape a token
+// result set. Query matching is case-insensitive and trims surrounding space,
+// so the fingerprint normalizes the query the same way.
+func tokenCursorFingerprint(query, token string) string {
+	normalized := strings.ToLower(strings.TrimSpace(query)) + "\x00" + strings.TrimSpace(token)
+	sum := sha256.Sum256([]byte(normalized))
+	return hex.EncodeToString(sum[:16])
+}
+
+func encodeTokenCursor(version string, offset int, fingerprint string) string {
+	return encodeCursorPayload(cursorPayload{
+		Version:     version,
+		Offset:      offset,
+		Fingerprint: fingerprint,
+	})
+}
+
+// matchesTokenQuery reports whether the cursor was produced by the same query
+// and token filters. A cursor with no fingerprint cannot be verified, so it is
+// rejected as a mismatch.
+func (p cursorPayload) matchesTokenQuery(query, token string) bool {
+	return p.Fingerprint == tokenCursorFingerprint(query, token)
+}
+
+func cursorQueryMismatch() *ToolError {
+	return invalidCursor("cursor was issued for a different query or token; restart pagination without a cursor")
 }
 
 // Source values for token results. The theme map is extracted from the
@@ -87,6 +121,10 @@ func (s *Service) QueryTokens(_ context.Context, input QueryTokensInput) QueryTo
 		if cursorErr != nil {
 			return fitQueryTokensPage(
 				QueryTokensOutput{Tokens: []TokenResult{}, Error: cursorErr}, budget, 0)
+		}
+		if !payload.matchesTokenQuery(input.Query, input.Token) {
+			return fitQueryTokensPage(
+				QueryTokensOutput{Tokens: []TokenResult{}, Error: cursorQueryMismatch()}, budget, 0)
 		}
 		requested = payload.Version
 		source = "cursor"
@@ -147,6 +185,7 @@ func (s *Service) queryTokens(resolved ResolvedVersion, input QueryTokensInput) 
 		out = fitQueryTokensPage(out, s.responseBudget(input.Detail == "full"), pageOffset)
 	}()
 	out = QueryTokensOutput{Tokens: []TokenResult{}, Resolved: resolved}
+	out.cursorFingerprint = tokenCursorFingerprint(input.Query, input.Token)
 	if failure := s.dataFailure(); failure != nil {
 		out.Error = failure
 		return out
@@ -216,6 +255,16 @@ func (s *Service) queryTokens(resolved ResolvedVersion, input QueryTokensInput) 
 			return out
 		}
 	}
+	effectiveTheme := theme
+	if theme == "auto" {
+		effectiveTheme = "light"
+		out.Resolved.Warnings = append(out.Resolved.Warnings,
+			"theme auto used the light theme; resolve dark values on the client")
+	}
+	if theme != "" && len(themes["light"]) == 0 && len(themes["dark"]) == 0 {
+		out.Resolved.Warnings = append(out.Resolved.Warnings,
+			fmt.Sprintf("tokens@%s has no light/dark theme map", version))
+	}
 
 	var selected []*token.Token
 	if input.Token != "" {
@@ -229,10 +278,22 @@ func (s *Service) queryTokens(resolved ResolvedVersion, input QueryTokensInput) 
 			}
 			return out
 		}
+		if only := themeOnlyName(found); only != "" && only != effectiveTheme {
+			out.Error = &ToolError{
+				Code: "token_not_found",
+				Message: fmt.Sprintf("token %q is only defined in the %s theme",
+					truncateResponseText(input.Token, maxCandidateRunes), only),
+				Hint: fmt.Sprintf("pass theme=%s to resolve it", only),
+			}
+			return out
+		}
 		selected = []*token.Token{found}
 	} else {
 		needle := strings.ToLower(strings.TrimSpace(input.Query))
 		for _, tok := range tokens {
+			if only := themeOnlyName(tok); only != "" && only != effectiveTheme {
+				continue
+			}
 			if needle == "" || tokenMatches(tok, needle) {
 				selected = append(selected, tok)
 			}
@@ -261,6 +322,10 @@ func (s *Service) queryTokens(resolved ResolvedVersion, input QueryTokensInput) 
 			out.Error = cursorErr
 			return out
 		}
+		if !payload.matchesTokenQuery(input.Query, input.Token) {
+			out.Error = cursorQueryMismatch()
+			return out
+		}
 		if payload.Version != version {
 			out.Error = &ToolError{
 				Code: "cursor_version_mismatch",
@@ -279,24 +344,13 @@ func (s *Service) queryTokens(resolved ResolvedVersion, input QueryTokensInput) 
 	}
 	pageOffset = offset
 
-	effectiveTheme := theme
-	if theme == "auto" {
-		effectiveTheme = "light"
-		out.Resolved.Warnings = append(out.Resolved.Warnings,
-			"theme auto used the light theme; resolve dark values on the client")
-	}
-	if theme != "" && len(themes["light"]) == 0 && len(themes["dark"]) == 0 {
-		out.Resolved.Warnings = append(out.Resolved.Warnings,
-			fmt.Sprintf("tokens@%s has no light/dark theme map", version))
-	}
-
 	end := min(offset+pageSize, len(selected))
 	out.Tokens = make([]TokenResult, 0, end-offset)
 	for _, tok := range selected[offset:end] {
 		out.Tokens = append(out.Tokens, tokenResultFor(tok, themes, effectiveTheme, theme, format))
 	}
 	if end < len(selected) {
-		out.NextCursor = encodeCursor(version, end, false)
+		out.NextCursor = encodeTokenCursor(version, end, out.cursorFingerprint)
 	}
 	return out
 }
@@ -361,6 +415,10 @@ func tokenResultFor(
 	return result
 }
 
+// themeOnlyExtension marks a synthesized token that appears only in a
+// non-light theme map. Such a token has no light or unthemed base value.
+const themeOnlyExtension = "themeOnly"
+
 // tokenSource reports where the token's value comes from. Theme composites
 // that only exist in the generated default-theme.css are synthesized at load
 // time and must not be reported as JSON tokens.
@@ -373,6 +431,18 @@ func tokenSource(tok *token.Token) string {
 		return tokenSourceCSS
 	}
 	return tokenSourceJSON
+}
+
+// themeOnlyName returns the theme that defines a synthesized token when that
+// token exists in no other theme map. It returns "" for ordinary tokens and
+// for tokens with a light value, which do have a base value.
+func themeOnlyName(tok *token.Token) string {
+	extensions, ok := tok.Extensions["com.redhat.ux"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	name, _ := extensions[themeOnlyExtension].(string)
+	return name
 }
 
 func tokenChainValue(tok *token.Token) string {

@@ -153,6 +153,52 @@ func TestFenceRunLengthMustBeAtLeastThree(t *testing.T) {
 	}
 }
 
+// A closing fence may be longer than the opening run, but it must not carry
+// info text. Otherwise an opening line such as "```html" would close a block
+// opened with three backticks.
+func TestClosesFenceRequiresNoTrailingInfo(t *testing.T) {
+	cases := []struct {
+		name   string
+		line   string
+		marker string
+		want   bool
+	}{
+		{"same length", "```", "```", true},
+		{"longer", "````", "```", true},
+		{"shorter", "``", "```", false},
+		{"trailing info text", "```html", "```", false},
+		{"trailing info text on longer run", "````html", "````", false},
+		{"trailing spaces", "```   ", "```", true},
+		{"trailing tabs", "```\t\t", "```", true},
+		{"different character", "~~~", "```", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ClosesFence(tc.line, tc.marker); got != tc.want {
+				t.Errorf("ClosesFence(%q, %q) = %v, want %v", tc.line, tc.marker, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCodeBlocksIgnoreInfoTextOnClosingFence(t *testing.T) {
+	input := strings.Join([]string{
+		"```html",
+		"<rh-button>First</rh-button>",
+		"```html",
+		"<rh-button>Still inside</rh-button>",
+		"```",
+		"After.",
+	}, "\n")
+	blocks := CodeBlocks(input)
+	if len(blocks) != 1 {
+		t.Fatalf("blocks = %d, want 1: %+v", len(blocks), blocks)
+	}
+	if !strings.Contains(blocks[0].Content, "Still inside") {
+		t.Errorf("block content = %q, want the line after the info-text fence", blocks[0].Content)
+	}
+}
+
 func TestATXClosingSequenceStripsEveryHash(t *testing.T) {
 	chunks := Chunks([]byte("## foo ###\n\nbody\n"))
 	if len(chunks) != 1 || chunks[0].Heading != "foo" {

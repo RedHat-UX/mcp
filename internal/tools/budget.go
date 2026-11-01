@@ -839,10 +839,27 @@ func fitUsageExamples(out UsageExamplesOutput, budget int) UsageExamplesOutput {
 		return out
 	}
 
-	hadExamples := len(out.Examples) > 0
+	original := len(out.Examples)
+	// An explicit kind, or a request that produced a single example, is
+	// retrievable over budget. The budget is advisory for a deliberate request;
+	// dropping the only match would make the example unreachable.
+	keepLast := out.Kind != "" && out.Kind != exampleKindAll
 	out.Truncated = true
 	out.Resolved.Warnings = append(out.Resolved.Warnings,
 		fmt.Sprintf("the response budget of %d bytes was reached; use kind to request one example kind or detail=full", budget))
+	if keepLast || original == 1 {
+		dropped := 0
+		for estimatedResponseBytes(out) > budget && len(out.Examples) > 1 {
+			out.Examples = out.Examples[:len(out.Examples)-1]
+			dropped++
+		}
+		if len(out.Examples) == 1 && estimatedResponseBytes(out) > budget {
+			out.Truncated = dropped > 0
+			out.Resolved.Warnings = append(out.Resolved.Warnings,
+				fmt.Sprintf("the requested example exceeds the %d byte response budget and was returned in full", budget))
+			return out
+		}
+	}
 	for estimatedResponseBytes(out) > budget && len(out.Examples) > 0 {
 		out.Examples = out.Examples[:len(out.Examples)-1]
 	}
@@ -851,7 +868,7 @@ func fitUsageExamples(out UsageExamplesOutput, budget int) UsageExamplesOutput {
 		out.Examples = nil
 		return out
 	}
-	if hadExamples && len(out.Examples) == 0 {
+	if original > 0 && len(out.Examples) == 0 {
 		out.Error = &ToolError{
 			Code:    "response_too_large",
 			Message: fmt.Sprintf("no usage example fits the %d byte response budget", budget),
@@ -1043,7 +1060,7 @@ func fitQueryTokensPage(out QueryTokensOutput, budget, offset int) QueryTokensOu
 				out.Total, len(out.Tokens))
 			setWarnings(trimWarning)
 			if offset+len(out.Tokens) < out.Total {
-				out.NextCursor = encodeCursor(out.Resolved.Tokens, offset+len(out.Tokens), false)
+				out.NextCursor = encodeTokenCursor(out.Resolved.Tokens, offset+len(out.Tokens), out.cursorFingerprint)
 			} else {
 				out.NextCursor = ""
 			}

@@ -25,6 +25,7 @@ func RegisterPrompts(server *mcp.Server, svc *Service) {
 	}, func(_ context.Context, request *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 		tag := promptArgument(request, "tagName")
 		version := promptArgument(request, "version")
+		normalized := promptTag(tag)
 		text := fmt.Sprintf(`Write a Lit usage example for %s.
 
 1. Call rhds_get_component_api with tagName %q, using sections attributes, properties, events, slots, cssParts, and cssProperties.
@@ -34,7 +35,7 @@ func RegisterPrompts(server *mcp.Server, svc *Service) {
 5. Listen for the element's events with @event syntax.
 
 Do not invent attributes, slots, events, or CSS parts. Use only what the bundled manifest reports.`,
-			promptTag(tag), tag, tag)
+			normalized, normalized, normalized)
 		if version != "" {
 			text += fmt.Sprintf("\n\nUse @rhds/elements version %s.", version)
 		}
@@ -52,6 +53,7 @@ Do not invent attributes, slots, events, or CSS parts. Use only what the bundled
 	}, func(_ context.Context, request *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 		tag := promptArgument(request, "tagName")
 		version := promptArgument(request, "version")
+		normalized := promptTag(tag)
 		text := fmt.Sprintf(`Write a plain HTML usage example for %s.
 
 1. Call rhds_get_component_api with tagName %q to confirm attributes, slots, and events.
@@ -60,7 +62,7 @@ Do not invent attributes, slots, events, or CSS parts. Use only what the bundled
 4. Use only documented attributes and slot names.
 
 Do not invent a CDN URL or an import map entry. Ask for the workspace version with rhds_resolve_version when it matters.`,
-			promptTag(tag), tag, tag)
+			normalized, normalized, normalized)
 		if version != "" {
 			text += fmt.Sprintf("\n\nUse @rhds/elements version %s.", version)
 		}

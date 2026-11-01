@@ -246,16 +246,30 @@ func (s *Service) migrationGuide(input MigrationGuideInput) (out MigrationGuideO
 			})
 		}
 		out.TotalChanges = len(out.Changes)
-		out.Changes = limitSlice(out.Changes, limit)
+		var omittedChanges int
+		out.Changes, omittedChanges = limitSlice(out.Changes, limit)
+		if omittedChanges > 0 {
+			out.Truncated = true
+			out.Resolved.Warnings = append(out.Resolved.Warnings,
+				fmt.Sprintf("omitted %d of %d changes because of limit=%d",
+					omittedChanges, out.TotalChanges, limit))
+		}
 	}
 
 	if sections["releaseNotes"] {
 		examples := s.releaseExamples(fromVersion, toVersion, element, knownTags)
 		out.TotalReleaseNotes = len(examples)
-		out.ReleaseNotes = limitSlice(examples, limit)
+		var omittedNotes int
+		out.ReleaseNotes, omittedNotes = limitSlice(examples, limit)
+		if omittedNotes > 0 {
+			out.Truncated = true
+			out.Resolved.Warnings = append(out.Resolved.Warnings,
+				fmt.Sprintf("omitted %d of %d release notes because of limit=%d",
+					omittedNotes, out.TotalReleaseNotes, limit))
+		}
 		if limit == 0 {
-			out.ReleaseNotes = limitSlice(examples, maxMigrationReleaseExamples)
-			if len(examples) > maxMigrationReleaseExamples {
+			out.ReleaseNotes, omittedNotes = limitSlice(examples, maxMigrationReleaseExamples)
+			if omittedNotes > 0 {
 				out.Truncated = true
 				out.Resolved.Warnings = append(out.Resolved.Warnings,
 					fmt.Sprintf("release-note examples were capped at %d of %d; use sections or limit to narrow",
@@ -275,7 +289,14 @@ func (s *Service) migrationGuide(input MigrationGuideInput) (out MigrationGuideO
 		} else {
 			out.TokenChanges = changes
 			out.TotalTokenChanges = len(changes)
-			out.TokenChanges = limitSlice(out.TokenChanges, limit)
+			var omittedTokens int
+			out.TokenChanges, omittedTokens = limitSlice(out.TokenChanges, limit)
+			if omittedTokens > 0 {
+				out.Truncated = true
+				out.Resolved.Warnings = append(out.Resolved.Warnings,
+					fmt.Sprintf("omitted %d of %d token changes because of limit=%d",
+						omittedTokens, out.TotalTokenChanges, limit))
+			}
 		}
 	}
 
@@ -315,11 +336,13 @@ func normalizeMigrationSections(requested []string) (map[string]bool, []string, 
 	return selected, ordered, nil
 }
 
-func limitSlice[T any](items []T, limit int) []T {
+// limitSlice returns at most limit items and the number dropped. A limit of
+// zero leaves the slice unchanged.
+func limitSlice[T any](items []T, limit int) ([]T, int) {
 	if limit > 0 && len(items) > limit {
-		return items[:limit]
+		return items[:limit], len(items) - limit
 	}
-	return items
+	return items, 0
 }
 
 // normalizeMigrationVersion accepts bundled versions with or without a leading

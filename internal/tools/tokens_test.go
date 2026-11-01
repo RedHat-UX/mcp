@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -225,6 +226,76 @@ func TestAddThemeTokens(t *testing.T) {
 	}
 	if got[1].CSSVariableName() != "--rh-color-accent-base" {
 		t.Errorf("synthesized CSS variable = %q", got[1].CSSVariableName())
+	}
+}
+
+func TestQueryTokensOmitsDarkOnlyTokenOutsideDarkTheme(t *testing.T) {
+	svc := serviceWithThemes(t, []byte(`{
+		"light": {"--rh-color-brand": "#ff0000"},
+		"dark": {"--rh-color-dark-only": "#111111"}
+	}`))
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name  string
+		theme string
+	}{
+		{"unthemed", ""},
+		{"light", "light"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := svc.QueryTokens(ctx, QueryTokensInput{Query: "dark-only", Theme: tc.theme})
+			if out.Error != nil {
+				t.Fatalf("QueryTokens() error = %+v", out.Error)
+			}
+			if len(out.Tokens) != 0 || out.Total != 0 {
+				t.Errorf("tokens = %+v, total = %d, want the dark-only token omitted",
+					out.Tokens, out.Total)
+			}
+		})
+	}
+
+	dark := svc.QueryTokens(ctx, QueryTokensInput{Query: "dark-only", Theme: "dark"})
+	if dark.Error != nil {
+		t.Fatalf("dark QueryTokens() error = %+v", dark.Error)
+	}
+	if len(dark.Tokens) != 1 {
+		t.Fatalf("dark tokens = %+v, want one dark-only token", dark.Tokens)
+	}
+	if got, want := dark.Tokens[0].Name, "color-dark-only"; got != want {
+		t.Errorf("token name = %q, want %q", got, want)
+	}
+	if got, want := dark.Tokens[0].Value, "#111111"; got != want {
+		t.Errorf("dark token base value = %q, want %q", got, want)
+	}
+	if got, want := dark.Tokens[0].ThemeValue, "#111111"; got != want {
+		t.Errorf("dark token theme value = %q, want %q", got, want)
+	}
+}
+
+func TestQueryTokensExactDarkOnlyTokenRequiresDarkTheme(t *testing.T) {
+	svc := serviceWithThemes(t, []byte(`{
+		"light": {"--rh-color-brand": "#ff0000"},
+		"dark": {"--rh-color-dark-only": "#111111"}
+	}`))
+	ctx := context.Background()
+
+	for _, theme := range []string{"", "light"} {
+		out := svc.QueryTokens(ctx, QueryTokensInput{Token: "color-dark-only", Theme: theme})
+		if out.Error == nil || out.Error.Code != "token_not_found" {
+			t.Fatalf("theme %q error = %+v, want token_not_found", theme, out.Error)
+		}
+		if !strings.Contains(out.Error.Hint, "dark") {
+			t.Errorf("theme %q hint = %q, want the defining theme", theme, out.Error.Hint)
+		}
+	}
+
+	out := svc.QueryTokens(ctx, QueryTokensInput{Token: "color-dark-only", Theme: "dark"})
+	if out.Error != nil {
+		t.Fatalf("dark error = %+v", out.Error)
+	}
+	if len(out.Tokens) != 1 || out.Tokens[0].Value != "#111111" {
+		t.Errorf("dark token = %+v, want #111111", out.Tokens)
 	}
 }
 

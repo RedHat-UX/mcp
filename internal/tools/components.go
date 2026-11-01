@@ -58,19 +58,26 @@ type cursorPayload struct {
 	Version           string `json:"v"`
 	Offset            int    `json:"o"`
 	IncludeDeprecated bool   `json:"d,omitempty"`
+	// Fingerprint binds a cursor to the query and token filters that produced
+	// it, so an offset cannot be replayed against a different result set.
+	Fingerprint string `json:"f,omitempty"`
 }
 
-func encodeCursor(version string, offset int, includeDeprecated bool) string {
-	payload, err := json.Marshal(cursorPayload{
-		Version:           version,
-		Offset:            offset,
-		IncludeDeprecated: includeDeprecated,
-	})
+func encodeCursorPayload(payload cursorPayload) string {
+	encoded, err := json.Marshal(payload)
 	if err != nil {
 		// json.Marshal cannot fail for this struct.
 		return ""
 	}
-	return base64.RawURLEncoding.EncodeToString(payload)
+	return base64.RawURLEncoding.EncodeToString(encoded)
+}
+
+func encodeCursor(version string, offset int, includeDeprecated bool) string {
+	return encodeCursorPayload(cursorPayload{
+		Version:           version,
+		Offset:            offset,
+		IncludeDeprecated: includeDeprecated,
+	})
 }
 
 func invalidCursor(message string) *ToolError {

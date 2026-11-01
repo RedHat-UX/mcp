@@ -437,6 +437,65 @@ func TestMigrationGuideLimitCapsEachCategory(t *testing.T) {
 	}
 }
 
+func TestMigrationGuideLimitMarksTruncatedAndCountsOmitted(t *testing.T) {
+	out := fixtureService(t).GetMigrationGuide(context.Background(), MigrationGuideInput{
+		FromVersion: "1.0.0",
+		ToVersion:   "5.0.0",
+		Sections:    []string{"changes", "tokens"},
+		Detail:      "full",
+		Limit:       1,
+	})
+	if out.Error != nil {
+		t.Fatalf("GetMigrationGuide() error = %+v", out.Error)
+	}
+	if out.TotalChanges <= 1 {
+		t.Fatalf("totalChanges = %d, want more than the limit of 1", out.TotalChanges)
+	}
+	if out.TotalTokenChanges <= 1 {
+		t.Fatalf("totalTokenChanges = %d, want more than the limit of 1", out.TotalTokenChanges)
+	}
+	if len(out.Changes) != 1 || len(out.TokenChanges) != 1 {
+		t.Errorf("limited counts = %d changes, %d token changes, want 1 each",
+			len(out.Changes), len(out.TokenChanges))
+	}
+	if !out.Truncated {
+		t.Error("truncated = false, want true")
+	}
+	if !hasWarning(out.Resolved.Warnings, "omitted") {
+		t.Errorf("warnings = %v, want an omitted-count warning", out.Resolved.Warnings)
+	}
+	if !hasWarning(out.Resolved.Warnings, "changes") {
+		t.Errorf("warnings = %v, want the omitted changes count", out.Resolved.Warnings)
+	}
+	if !hasWarning(out.Resolved.Warnings, "token") {
+		t.Errorf("warnings = %v, want the omitted token changes count", out.Resolved.Warnings)
+	}
+}
+
+func TestMigrationGuideLimitOmittedCountsMatchTotals(t *testing.T) {
+	out := fixtureService(t).GetMigrationGuide(context.Background(), MigrationGuideInput{
+		FromVersion: "1.0.0",
+		ToVersion:   "5.0.0",
+		Sections:    []string{"changes", "tokens"},
+		Detail:      "full",
+		Limit:       2,
+	})
+	if out.Error != nil {
+		t.Fatalf("GetMigrationGuide() error = %+v", out.Error)
+	}
+	if got, want := len(out.Changes), min(2, out.TotalChanges); got != want {
+		t.Errorf("changes = %d, want %d", got, want)
+	}
+	if got, want := len(out.TokenChanges), min(2, out.TotalTokenChanges); got != want {
+		t.Errorf("token changes = %d, want %d", got, want)
+	}
+	if out.TotalChanges > len(out.Changes) || out.TotalTokenChanges > len(out.TokenChanges) {
+		if !out.Truncated {
+			t.Error("truncated = false, want true when the limit drops entries")
+		}
+	}
+}
+
 func TestFindTagNameRejectsCSSVariablesAndFiles(t *testing.T) {
 	known := map[string]bool{"rh-card": true, "rh-accordion": true}
 	cases := map[string]string{

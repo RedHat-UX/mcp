@@ -6,6 +6,7 @@ package tools
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -144,6 +145,33 @@ func TestLitAndHTMLPromptsIncludeTagName(t *testing.T) {
 		text := result.Messages[0].Content.(*mcp.TextContent).Text
 		if !containsFold(text, "rh-button") || !containsFold(text, "5.0.0") {
 			t.Errorf("%s prompt = %q", name, text)
+		}
+	}
+}
+
+func TestLitAndHTMLPromptsNormalizeShorthandTag(t *testing.T) {
+	client := connectToolClient(t, fixtureService(t))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	for _, name := range []string{"rhds-lit-usage", "rhds-html-usage"} {
+		result, err := client.GetPrompt(ctx, &mcp.GetPromptParams{
+			Name:      name,
+			Arguments: map[string]string{"tagName": "button"},
+		})
+		if err != nil {
+			t.Fatalf("GetPrompt(%s) error = %v", name, err)
+		}
+		if len(result.Messages) == 0 {
+			t.Fatalf("GetPrompt(%s) returned no messages", name)
+		}
+		text := result.Messages[0].Content.(*mcp.TextContent).Text
+		if got := strings.Count(text, `"rh-button"`); got < 2 {
+			t.Errorf("%s prompt interpolates the raw tag %d times, want the normalized rh-button twice:\n%s",
+				name, got, text)
+		}
+		if strings.Contains(text, `"button"`) {
+			t.Errorf("%s prompt interpolates the raw tag:\n%s", name, text)
 		}
 	}
 }

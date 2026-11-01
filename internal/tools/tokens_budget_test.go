@@ -117,10 +117,70 @@ func TestQueryTokensPaginatesWithCursor(t *testing.T) {
 
 func TestQueryTokensRejectsCursorFromAnotherVersion(t *testing.T) {
 	svc := fixtureService(t)
-	cursor := encodeCursor("1.0.0", 3, false)
+	cursor := encodeTokenCursor("1.0.0", 3, tokenCursorFingerprint("", ""))
 	out := svc.QueryTokens(context.Background(), QueryTokensInput{Cursor: cursor})
 	if out.Error == nil || out.Error.Code != "cursor_version_mismatch" {
 		t.Fatalf("error = %+v, want cursor_version_mismatch", out.Error)
+	}
+}
+
+func TestQueryTokensCursorIsBoundToQueryAndToken(t *testing.T) {
+	svc := fixtureService(t)
+	first := svc.QueryTokens(context.Background(), QueryTokensInput{
+		Query:    "color",
+		PageSize: 1,
+	})
+	if first.Error != nil {
+		t.Fatalf("first page error = %+v", first.Error)
+	}
+	if first.NextCursor == "" {
+		t.Fatal("first page has no nextCursor")
+	}
+
+	// The same query may continue the page.
+	same := svc.QueryTokens(context.Background(), QueryTokensInput{
+		Query:    "color",
+		PageSize: 1,
+		Cursor:   first.NextCursor,
+	})
+	if same.Error != nil {
+		t.Fatalf("same query error = %+v, want none", same.Error)
+	}
+
+	// A different query must not be able to reuse the offset.
+	other := svc.QueryTokens(context.Background(), QueryTokensInput{
+		Query:    "brand",
+		PageSize: 1,
+		Cursor:   first.NextCursor,
+	})
+	if other.Error == nil || other.Error.Code != "invalid_cursor" {
+		t.Fatalf("different query error = %+v, want invalid_cursor", other.Error)
+	}
+
+	// Switching to an exact token is also a different result set.
+	byToken := svc.QueryTokens(context.Background(), QueryTokensInput{
+		Token:  "color-brand",
+		Cursor: first.NextCursor,
+	})
+	if byToken.Error == nil || byToken.Error.Code != "invalid_cursor" {
+		t.Fatalf("different token error = %+v, want invalid_cursor", byToken.Error)
+	}
+
+	// A cursor bound to one token cannot page another token.
+	tokenCursor := encodeTokenCursor("3.2.0", 0, tokenCursorFingerprint("", "color-brand"))
+	matched := svc.QueryTokens(context.Background(), QueryTokensInput{
+		Token:  "color-brand",
+		Cursor: tokenCursor,
+	})
+	if matched.Error != nil {
+		t.Fatalf("matching token cursor error = %+v, want none", matched.Error)
+	}
+	unmatched := svc.QueryTokens(context.Background(), QueryTokensInput{
+		Token:  "color-interactive",
+		Cursor: tokenCursor,
+	})
+	if unmatched.Error == nil || unmatched.Error.Code != "invalid_cursor" {
+		t.Fatalf("unmatched token cursor error = %+v, want invalid_cursor", unmatched.Error)
 	}
 }
 
@@ -449,7 +509,7 @@ func TestFitQueryTokensPageCountsCursorBytes(t *testing.T) {
 			},
 			Total:      len(tokens),
 			Tokens:     append([]TokenResult(nil), tokens[:1]...),
-			NextCursor: encodeCursor("3.2.0", 1, false),
+			NextCursor: encodeTokenCursor("3.2.0", 1, ""),
 			Truncated:  true,
 		}
 		if estimatedResponseBytes(single) > budget {

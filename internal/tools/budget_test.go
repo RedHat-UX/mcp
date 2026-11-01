@@ -1052,8 +1052,9 @@ func TestUsageExamplesEchoedTagNameIsBounded(t *testing.T) {
 	}
 }
 
-// A usable pattern whose escaped wire form exceeds 8k must remain reachable
-// through detail=full rather than being reported as impossible.
+// A usable pattern whose escaped wire form exceeds 8k must remain reachable.
+// The budget is advisory for an explicitly requested kind, so summary returns
+// it in full with an over-budget warning and full detail still fits.
 func TestUsageExamplesPatternFitsFullDetail(t *testing.T) {
 	out := UsageExamplesOutput{
 		TagName:  "rh-accordion",
@@ -1062,8 +1063,14 @@ func TestUsageExamplesPatternFitsFullDetail(t *testing.T) {
 		Total:    1,
 	}
 	summary := fitUsageExamples(out, defaultResponseBudget)
-	if summary.Error == nil || summary.Error.Code != "response_too_large" {
-		t.Fatalf("summary = %+v, want response_too_large", summary.Error)
+	if summary.Error != nil {
+		t.Fatalf("summary error = %+v, want the requested example returned over budget", summary.Error)
+	}
+	if len(summary.Examples) != 1 {
+		t.Errorf("summary examples = %d, want 1", len(summary.Examples))
+	}
+	if !hasWarning(summary.Resolved.Warnings, "budget") {
+		t.Errorf("summary warnings = %v, want an over-budget warning", summary.Resolved.Warnings)
 	}
 	full := fitUsageExamples(out, hardResponseBudget)
 	if full.Error != nil {
@@ -1071,5 +1078,44 @@ func TestUsageExamplesPatternFitsFullDetail(t *testing.T) {
 	}
 	if len(full.Examples) != 1 {
 		t.Errorf("full detail examples = %d, want 1", len(full.Examples))
+	}
+}
+
+func TestUsageExamplesSingleLargeExampleIsReturnedOverBudget(t *testing.T) {
+	content := strings.Repeat("x", 40*1024)
+	for _, tc := range []struct {
+		name   string
+		kind   string
+		budget int
+	}{
+		{"summary explicit kind", "pattern", defaultResponseBudget},
+		{"full explicit kind", "pattern", hardResponseBudget},
+		{"summary single all", "all", defaultResponseBudget},
+		{"full single all", "all", hardResponseBudget},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := UsageExamplesOutput{
+				TagName:  "rh-card",
+				Kind:     tc.kind,
+				Examples: []UsageExample{{Kind: "pattern", Content: content}},
+				Total:    1,
+			}
+			fitted := fitUsageExamples(out, tc.budget)
+			if fitted.Error != nil {
+				t.Fatalf("error = %+v, want the example returned in full", fitted.Error)
+			}
+			if len(fitted.Examples) != 1 {
+				t.Fatalf("examples = %d, want 1", len(fitted.Examples))
+			}
+			if got := fitted.Examples[0].Content; got != content {
+				t.Errorf("content length = %d, want the full %d bytes", len(got), len(content))
+			}
+			if !hasWarning(fitted.Resolved.Warnings, "budget") {
+				t.Errorf("warnings = %v, want an explicit over-budget warning", fitted.Resolved.Warnings)
+			}
+			if fitted.Truncated {
+				t.Error("truncated = true, but nothing was dropped")
+			}
+		})
 	}
 }
