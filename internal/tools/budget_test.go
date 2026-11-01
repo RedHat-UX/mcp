@@ -750,6 +750,34 @@ func TestFitComponentAPIOmitsRequestedSectionOnlyWhenTruncationFails(t *testing.
 	}
 }
 
+func TestFitComponentAPIOmittedPropertiesEmitsLink(t *testing.T) {
+	out := ComponentAPIOutput{
+		Resolved: ResolvedVersion{Elements: "5.0.0"},
+		TagName:  "rh-huge",
+		Sections: []string{sectionProperties},
+		Properties: []cem.Property{{
+			Name:        "massive",
+			Description: strings.Repeat("x", 10_000),
+		}},
+	}
+
+	fitted := fitComponentAPI(out, 1024, true, map[string]bool{sectionProperties: true})
+	if len(fitted.Properties) != 0 {
+		t.Errorf("properties = %d, want the impossible section omitted", len(fitted.Properties))
+	}
+	if !hasSectionLink(fitted, sectionProperties) {
+		t.Errorf("section links = %v, want %s", fitted.sectionLinks, sectionProperties)
+	}
+	if !warnedForSection(fitted.Resolved.Warnings, sectionProperties) {
+		t.Errorf("warnings = %v, want one naming the omitted section", fitted.Resolved.Warnings)
+	}
+	for _, warning := range fitted.Resolved.Warnings {
+		if strings.Contains(warning, `sections=["properties"]`) {
+			t.Errorf("warning suggests a no-op retry: %q", warning)
+		}
+	}
+}
+
 func TestErrorResponsesStayWithinBudgetWithLongWarnings(t *testing.T) {
 	warnings := make([]string, 12)
 	for i := range warnings {

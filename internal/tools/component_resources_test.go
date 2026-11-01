@@ -36,15 +36,24 @@ func TestRegisterComponentResourcesListsEverySection(t *testing.T) {
 		}
 		templates = append(templates, template.URITemplate)
 	}
-	for _, section := range componentResourceSections {
+	wantSections := []string{
+		sectionAttributes,
+		sectionProperties,
+		sectionEvents,
+		sectionSlots,
+		sectionCSSParts,
+		sectionCSSProperties,
+		sectionExamples,
+	}
+	for _, section := range wantSections {
 		want := "rhds://elements/{version}/components/{tag}/" + section
 		if !slices.Contains(templates, want) {
 			t.Errorf("resource templates are missing %q: %v", want, templates)
 		}
 	}
-	if len(templates) != len(componentResourceSections) {
+	if len(templates) != len(wantSections) {
 		t.Errorf("resource templates = %v, want exactly %d entries",
-			templates, len(componentResourceSections))
+			templates, len(wantSections))
 	}
 }
 
@@ -58,6 +67,7 @@ func TestReadComponentSectionResource(t *testing.T) {
 		want    int
 	}{
 		{sectionAttributes, 3},
+		{sectionProperties, 2},
 		{sectionEvents, 1},
 		{sectionSlots, 2},
 		{sectionCSSParts, 1},
@@ -107,11 +117,15 @@ func TestComponentSectionResourceUnknownTag(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_, err := session.ReadResource(ctx, &mcp.ReadResourceParams{
-		URI: "rhds://elements/5.0.0/components/rh-missing/attributes",
-	})
-	if err == nil {
-		t.Fatal("ReadResource() error = nil, want an unknown-tag error")
+	for _, section := range []string{sectionAttributes, sectionProperties} {
+		t.Run(section, func(t *testing.T) {
+			_, err := session.ReadResource(ctx, &mcp.ReadResourceParams{
+				URI: "rhds://elements/5.0.0/components/rh-missing/" + section,
+			})
+			if err == nil {
+				t.Fatal("ReadResource() error = nil, want an unknown-tag error")
+			}
+		})
 	}
 }
 
@@ -121,7 +135,7 @@ func TestComponentSectionResourceUnknownSection(t *testing.T) {
 	defer cancel()
 
 	_, err := session.ReadResource(ctx, &mcp.ReadResourceParams{
-		URI: "rhds://elements/5.0.0/components/rh-button/properties",
+		URI: "rhds://elements/5.0.0/components/rh-button/shadowDom",
 	})
 	if err == nil {
 		t.Fatal("ReadResource() error = nil, want an unknown-section error")

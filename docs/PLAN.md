@@ -721,8 +721,8 @@ slot markup. Do not claim a Drupal library key.
   `readOnlyHint` annotations, human `title`
 - Resources: manifests, token files, docs pages, release notes, one per versioned
   artifact; per-component API sections at
-  `rhds://elements/{version}/components/{tag}/{section}` for `attributes`, `events`,
-  `slots`, `cssParts`, `cssProperties`, and `examples`
+  `rhds://elements/{version}/components/{tag}/{section}` for `attributes`,
+  `properties`, `events`, `slots`, `cssParts`, `cssProperties`, and `examples`
 - Prompts: Lit usage, HTML usage, Twig slot template
 - Server `instructions`: supported versions, offline behavior, resolution precedence,
   search versus exact lookup

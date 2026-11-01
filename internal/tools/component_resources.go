@@ -17,10 +17,11 @@ import (
 )
 
 // componentResourceSections are the sections served as per-component
-// resources. properties is not exposed as a resource: it remains available
-// through rhds_get_component_api.
+// resources. It mirrors the sections accepted by rhds_get_component_api, so a
+// section that the tool omits always has a resource to read instead.
 var componentResourceSections = []string{
 	sectionAttributes,
+	sectionProperties,
 	sectionEvents,
 	sectionSlots,
 	sectionCSSParts,
@@ -123,6 +124,8 @@ func componentSectionPayload(component *cem.Component, section string) (any, boo
 	switch section {
 	case sectionAttributes:
 		return nonNilSlice(component.Attributes), true
+	case sectionProperties:
+		return nonNilSlice(component.Properties), true
 	case sectionEvents:
 		return nonNilSlice(component.Events), true
 	case sectionSlots:
