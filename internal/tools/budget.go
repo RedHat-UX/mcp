@@ -726,7 +726,7 @@ func fitComponentAPI(out ComponentAPIOutput, budget int, summary bool) Component
 		notes = truncateRequestedSections(&out, requested, budget, notes, baseWarnings)
 	}
 	if len(notes) > 0 {
-		out.Resolved.Warnings = sanitizeWarnings(append(notes, baseWarnings...))
+		out.Resolved.Warnings = sanitizeWarningsWithReserved(baseWarnings, notes)
 	}
 	if estimatedResponseBytes(out) > budget {
 		hint := "call this tool again with an explicit subset of sections " +
@@ -791,10 +791,7 @@ func truncateRequestedSections(
 
 func responseBytesWithWarnings(out ComponentAPIOutput, notes, base []string) int {
 	original := out.Resolved.Warnings
-	combined := make([]string, 0, len(notes)+len(base))
-	combined = append(combined, notes...)
-	combined = append(combined, base...)
-	out.Resolved.Warnings = sanitizeWarnings(combined)
+	out.Resolved.Warnings = sanitizeWarningsWithReserved(base, notes)
 	size := estimatedResponseBytes(out)
 	out.Resolved.Warnings = original
 	return size
@@ -911,7 +908,7 @@ func componentAPIResponseBytes(out ComponentAPIOutput, pending []string) int {
 		return estimatedResponseBytes(out)
 	}
 	original := out.Resolved.Warnings
-	out.Resolved.Warnings = append(append([]string(nil), pending...), original...)
+	out.Resolved.Warnings = sanitizeWarningsWithReserved(original, pending)
 	size := estimatedResponseBytes(out)
 	out.Resolved.Warnings = original
 	return size
