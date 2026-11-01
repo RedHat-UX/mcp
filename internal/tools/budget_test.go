@@ -407,7 +407,7 @@ func TestFitComponentAPIKeepsOmissionWarnings(t *testing.T) {
 		Examples: examples,
 	}
 
-	fitted := fitComponentAPI(out, 4096, true)
+	fitted := fitComponentAPI(out, 4096, true, nil)
 	if slices.Contains(fitted.Sections, sectionExamples) {
 		t.Errorf("sections = %v, want examples omitted", fitted.Sections)
 	}
@@ -416,6 +416,9 @@ func TestFitComponentAPIKeepsOmissionWarnings(t *testing.T) {
 	}
 	if !warnedForSection(fitted.Resolved.Warnings, sectionExamples) {
 		t.Errorf("warnings = %v, want one naming %s", fitted.Resolved.Warnings, sectionExamples)
+	}
+	if !hasSectionLink(fitted, sectionExamples) {
+		t.Errorf("section links = %v, want one for %s", fitted.sectionLinks, sectionExamples)
 	}
 }
 
@@ -433,12 +436,26 @@ func TestFitComponentAPIRejectsOversizedResponse(t *testing.T) {
 			Description: strings.Repeat("description ", 100),
 		})
 	}
-	fitted := fitComponentAPI(out, hardResponseBudget, false)
+	// A large optional section is dropped and replaced by a resource link
+	// before the response is declared too large.
+	for i := 0; i < 100; i++ {
+		out.Examples = append(out.Examples, cem.Example{
+			Description: strings.Repeat("example ", 100),
+		})
+	}
+	fitted := fitComponentAPI(out, hardResponseBudget, true, nil)
 	if fitted.Error == nil || fitted.Error.Code != "response_too_large" {
 		t.Fatalf("error = %+v, want response_too_large", fitted.Error)
 	}
 	if fitted.Attributes != nil {
 		t.Error("partial attributes returned alongside the error")
+	}
+	uri := componentSectionURI("5.0.0", "rh-huge", sectionExamples)
+	if uri == "" {
+		t.Fatal("componentSectionURI() = \"\", want the examples resource")
+	}
+	if !strings.Contains(fitted.Error.Hint, uri) {
+		t.Errorf("hint = %q, want the omitted section URI %q", fitted.Error.Hint, uri)
 	}
 }
 
@@ -480,6 +497,15 @@ func wireResponseBytesForID(value any, id any) int {
 func hasWarning(warnings []string, needle string) bool {
 	for _, warning := range warnings {
 		if strings.Contains(warning, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSectionLink(out ComponentAPIOutput, section string) bool {
+	for _, link := range out.sectionLinks {
+		if link.section == section && link.uri != "" {
 			return true
 		}
 	}
@@ -638,19 +664,18 @@ func TestFitComponentAPIKeepsExplicitlyRequestedSection(t *testing.T) {
 		examples[i] = cem.Example{Description: strings.Repeat("x", 40)}
 	}
 	out := ComponentAPIOutput{
-		Resolved:          ResolvedVersion{Elements: "5.0.0"},
-		TagName:           "rh-huge",
-		Sections:          []string{sectionExamples},
-		Examples:          examples,
-		requestedSections: map[string]bool{sectionExamples: true},
+		Resolved: ResolvedVersion{Elements: "5.0.0"},
+		TagName:  "rh-huge",
+		Sections: []string{sectionExamples},
+		Examples: examples,
 	}
 
-	fitted := fitComponentAPI(out, 4096, true)
+	fitted := fitComponentAPI(out, 4096, true, map[string]bool{sectionExamples: true})
 	if fitted.Error != nil {
 		t.Fatalf("fitComponentAPI() error = %+v", fitted.Error)
 	}
 	if len(fitted.Examples) == 0 {
-		t.Fatalf("examples were dropped although explicitly requested; omitted = %v", fitted.Omitted)
+		t.Fatalf("examples were dropped although explicitly requested; links = %v", fitted.sectionLinks)
 	}
 	if !fitted.Truncated {
 		t.Error("Truncated = false, want true for a shortened requested section")
@@ -668,7 +693,7 @@ func TestFitComponentAPIKeepsExplicitlyRequestedSection(t *testing.T) {
 	}
 }
 
-func TestFitComponentAPIOmitsUnrequestedSectionWithRetry(t *testing.T) {
+func TestFitComponentAPIOmitsUnrequestedSectionWithLink(t *testing.T) {
 	examples := make([]cem.Example, 200)
 	for i := range examples {
 		examples[i] = cem.Example{Description: strings.Repeat("x", 40)}
@@ -681,15 +706,20 @@ func TestFitComponentAPIOmitsUnrequestedSectionWithRetry(t *testing.T) {
 		Examples:   examples,
 	}
 
-	fitted := fitComponentAPI(out, 4096, true)
+	fitted := fitComponentAPI(out, 4096, true, nil)
 	if len(fitted.Examples) != 0 {
 		t.Errorf("examples = %d, want the unrequested section omitted", len(fitted.Examples))
 	}
-	if !slices.Contains(fitted.Omitted, sectionExamples) {
-		t.Errorf("omitted = %v, want %s", fitted.Omitted, sectionExamples)
+	if !hasSectionLink(fitted, sectionExamples) {
+		t.Errorf("section links = %v, want %s", fitted.sectionLinks, sectionExamples)
 	}
-	if !hasWarning(fitted.Resolved.Warnings, `sections=["examples"]`) {
-		t.Errorf("warnings = %v, want a retry suggestion for the omitted section", fitted.Resolved.Warnings)
+	if !warnedForSection(fitted.Resolved.Warnings, sectionExamples) {
+		t.Errorf("warnings = %v, want one naming the omitted section", fitted.Resolved.Warnings)
+	}
+	for _, warning := range fitted.Resolved.Warnings {
+		if strings.Contains(warning, `sections=["examples"]`) {
+			t.Errorf("warning suggests a no-op retry: %q", warning)
+		}
 	}
 }
 
@@ -701,17 +731,16 @@ func TestFitComponentAPIOmitsRequestedSectionOnlyWhenTruncationFails(t *testing.
 		Examples: []cem.Example{{
 			Description: strings.Repeat("x", 10_000),
 		}},
-		requestedSections: map[string]bool{sectionExamples: true},
 	}
 
-	fitted := fitComponentAPI(out, 1024, true)
+	fitted := fitComponentAPI(out, 1024, true, map[string]bool{sectionExamples: true})
 	if len(fitted.Examples) != 0 {
 		t.Errorf("examples = %d, want the impossible section omitted", len(fitted.Examples))
 	}
-	if !slices.Contains(fitted.Omitted, sectionExamples) {
-		t.Errorf("omitted = %v, want %s", fitted.Omitted, sectionExamples)
+	if !hasSectionLink(fitted, sectionExamples) {
+		t.Errorf("section links = %v, want %s", fitted.sectionLinks, sectionExamples)
 	}
-	if !hasWarning(fitted.Resolved.Warnings, "examples") {
+	if !warnedForSection(fitted.Resolved.Warnings, sectionExamples) {
 		t.Errorf("warnings = %v, want one naming the omitted section", fitted.Resolved.Warnings)
 	}
 	for _, warning := range fitted.Resolved.Warnings {
@@ -755,7 +784,7 @@ func TestErrorResponsesStayWithinBudgetWithLongWarnings(t *testing.T) {
 	}
 
 	api := ComponentAPIOutput{Resolved: resolved, Error: failure}
-	api = fitComponentAPI(api, budget, true)
+	api = fitComponentAPI(api, budget, true, nil)
 	if size := estimatedResponseBytes(api); size > budget {
 		t.Errorf("component API error response = %d bytes, want <= %d", size, budget)
 	}

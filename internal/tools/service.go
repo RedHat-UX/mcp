@@ -699,10 +699,15 @@ func Register(server *mcp.Server, svc *Service) {
 		if required != nil {
 			return required, ComponentAPIOutput{}, nil
 		}
+		result := componentAPIResult(out)
 		if out.Error != nil {
-			return &mcp.CallToolResult{IsError: true}, out, nil
+			if result == nil {
+				result = &mcp.CallToolResult{}
+			}
+			result.IsError = true
+			return result, out, nil
 		}
-		return nil, out, nil
+		return result, out, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{

@@ -63,6 +63,11 @@ func newServer(logger *slog.Logger, service *tools.Service) *mcp.Server {
 		},
 	)
 	tools.Register(server, service)
+	if err := tools.MountUpstreams(server, tools.MountOptions{}); err != nil {
+		// A skipped upstream surface is advisory: the RHDS tools still serve.
+		logger.Warn("upstream surface not mounted", "error", err)
+	}
+	tools.RegisterComponentResources(server, service)
 	return server
 }
 

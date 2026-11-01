@@ -525,6 +525,10 @@ func TestPhaseBToolsAreRegistered(t *testing.T) {
 	var names []string
 	for _, tool := range result.Tools {
 		names = append(names, tool.Name)
+		if !strings.HasPrefix(tool.Name, "rhds_") {
+			// Upstream tools define their own annotations.
+			continue
+		}
 		if tool.OutputSchema == nil {
 			t.Errorf("tool %q has no output schema", tool.Name)
 		}
@@ -544,6 +548,40 @@ func TestPhaseBToolsAreRegistered(t *testing.T) {
 		if !slices.Contains(names, name) {
 			t.Errorf("tools/list is missing %q: %v", name, names)
 		}
+	}
+}
+
+func TestServerMountsUpstreamAndComponentResources(t *testing.T) {
+	clientSession := connectTestClient(t,
+		newServer(slog.New(slog.DiscardHandler), tools.New(nil, data.ErrNoData)))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	toolsResult, err := clientSession.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	var names []string
+	for _, tool := range toolsResult.Tools {
+		names = append(names, tool.Name)
+	}
+	for _, name := range []string{"validate_tokens", "search_tokens", "convert_tokens"} {
+		if !slices.Contains(names, name) {
+			t.Errorf("tools/list is missing the asimonim tool %q: %v", name, names)
+		}
+	}
+
+	templates, err := clientSession.ListResourceTemplates(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListResourceTemplates() error = %v", err)
+	}
+	var uris []string
+	for _, template := range templates.ResourceTemplates {
+		uris = append(uris, template.URITemplate)
+	}
+	if !slices.Contains(uris, "rhds://elements/{version}/components/{tag}/attributes") {
+		t.Errorf("resource templates are missing the rhds component section template: %v", uris)
 	}
 }
 
