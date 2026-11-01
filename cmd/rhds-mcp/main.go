@@ -76,8 +76,15 @@ func newServer(logger *slog.Logger, service *tools.Service) *mcp.Server {
 		},
 	)
 	tools.Register(server, service)
+	// Mount upstream surfaces first so the RHDS host registrations below win
+	// any name or URI collision under the SDK's default conflict policy.
+	if err := tools.MountUpstreams(server, tools.MountOptions{}); err != nil {
+		// A skipped upstream surface is advisory: the RHDS tools still serve.
+		logger.Warn("upstream surface not mounted", "error", err)
+	}
 	tools.RegisterPrompts(server, service)
 	tools.RegisterResources(server, service)
+	tools.RegisterComponentResources(server, service)
 	return server
 }
 

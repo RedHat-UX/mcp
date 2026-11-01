@@ -5,7 +5,9 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -53,7 +55,6 @@ type ComponentAPIOutput struct {
 	PackageSubpath string            `json:"packageSubpath,omitempty"`
 	Deprecated     *cem.Deprecation  `json:"deprecated,omitempty"`
 	Sections       []string          `json:"sections"`
-	Omitted        []string          `json:"omitted,omitempty"`
 	Attributes     []cem.Attribute   `json:"attributes,omitempty"`
 	Properties     []cem.Property    `json:"properties,omitempty"`
 	Events         []cem.Event       `json:"events,omitempty"`
@@ -64,17 +65,57 @@ type ComponentAPIOutput struct {
 	Truncated      bool              `json:"truncated,omitempty"`
 	Error          *ToolError        `json:"error,omitempty"`
 
-	// requestedSections is the explicit sections filter, or nil for the
-	// default all-sections request. The budget layer uses it to avoid
-	// silently dropping a section the caller asked for.
-	requestedSections map[string]bool
+	// sectionLinks names sections dropped from structuredContent. The MCP
+	// handler turns them into resource_link content items; json ignores them.
+	sectionLinks []sectionLink
+}
+
+// sectionLink ties an omitted component API section to its resource URI.
+type sectionLink struct {
+	section string
+	uri     string
+}
+
+// componentSectionURI returns the resource URI for one section, or "" when the
+// section has no resource template.
+func componentSectionURI(version, tagName, section string) string {
+	if tagName == "" || !slices.Contains(componentResourceSections, section) {
+		return ""
+	}
+	return fmt.Sprintf("rhds://elements/%s/components/%s/%s", version, tagName, section)
+}
+
+// componentAPIResult builds the MCP content for omitted sections. It returns
+// nil when nothing was omitted, leaving the SDK's text fallback in place. When
+// sections were omitted, it keeps the serialized JSON text fallback before the
+// resource links.
+func componentAPIResult(out ComponentAPIOutput) *mcp.CallToolResult {
+	if len(out.sectionLinks) == 0 {
+		return nil
+	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		return nil
+	}
+	content := make([]mcp.Content, 0, len(out.sectionLinks)+1)
+	content = append(content, &mcp.TextContent{Text: string(encoded)})
+	for _, link := range out.sectionLinks {
+		content = append(content, &mcp.ResourceLink{
+			URI:         link.uri,
+			Name:        out.TagName + "-" + link.section,
+			Title:       fmt.Sprintf("%s %s", out.TagName, link.section),
+			Description: fmt.Sprintf("The %s section for %s at elements@%s.", link.section, out.TagName, out.Resolved.Elements),
+			MIMEType:    "application/json",
+		})
+	}
+	return &mcp.CallToolResult{Content: content}
 }
 
 // GetComponentAPI implements rhds_get_component_api for direct service calls.
 func (s *Service) GetComponentAPI(ctx context.Context, input GetComponentAPIInput) ComponentAPIOutput {
 	resolved, failure := s.bundledResolution(input.Version, "")
 	if failure != nil {
-		return fitComponentAPI(ComponentAPIOutput{Error: failure}, defaultResponseBudget, true)
+		return fitComponentAPI(ComponentAPIOutput{Error: failure}, defaultResponseBudget, true, nil)
 	}
 	return s.componentAPI(resolved, input)
 }
@@ -90,7 +131,7 @@ func (s *Service) getComponentAPIWithEnv(
 		return required, ComponentAPIOutput{}
 	}
 	if failure != nil {
-		out := fitComponentAPI(ComponentAPIOutput{Error: failure}, defaultResponseBudget, true)
+		out := fitComponentAPI(ComponentAPIOutput{Error: failure}, defaultResponseBudget, true, nil)
 		return nil, out
 	}
 	return nil, s.componentAPI(resolved, input)
@@ -104,7 +145,8 @@ func (s *Service) componentAPI(resolved resolution, input GetComponentAPIInput) 
 	if s.maxResponseBytes > 0 && s.maxResponseBytes < budget {
 		budget = s.maxResponseBytes
 	}
-	defer func() { out = fitComponentAPI(out, budget, input.Detail != "full") }()
+	var requested map[string]bool
+	defer func() { out = fitComponentAPI(out, budget, input.Detail != "full", requested) }()
 	out = ComponentAPIOutput{Resolved: resolved.Resolved}
 	tagName := strings.ToLower(strings.TrimSpace(input.TagName))
 	if tagName == "" {
@@ -127,9 +169,10 @@ func (s *Service) componentAPI(resolved resolution, input GetComponentAPIInput) 
 		return out
 	}
 	if len(input.Sections) > 0 {
-		// Remember the explicit filter so budget fitting never drops one of
-		// these sections without naming it and offering a real follow-up.
-		out.requestedSections = sections
+		// Explicitly requested sections are protected from the optional
+		// section pass; they are shortened first and only dropped with a
+		// resource link when even one entry cannot fit.
+		requested = sections
 	}
 
 	model, failure := s.loadModel(resolved.Resolved.Elements)

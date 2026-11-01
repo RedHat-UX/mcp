@@ -6,7 +6,6 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -677,7 +676,7 @@ func fitResolveVersion(out *ResolveVersionOutput, budget int) {
 	}
 }
 
-func fitComponentAPI(out ComponentAPIOutput, budget int, summary bool) ComponentAPIOutput {
+func fitComponentAPI(out ComponentAPIOutput, budget int, summary bool, requested map[string]bool) ComponentAPIOutput {
 	out.Resolved.Warnings = sanitizeWarnings(out.Resolved.Warnings)
 	if out.Error != nil {
 		out.Error = boundError(out.Error)
@@ -700,10 +699,10 @@ func fitComponentAPI(out ComponentAPIOutput, budget int, summary bool) Component
 	// warning cap must never discard them. Collect them separately and prepend
 	// them at the final sanitize pass, which keeps them ahead of lower-priority
 	// resolution warnings.
-	requested := out.requestedSections
-	out.requestedSections = nil
 	baseWarnings := out.Resolved.Warnings
 	notes := make([]string, 0, 3)
+	// Full detail never drops a populated section: the caller asked for the
+	// complete document, so a response that cannot fit is an error instead.
 	if summary {
 		for _, optional := range []struct {
 			name   string
@@ -715,7 +714,8 @@ func fitComponentAPI(out ComponentAPIOutput, budget int, summary bool) Component
 			{name: sectionCSSParts, active: len(out.CSSParts) > 0, drop: func() { out.CSSParts = nil }},
 		} {
 			// A section the caller explicitly selected is never dropped here;
-			// the truncation pass below keeps it with an explicit marker.
+			// the truncation pass below keeps it, or drops it with a resource
+			// link.
 			if !optional.active || requested[optional.name] {
 				continue
 			}
@@ -724,10 +724,8 @@ func fitComponentAPI(out ComponentAPIOutput, budget int, summary bool) Component
 			}
 			optional.drop()
 			out.Sections = withoutSection(out.Sections, optional.name)
-			out.Omitted = appendSectionOnce(out.Omitted, optional.name)
-			notes = append(notes, fmt.Sprintf(
-				"%s omitted to fit the response budget; call again with sections=[\"%s\"]",
-				optional.name, optional.name))
+			appendSectionLink(&out, optional.name)
+			notes = append(notes, omittedSectionWarning(&out, optional.name))
 		}
 		notes = truncateRequestedSections(&out, requested, budget, notes, baseWarnings)
 	}
@@ -735,17 +733,15 @@ func fitComponentAPI(out ComponentAPIOutput, budget int, summary bool) Component
 		out.Resolved.Warnings = sanitizeWarningsWithReserved(baseWarnings, notes)
 	}
 	if estimatedResponseBytes(out) > budget {
-		hint := "call this tool again with an explicit subset of sections " +
-			"(for example sections=[\"attributes\"]) and detail=summary; " +
-			"there is no silent truncation"
-		if len(requested) > 0 {
-			hint = "the requested sections do not fit in the response budget; " +
-				"request fewer sections or reduce the detail level"
+		hint := "narrow the request (sections, detail) and call again; there is no silent truncation"
+		if uris := sectionLinkURIs(out.sectionLinks); len(uris) > 0 {
+			hint = "the response is over budget even after optional sections were omitted; " +
+				"read the omitted sections as resources: " + strings.Join(uris, ", ")
 		}
 		return ComponentAPIOutput{
-			Resolved: out.Resolved,
-			TagName:  out.TagName,
-			Omitted:  out.Omitted,
+			Resolved:     out.Resolved,
+			TagName:      out.TagName,
+			sectionLinks: out.sectionLinks,
 			Error: &ToolError{
 				Code: "response_too_large",
 				Message: fmt.Sprintf(
@@ -760,8 +756,8 @@ func fitComponentAPI(out ComponentAPIOutput, budget int, summary bool) Component
 }
 
 // truncateRequestedSections keeps explicitly requested sections in the payload
-// by shortening them first. Only a section that cannot fit even as one entry is
-// omitted, and the omission note never suggests retrying with the same filter.
+// by shortening them first. A section that cannot fit even as one entry is
+// omitted from structuredContent and replaced by a resource link.
 func truncateRequestedSections(
 	out *ComponentAPIOutput,
 	requested map[string]bool,
@@ -779,10 +775,9 @@ func truncateRequestedSections(
 		if count <= 1 {
 			dropSection(out, name)
 			out.Sections = withoutSection(out.Sections, name)
-			out.Omitted = appendSectionOnce(out.Omitted, name)
+			appendSectionLink(out, name)
 			out.Truncated = true
-			notes = setSectionNote(notes, name, fmt.Sprintf(
-				"%s could not fit in the response budget even after truncation and was omitted", name))
+			notes = setSectionNote(notes, name, omittedSectionWarning(out, name))
 			continue
 		}
 		keep := max(1, count/2)
@@ -793,6 +788,47 @@ func truncateRequestedSections(
 			name, count, keep))
 	}
 	return notes
+}
+
+// appendSectionLink records the resource that carries an omitted section. It
+// is a no-op for sections without a resource template.
+func appendSectionLink(out *ComponentAPIOutput, section string) {
+	uri := componentSectionURI(out.Resolved.Elements, out.TagName, section)
+	if uri == "" {
+		return
+	}
+	for _, link := range out.sectionLinks {
+		if link.section == section {
+			return
+		}
+	}
+	out.sectionLinks = append(out.sectionLinks, sectionLink{section: section, uri: uri})
+}
+
+// omittedSectionWarning names the omitted section and points at its resource,
+// without suggesting a retry that would use the same filter.
+func omittedSectionWarning(out *ComponentAPIOutput, section string) string {
+	uri := componentSectionURI(out.Resolved.Elements, out.TagName, section)
+	if uri == "" {
+		return fmt.Sprintf("%s could not fit in the response budget and was omitted", section)
+	}
+	return fmt.Sprintf("%s omitted to fit the response budget; read it from %s", section, uri)
+}
+
+// sectionLinkURIs returns the omitted section URIs in the canonical section
+// order, so an error hint is deterministic.
+func sectionLinkURIs(links []sectionLink) []string {
+	bySection := make(map[string]string, len(links))
+	for _, link := range links {
+		bySection[link.section] = link.uri
+	}
+	uris := make([]string, 0, len(links))
+	for _, section := range componentAPISections {
+		if uri, ok := bySection[section]; ok {
+			uris = append(uris, uri)
+		}
+	}
+	return uris
 }
 
 func responseBytesWithWarnings(out ComponentAPIOutput, notes, base []string) int {
@@ -875,13 +911,6 @@ func dropSection(out *ComponentAPIOutput, section string) {
 	case sectionExamples:
 		out.Examples = nil
 	}
-}
-
-func appendSectionOnce(sections []string, section string) []string {
-	if slices.Contains(sections, section) {
-		return sections
-	}
-	return append(sections, section)
 }
 
 func setSectionNote(notes []string, section, message string) []string {

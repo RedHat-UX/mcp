@@ -5,10 +5,14 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/redhat-ux/mcp/internal/cem"
 	"github.com/redhat-ux/mcp/internal/data"
@@ -319,12 +323,105 @@ func TestDirectToolFailuresAreBounded(t *testing.T) {
 	}
 }
 
+// TestComponentAPIResourceLinksReachToolContent drives rhds_get_component_api
+// over an in-memory MCP session. The response must omit the oversized optional
+// section, keep the JSON text fallback, and add a resource_link pointing at the
+// section resource.
+func TestComponentAPIResourceLinksReachToolContent(t *testing.T) {
+	demos := make([]map[string]any, 80)
+	for i := range demos {
+		demos[i] = map[string]any{
+			"name":        "demo",
+			"description": strings.Repeat("example prose ", 20),
+			"url":         "https://example.test/demo/",
+		}
+	}
+	manifestJSON, err := json.Marshal(map[string]any{
+		"schemaVersion": "2.1.0",
+		"modules": []any{map[string]any{
+			"kind": "javascript-module",
+			"path": "./rh-big.js",
+			"declarations": []any{map[string]any{
+				"kind":          "class",
+				"customElement": true,
+				"name":          "RhBig",
+				"tagName":       "rh-big",
+				"summary":       "A large fixture element.",
+				"attributes": []any{map[string]any{
+					"name": "variant",
+					"type": map[string]any{"text": "string"},
+				}},
+				"demos": demos,
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshaling manifest: %v", err)
+	}
+
+	service := memoryService(t, manifestJSON, "5.0.0")
+	service.maxResponseBytes = 4096
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.0.0"}, nil)
+	Register(server, service)
+	session := connectServer(t, server)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "rhds_get_component_api",
+		Arguments: map[string]any{"tagName": "rh-big"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool() error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("CallTool() IsError = true: %s", contentText(result))
+	}
+
+	encoded, err := json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshaling structured content: %v", err)
+	}
+	var out ComponentAPIOutput
+	if err := json.Unmarshal(encoded, &out); err != nil {
+		t.Fatalf("decoding structured content: %v", err)
+	}
+	if len(out.Examples) != 0 {
+		t.Errorf("examples = %d, want the oversized optional section omitted", len(out.Examples))
+	}
+	if !warnedForSection(out.Resolved.Warnings, sectionExamples) {
+		t.Errorf("warnings = %v, want one naming examples", out.Resolved.Warnings)
+	}
+
+	wantURI := "rhds://elements/5.0.0/components/rh-big/examples"
+	var found bool
+	var haveText bool
+	for _, content := range result.Content {
+		switch typed := content.(type) {
+		case *mcp.TextContent:
+			haveText = typed.Text != ""
+		case *mcp.ResourceLink:
+			if typed.URI == wantURI {
+				found = true
+				if typed.MIMEType != "application/json" {
+					t.Errorf("resource link MIMEType = %q", typed.MIMEType)
+				}
+			}
+		}
+	}
+	if !haveText {
+		t.Error("tool content has no JSON text fallback")
+	}
+	if !found {
+		t.Errorf("tool content = %+v, want a resource_link for %s", result.Content, wantURI)
+	}
+}
+
 func TestGetComponentAPIAsksForFollowUpInsteadOfTruncating(t *testing.T) {
 	service := fixtureService(t)
 	service.maxResponseBytes = 512
 	out := service.GetComponentAPI(context.Background(), GetComponentAPIInput{
 		TagName: "rh-button",
-		Detail:  "full",
 	})
 	if out.Error == nil {
 		t.Fatal("error = nil, want response_too_large")
@@ -332,10 +429,53 @@ func TestGetComponentAPIAsksForFollowUpInsteadOfTruncating(t *testing.T) {
 	if out.Error.Code != "response_too_large" {
 		t.Errorf("error code = %q", out.Error.Code)
 	}
-	if !strings.Contains(out.Error.Hint, "detail=summary") {
-		t.Errorf("hint = %q, want follow-up guidance", out.Error.Hint)
+	// Optional sections are dropped first; their resource URIs must appear in
+	// the error hint so the caller can read them directly.
+	for _, section := range []string{sectionExamples, sectionCSSProperties, sectionCSSParts} {
+		uri := componentSectionURI(out.Resolved.Elements, out.TagName, section)
+		if uri != "" && !strings.Contains(out.Error.Hint, uri) {
+			t.Errorf("hint = %q, want the omitted section URI %q", out.Error.Hint, uri)
+		}
 	}
 	if out.Attributes != nil {
 		t.Errorf("partial data returned alongside the error: %+v", out.Attributes)
+	}
+}
+
+// TestComponentAPIResultLinksOmittedSections proves the MCP handler turns
+// omitted sections into resource_link content items pointing at the matching
+// section resource.
+func TestComponentAPIResultLinksOmittedSections(t *testing.T) {
+	out := ComponentAPIOutput{
+		Resolved: ResolvedVersion{Elements: "5.0.0"},
+		TagName:  "rh-huge",
+		Sections: []string{sectionAttributes},
+		sectionLinks: []sectionLink{{
+			section: sectionExamples,
+			uri:     "rhds://elements/5.0.0/components/rh-huge/examples",
+		}},
+	}
+	result := componentAPIResult(out)
+	if result == nil || len(result.Content) == 0 {
+		t.Fatalf("componentAPIResult() = %+v, want resource_link content", result)
+	}
+	if _, ok := result.Content[0].(*mcp.TextContent); !ok {
+		t.Errorf("content[0] = %T, want the JSON text fallback", result.Content[0])
+	}
+	var link *mcp.ResourceLink
+	for _, content := range result.Content {
+		if candidate, ok := content.(*mcp.ResourceLink); ok {
+			link = candidate
+			break
+		}
+	}
+	if link == nil {
+		t.Fatalf("content = %+v, want a *mcp.ResourceLink", result.Content)
+	}
+	if link.URI != "rhds://elements/5.0.0/components/rh-huge/examples" {
+		t.Errorf("link URI = %q", link.URI)
+	}
+	if link.MIMEType != "application/json" {
+		t.Errorf("link MIMEType = %q", link.MIMEType)
 	}
 }
