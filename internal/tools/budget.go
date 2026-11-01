@@ -6,6 +6,7 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -693,7 +694,10 @@ func fitComponentAPI(out ComponentAPIOutput, budget int, summary bool) Component
 	// warning cap must never discard them. Collect them separately and prepend
 	// them at the final sanitize pass, which keeps them ahead of lower-priority
 	// resolution warnings.
-	omissionWarnings := make([]string, 0, 3)
+	requested := out.requestedSections
+	out.requestedSections = nil
+	baseWarnings := out.Resolved.Warnings
+	notes := make([]string, 0, 3)
 	if summary {
 		for _, optional := range []struct {
 			name   string
@@ -704,37 +708,188 @@ func fitComponentAPI(out ComponentAPIOutput, budget int, summary bool) Component
 			{name: sectionCSSProperties, active: len(out.CSSProperties) > 0, drop: func() { out.CSSProperties = nil }},
 			{name: sectionCSSParts, active: len(out.CSSParts) > 0, drop: func() { out.CSSParts = nil }},
 		} {
-			if componentAPIResponseBytes(out, omissionWarnings) <= budget || !optional.active {
+			// A section the caller explicitly selected is never dropped here;
+			// the truncation pass below keeps it with an explicit marker.
+			if !optional.active || requested[optional.name] {
+				continue
+			}
+			if componentAPIResponseBytes(out, notes) <= budget {
 				continue
 			}
 			optional.drop()
 			out.Sections = withoutSection(out.Sections, optional.name)
-			omissionWarnings = append(omissionWarnings, fmt.Sprintf(
+			out.Omitted = appendSectionOnce(out.Omitted, optional.name)
+			notes = append(notes, fmt.Sprintf(
 				"%s omitted to fit the response budget; call again with sections=[\"%s\"]",
 				optional.name, optional.name))
 		}
+		notes = truncateRequestedSections(&out, requested, budget, notes, baseWarnings)
 	}
-	if len(omissionWarnings) > 0 {
-		out.Resolved.Warnings = sanitizeWarnings(
-			append(omissionWarnings, out.Resolved.Warnings...))
+	if len(notes) > 0 {
+		out.Resolved.Warnings = sanitizeWarnings(append(notes, baseWarnings...))
 	}
 	if estimatedResponseBytes(out) > budget {
+		hint := "call this tool again with an explicit subset of sections " +
+			"(for example sections=[\"attributes\"]) and detail=summary; " +
+			"there is no silent truncation"
+		if len(requested) > 0 {
+			hint = "the requested sections do not fit in the response budget; " +
+				"request fewer sections or reduce the detail level"
+		}
 		return ComponentAPIOutput{
 			Resolved: out.Resolved,
 			TagName:  out.TagName,
+			Omitted:  out.Omitted,
 			Error: &ToolError{
 				Code: "response_too_large",
 				Message: fmt.Sprintf(
 					"the component API response for %s is over the %d byte cap",
 					out.TagName, budget),
-				Hint: "call this tool again with an explicit subset of sections " +
-					"(for example sections=[\"attributes\"]) and detail=summary; " +
-					"there is no silent truncation",
+				Hint: hint,
 			},
 			Sections: []string{},
 		}
 	}
 	return out
+}
+
+// truncateRequestedSections keeps explicitly requested sections in the payload
+// by shortening them first. Only a section that cannot fit even as one entry is
+// omitted, and the omission note never suggests retrying with the same filter.
+func truncateRequestedSections(
+	out *ComponentAPIOutput,
+	requested map[string]bool,
+	budget int,
+	notes, baseWarnings []string,
+) []string {
+	if len(requested) == 0 {
+		return notes
+	}
+	for responseBytesWithWarnings(*out, notes, baseWarnings) > budget {
+		name, count := largestRequestedSection(out, requested)
+		if name == "" {
+			break
+		}
+		if count <= 1 {
+			dropSection(out, name)
+			out.Sections = withoutSection(out.Sections, name)
+			out.Omitted = appendSectionOnce(out.Omitted, name)
+			out.Truncated = true
+			notes = setSectionNote(notes, name, fmt.Sprintf(
+				"%s could not fit in the response budget even after truncation and was omitted", name))
+			continue
+		}
+		keep := max(1, count/2)
+		truncateSection(out, name, keep)
+		out.Truncated = true
+		notes = setSectionNote(notes, name, fmt.Sprintf(
+			"%s truncated from %d to %d entries to fit the response budget",
+			name, count, keep))
+	}
+	return notes
+}
+
+func responseBytesWithWarnings(out ComponentAPIOutput, notes, base []string) int {
+	original := out.Resolved.Warnings
+	combined := make([]string, 0, len(notes)+len(base))
+	combined = append(combined, notes...)
+	combined = append(combined, base...)
+	out.Resolved.Warnings = sanitizeWarnings(combined)
+	size := estimatedResponseBytes(out)
+	out.Resolved.Warnings = original
+	return size
+}
+
+func largestRequestedSection(out *ComponentAPIOutput, requested map[string]bool) (string, int) {
+	best := ""
+	bestCount := 0
+	for _, name := range componentAPISections {
+		if !requested[name] {
+			continue
+		}
+		if count := sectionItemCount(out, name); count > bestCount {
+			best = name
+			bestCount = count
+		}
+	}
+	return best, bestCount
+}
+
+func sectionItemCount(out *ComponentAPIOutput, section string) int {
+	switch section {
+	case sectionAttributes:
+		return len(out.Attributes)
+	case sectionProperties:
+		return len(out.Properties)
+	case sectionEvents:
+		return len(out.Events)
+	case sectionSlots:
+		return len(out.Slots)
+	case sectionCSSParts:
+		return len(out.CSSParts)
+	case sectionCSSProperties:
+		return len(out.CSSProperties)
+	case sectionExamples:
+		return len(out.Examples)
+	default:
+		return 0
+	}
+}
+
+func truncateSection(out *ComponentAPIOutput, section string, keep int) {
+	switch section {
+	case sectionAttributes:
+		out.Attributes = out.Attributes[:min(keep, len(out.Attributes))]
+	case sectionProperties:
+		out.Properties = out.Properties[:min(keep, len(out.Properties))]
+	case sectionEvents:
+		out.Events = out.Events[:min(keep, len(out.Events))]
+	case sectionSlots:
+		out.Slots = out.Slots[:min(keep, len(out.Slots))]
+	case sectionCSSParts:
+		out.CSSParts = out.CSSParts[:min(keep, len(out.CSSParts))]
+	case sectionCSSProperties:
+		out.CSSProperties = out.CSSProperties[:min(keep, len(out.CSSProperties))]
+	case sectionExamples:
+		out.Examples = out.Examples[:min(keep, len(out.Examples))]
+	}
+}
+
+func dropSection(out *ComponentAPIOutput, section string) {
+	switch section {
+	case sectionAttributes:
+		out.Attributes = nil
+	case sectionProperties:
+		out.Properties = nil
+	case sectionEvents:
+		out.Events = nil
+	case sectionSlots:
+		out.Slots = nil
+	case sectionCSSParts:
+		out.CSSParts = nil
+	case sectionCSSProperties:
+		out.CSSProperties = nil
+	case sectionExamples:
+		out.Examples = nil
+	}
+}
+
+func appendSectionOnce(sections []string, section string) []string {
+	if slices.Contains(sections, section) {
+		return sections
+	}
+	return append(sections, section)
+}
+
+func setSectionNote(notes []string, section, message string) []string {
+	prefix := section + " "
+	for i := range notes {
+		if strings.HasPrefix(notes[i], prefix) {
+			notes[i] = message
+			return notes
+		}
+	}
+	return append(notes, message)
 }
 
 func withoutSection(sections []string, drop string) []string {

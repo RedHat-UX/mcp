@@ -632,6 +632,95 @@ func TestMarkCandidateTruncationSetsFlag(t *testing.T) {
 	}
 }
 
+func TestFitComponentAPIKeepsExplicitlyRequestedSection(t *testing.T) {
+	examples := make([]cem.Example, 200)
+	for i := range examples {
+		examples[i] = cem.Example{Description: strings.Repeat("x", 40)}
+	}
+	out := ComponentAPIOutput{
+		Resolved:          ResolvedVersion{Elements: "5.0.0"},
+		TagName:           "rh-huge",
+		Sections:          []string{sectionExamples},
+		Examples:          examples,
+		requestedSections: map[string]bool{sectionExamples: true},
+	}
+
+	fitted := fitComponentAPI(out, 4096, true)
+	if fitted.Error != nil {
+		t.Fatalf("fitComponentAPI() error = %+v", fitted.Error)
+	}
+	if len(fitted.Examples) == 0 {
+		t.Fatalf("examples were dropped although explicitly requested; omitted = %v", fitted.Omitted)
+	}
+	if !fitted.Truncated {
+		t.Error("Truncated = false, want true for a shortened requested section")
+	}
+	if !hasWarning(fitted.Resolved.Warnings, "examples truncated") {
+		t.Errorf("warnings = %v, want a truncation notice naming examples", fitted.Resolved.Warnings)
+	}
+	for _, warning := range fitted.Resolved.Warnings {
+		if strings.Contains(warning, `sections=["examples"]`) {
+			t.Errorf("warning suggests a no-op retry: %q", warning)
+		}
+	}
+	if size := estimatedResponseBytes(fitted); size > 4096 {
+		t.Errorf("response = %d bytes, want <= 4096", size)
+	}
+}
+
+func TestFitComponentAPIOmitsUnrequestedSectionWithRetry(t *testing.T) {
+	examples := make([]cem.Example, 200)
+	for i := range examples {
+		examples[i] = cem.Example{Description: strings.Repeat("x", 40)}
+	}
+	out := ComponentAPIOutput{
+		Resolved:   ResolvedVersion{Elements: "5.0.0"},
+		TagName:    "rh-huge",
+		Sections:   []string{sectionAttributes, sectionExamples},
+		Attributes: []cem.Attribute{{Name: "variant", Type: "string"}},
+		Examples:   examples,
+	}
+
+	fitted := fitComponentAPI(out, 4096, true)
+	if len(fitted.Examples) != 0 {
+		t.Errorf("examples = %d, want the unrequested section omitted", len(fitted.Examples))
+	}
+	if !slices.Contains(fitted.Omitted, sectionExamples) {
+		t.Errorf("omitted = %v, want %s", fitted.Omitted, sectionExamples)
+	}
+	if !hasWarning(fitted.Resolved.Warnings, `sections=["examples"]`) {
+		t.Errorf("warnings = %v, want a retry suggestion for the omitted section", fitted.Resolved.Warnings)
+	}
+}
+
+func TestFitComponentAPIOmitsRequestedSectionOnlyWhenTruncationFails(t *testing.T) {
+	out := ComponentAPIOutput{
+		Resolved: ResolvedVersion{Elements: "5.0.0"},
+		TagName:  "rh-huge",
+		Sections: []string{sectionExamples},
+		Examples: []cem.Example{{
+			Description: strings.Repeat("x", 10_000),
+		}},
+		requestedSections: map[string]bool{sectionExamples: true},
+	}
+
+	fitted := fitComponentAPI(out, 1024, true)
+	if len(fitted.Examples) != 0 {
+		t.Errorf("examples = %d, want the impossible section omitted", len(fitted.Examples))
+	}
+	if !slices.Contains(fitted.Omitted, sectionExamples) {
+		t.Errorf("omitted = %v, want %s", fitted.Omitted, sectionExamples)
+	}
+	if !hasWarning(fitted.Resolved.Warnings, "examples") {
+		t.Errorf("warnings = %v, want one naming the omitted section", fitted.Resolved.Warnings)
+	}
+	for _, warning := range fitted.Resolved.Warnings {
+		if strings.Contains(warning, `sections=["examples"]`) {
+			t.Errorf("warning suggests a no-op retry: %q", warning)
+		}
+	}
+}
+
 func TestErrorResponsesStayWithinBudgetWithLongWarnings(t *testing.T) {
 	warnings := make([]string, 12)
 	for i := range warnings {
