@@ -27,10 +27,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Clean checkout has no generated data
+        run: test ! -e internal/data/dist/index.json
       - name: Vet
         run: go vet ./...
       - name: Test
         run: go test ./... -count=1
+      - name: Data generation determinism (fixtures)
+        run: go test ./tools/gen-data/internal/generate -run TestGenerateIsDeterministic -count=1
+      - name: Token normalization fixtures
+        run: go test ./tools/gen-data/internal/normalize -count=1
       - name: Staticcheck
         uses: dominikh/staticcheck-action@v1.4.1
         with:
@@ -40,6 +46,34 @@ jobs:
         uses: golangci/golangci-lint-action@v9.3.0
         with:
           version: v2.15.0
+
+  real-data:
+    name: Real artifact tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Generate pinned data
+        run: make data
+      - name: Real data determinism
+        run: |
+          set -eu
+          make data-force
+          cp -a internal/data/dist /tmp/real-dist-first
+          make data-force
+          diff -r /tmp/real-dist-first internal/data/dist
+      - name: Run real artifact tests and reject skips
+        run: |
+          set -o pipefail
+          go test ./internal/data ./internal/tools ./cmd/rhds-mcp -count=1 -v | tee /tmp/real-tests.log
+          if grep -q -- '--- SKIP' /tmp/real-tests.log; then
+            echo "real artifact tests skipped; generated data was not available" >&2
+            exit 1
+          fi
 
   actionlint:
     name: Lint workflows
@@ -66,3 +100,27 @@ jobs:
     uses: bennypowers/go-release-workflows/.github/workflows/build-binaries.yml@v1.4
     with:
       binary-name: rhds-mcp
+
+  size:
+    name: Binary and tarball size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build with generated data and check NFR-06
+        run: make size-check
+
+  license:
+    name: Dependency license check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Check licenses against the PLAN section 9.3 allowlist
+        run: make license-check

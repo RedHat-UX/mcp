@@ -23,6 +23,7 @@ import (
 	cemtypes "bennypowers.dev/cem/lsp/types"
 	"bennypowers.dev/cem/manifest"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"golang.org/x/mod/semver"
 
 	"github.com/redhat-ux/mcp/internal/data"
 )
@@ -64,13 +65,12 @@ type Service struct {
 	documents     cemtypes.Manager
 	documentsErr  error
 	docSeq        atomic.Int64
-
-	manifestMu sync.Mutex
-	manifests  map[string]*manifest.Package
-	tokenMu    sync.Mutex
-	tokenSets  map[string]*tokenSet
-	themeMu    sync.Mutex
-	themes     map[string]map[string]map[string]string
+	manifestMu    sync.Mutex
+	manifests     map[string]*manifest.Package
+	tokenMu       sync.Mutex
+	tokenSets     map[string]*tokenSet
+	themeMu       sync.Mutex
+	themes        map[string]map[string]map[string]string
 
 	manifestParses atomic.Int64
 	tokenParses    atomic.Int64
@@ -179,6 +179,39 @@ func (s *Service) bundledVersion(pkg, kind, requested string) (string, bool) {
 	return "", false
 }
 
+// docsVersionFor maps a resolved elements version to the newest bundled docs
+// snapshot for the same major. If that major has no snapshot, the newest
+// snapshot overall is used, matching the docs-only behavior in PLAN section
+// 5.5.
+func (s *Service) docsVersionFor(elementsVersion string) string {
+	if s == nil || s.store == nil {
+		return ""
+	}
+	versions := s.store.Index().Versions(packageDocs, kindDocs)
+	if len(versions) == 0 {
+		return ""
+	}
+	target := semver.Canonical("v" + strings.TrimPrefix(elementsVersion, "v"))
+	if target == "" {
+		return versions[0]
+	}
+	targetMajor := semver.Major(target)
+	best := ""
+	for _, tag := range versions {
+		canonical := semver.Canonical("v" + strings.TrimPrefix(tag, "v"))
+		if canonical == "" || semver.Major(canonical) != targetMajor {
+			continue
+		}
+		if best == "" || semver.Compare(canonical, "v"+strings.TrimPrefix(best, "v")) > 0 {
+			best = tag
+		}
+	}
+	if best != "" {
+		return best
+	}
+	return versions[0]
+}
+
 func (s *Service) loadManifest(version string) (*manifest.Package, *ToolError) {
 	s.manifestMu.Lock()
 	defer s.manifestMu.Unlock()
@@ -241,10 +274,52 @@ func (s *Service) loadTokens(version string) ([]*token.Token, *token.Map, *ToolE
 		}
 	}
 
+	// Light-dark() composites are generated into the theme map instead of the
+	// DTCG document. Add them back as lookup tokens so rhds_query_tokens can
+	// find them and report their theme value.
+	// Theme tokens are a bonus: a malformed theme map must not break token
+	// queries that never ask for a theme. QueryTokens reports the error again
+	// when a theme is requested.
+	if themes, themeErr := s.loadThemes(version); themeErr == nil && themes != nil {
+		tokens = addThemeTokens(tokens, themes)
+	}
+
 	set := &tokenSet{tokens: tokens, byName: token.NewMap(tokens, "rh")}
 	s.tokenParses.Add(1)
 	s.tokenSets[version] = set
 	return set.tokens, set.byName, nil
+}
+
+// addThemeTokens synthesizes tokens for theme-map entries that are not in the
+// DTCG document. The light value is the token's base value; the dark value is
+// reported through TokenResult.ThemeValue.
+func addThemeTokens(tokens []*token.Token, themes map[string]map[string]string) []*token.Token {
+	existing := make(map[string]bool, len(tokens))
+	for _, tok := range tokens {
+		existing[tok.Name] = true
+	}
+	result := tokens
+	for _, cssName := range sortedKeys(themes["light"]) {
+		name := strings.TrimPrefix(strings.TrimPrefix(cssName, "--rh-"), "--")
+		if name == "" || existing[name] {
+			continue
+		}
+		value := themes["light"][cssName]
+		result = append(result, &token.Token{
+			Name:          name,
+			Value:         value,
+			RawValue:      value,
+			ResolvedValue: value,
+			IsResolved:    true,
+			Type:          token.TypeColor,
+			Prefix:        "rh",
+			Extensions: map[string]any{
+				"com.redhat.ux": map[string]any{"themeComposite": true},
+			},
+		})
+		existing[name] = true
+	}
+	return result
 }
 
 func (s *Service) loadThemes(version string) (map[string]map[string]string, *ToolError) {

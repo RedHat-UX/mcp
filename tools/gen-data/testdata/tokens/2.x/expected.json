@@ -1,0 +1,3046 @@
+{
+  "animation": {
+    "speed": {
+      "$type": "duration",
+      "$value": "0.3s"
+    },
+    "timing": {
+      "$type": "cubicBezier",
+      "$value": [
+        0.465,
+        0.183,
+        0.153,
+        0.946
+      ]
+    }
+  },
+  "border": {
+    "radius": {
+      "$extensions": {
+        "com.redhat.ux": {
+          "heading": "Radius"
+        }
+      },
+      "default": {
+        "$description": "3px border radius; Example: Card",
+        "$extensions": {
+          "com.style-dictionary": {
+            "sourceType": "radius"
+          }
+        },
+        "$type": "dimension",
+        "$value": "{length.2xs}"
+      },
+      "pill": {
+        "$description": "Pill border radius; Example: Label",
+        "$extensions": {
+          "com.style-dictionary": {
+            "sourceType": "radius"
+          }
+        },
+        "$type": "dimension",
+        "$value": "{length.4xl}"
+      },
+      "sharp": {
+        "$description": "Border radius reset",
+        "$extensions": {
+          "com.style-dictionary": {
+            "sourceType": "radius"
+          }
+        },
+        "$type": "dimension",
+        "$value": "0px"
+      }
+    },
+    "width": {
+      "$extensions": {
+        "com.redhat.ux": {
+          "heading": "Width"
+        }
+      },
+      "lg": {
+        "$description": "3px border width: Example: Expanded Accordion panel",
+        "$type": "dimension",
+        "$value": "{length.2xs}"
+      },
+      "md": {
+        "$description": "2px border width: Example: Alert",
+        "$type": "dimension",
+        "$value": "{length.3xs}"
+      },
+      "sm": {
+        "$description": "1px border width; Example: Secondary CTA or Button",
+        "$type": "dimension",
+        "$value": "{length.4xs}"
+      }
+    }
+  },
+  "box-shadow": {
+    "lg": {
+      "$description": "Large box shadow",
+      "$type": "shadow",
+      "$value": {
+        "blur": "8px",
+        "color": "#1515154d",
+        "offsetX": "0px",
+        "offsetY": "6px",
+        "spread": "2px"
+      }
+    },
+    "md": {
+      "$description": "Medium box shadow",
+      "$type": "shadow",
+      "$value": {
+        "blur": "6px",
+        "color": "#15151540",
+        "offsetX": "0px",
+        "offsetY": "4px",
+        "spread": "1px"
+      }
+    },
+    "sm": {
+      "$description": "Small box shadow",
+      "$type": "shadow",
+      "$value": {
+        "blur": "4px",
+        "color": "#15151533",
+        "offsetX": "0px",
+        "offsetY": "2px",
+        "spread": "0px"
+      }
+    },
+    "xl": {
+      "$description": "Extra large box shadow",
+      "$type": "shadow",
+      "$value": {
+        "blur": "24px",
+        "color": "#15151559",
+        "offsetX": "0px",
+        "offsetY": "8px",
+        "spread": "3px"
+      }
+    }
+  },
+  "breakpoint": {
+    "$extensions": {
+      "com.redhat.ux": {
+        "description": {},
+        "descriptionFile": "breakpoints.md",
+        "heading": "Breakpoints",
+        "use": "breakpoint"
+      }
+    },
+    "2xl": {
+      "$description": "Desktop large",
+      "$extensions": {
+        "com.redhat.ux": {
+          "title": "Extra Extra Large"
+        }
+      },
+      "$type": "dimension",
+      "$value": "1680px"
+    },
+    "2xs-max": {
+      "$description": "Mobile portrait (max-width)",
+      "$extensions": {
+        "com.redhat.ux": {
+          "title": "Extra Extra Small (max-width)"
+        }
+      },
+      "$type": "dimension",
+      "$value": "575px"
+    },
+    "lg": {
+      "$description": "Tablet landscape",
+      "$extensions": {
+        "com.redhat.ux": {
+          "title": "Large"
+        }
+      },
+      "$type": "dimension",
+      "$value": "1200px"
+    },
+    "lg-max": {
+      "$description": "Tablet landscape (max-width)",
+      "$extensions": {
+        "com.redhat.ux": {
+          "title": "Large (max-width)"
+        }
+      },
+      "$type": "dimension",
+      "$value": "1439px"
+    },
+    "md": {
+      "$description": "Tablet portrait",
+      "$extensions": {
+        "com.redhat.ux": {
+          "title": "Medium"
+        }
+      },
+      "$type": "dimension",
+      "$value": "992px"
+    },
+    "md-max": {
+      "$description": "Tablet portrait (max-width)",
+      "$extensions": {
+        "com.redhat.ux": {
+          "title": "Medium (max-width)"
+        }
+      },
+      "$type": "dimension",
+      "$value": "1199px"
+    },
+    "sm": {
+      "$description": "Mobile landscape",
+      "$extensions": {
+        "com.redhat.ux": {
+          "title": "Small"
+        }
+      },
+      "$type": "dimension",
+      "$value": "768px"
+    },
+    "sm-max": {
+      "$description": "Mobile landscape (max-width)",
+      "$extensions": {
+        "com.redhat.ux": {
+          "title": "Small (max-width)"
+        }
+      },
+      "$type": "dimension",
+      "$value": "991px"
+    },
+    "xl": {
+      "$description": "Desktop small",
+      "$extensions": {
+        "com.redhat.ux": {
+          "title": "Extra Large"
+        }
+      },
+      "$type": "dimension",
+      "$value": "1440px"
+    },
+    "xl-max": {
+      "$description": "Desktop small (max-width)",
+      "$extensions": {
+        "com.redhat.ux": {
+          "title": "Extra Large (max-width)"
+        }
+      },
+      "$type": "dimension",
+      "$value": "1679px"
+    },
+    "xs": {
+      "$description": "Mobile portrait",
+      "$extensions": {
+        "com.redhat.ux": {
+          "title": "Extra Small"
+        }
+      },
+      "$type": "dimension",
+      "$value": "576px"
+    },
+    "xs-max": {
+      "$description": "Mobile landscape (max-width)",
+      "$extensions": {
+        "com.redhat.ux": {
+          "title": "Extra Small (max-width)"
+        }
+      },
+      "$type": "dimension",
+      "$value": "767px"
+    }
+  },
+  "color": {
+    "$extensions": {
+      "com.redhat.ux": {
+        "description": "Color helps create consistent experiences across web properties. Various colors are available in two themes, light and dark.",
+        "heading": "Global color"
+      }
+    },
+    "accent": {
+      "$extensions": {
+        "com.redhat.ux": {
+          "collapse": true,
+          "order": 10
+        }
+      },
+      "base": {
+        "on-dark": {
+          "$description": "Inline link (dark theme)",
+          "$type": "color",
+          "$value": "{color.blue.30}"
+        },
+        "on-light": {
+          "$description": "Inline link (light theme)",
+          "$type": "color",
+          "$value": "{color.blue.50}"
+        }
+      },
+      "brand": {
+        "on-dark": {
+          "$description": "Brand red (dark theme)",
+          "$type": "color",
+          "$value": "{color.brand.red.on-dark}"
+        },
+        "on-light": {
+          "$description": "Brand red (light theme)",
+          "$type": "color",
+          "$value": "{color.brand.red.on-light}"
+        }
+      }
+    },
+    "black": {
+      "$description": "Brand black (avoid using)",
+      "$type": "color",
+      "$value": "#000000"
+    },
+    "black-hsl": {
+      "$type": "color",
+      "$value": "{color.black}"
+    },
+    "black-rgb": {
+      "$type": "color",
+      "$value": "{color.black}"
+    },
+    "blue": {
+      "$extensions": {
+        "com.redhat.ux": {
+          "order": 306
+        },
+        "isCrayon": true
+      },
+      "10": {
+        "$description": "Alert - Info background",
+        "$type": "color",
+        "$value": "#e0f0ff"
+      },
+      "10-hsl": {
+        "$type": "color",
+        "$value": "{color.blue.10}"
+      },
+      "10-rgb": {
+        "$type": "color",
+        "$value": "{color.blue.10}"
+      },
+      "20": {
+        "$description": "Label - Filled (Blue) border color",
+        "$type": "color",
+        "$value": "#b9dafc"
+      },
+      "20-hsl": {
+        "$type": "color",
+        "$value": "{color.blue.20}"
+      },
+      "20-rgb": {
+        "$type": "color",
+        "$value": "{color.blue.20}"
+      },
+      "30": {
+        "$description": "Inline link (dark theme)",
+        "$type": "color",
+        "$value": "#92c5f9"
+      },
+      "30-hsl": {
+        "$type": "color",
+        "$value": "{color.blue.30}"
+      },
+      "30-rgb": {
+        "$type": "color",
+        "$value": "{color.blue.30}"
+      },
+      "40": {
+        "$description": "Alert - Info accent",
+        "$type": "color",
+        "$value": "#4394e5"
+      },
+      "40-hsl": {
+        "$type": "color",
+        "$value": "{color.blue.40}"
+      },
+      "40-rgb": {
+        "$type": "color",
+        "$value": "{color.blue.40}"
+      },
+      "50": {
+        "$description": "Label - Filled (Blue) accent color",
+        "$type": "color",
+        "$value": "#0066cc"
+      },
+      "50-hsl": {
+        "$type": "color",
+        "$value": "{color.blue.50}"
+      },
+      "50-rgb": {
+        "$type": "color",
+        "$value": "{color.blue.50}"
+      },
+      "60": {
+        "$description": "Inline link hover (light theme)",
+        "$type": "color",
+        "$value": "#004d99"
+      },
+      "60-hsl": {
+        "$type": "color",
+        "$value": "{color.blue.60}"
+      },
+      "60-rgb": {
+        "$type": "color",
+        "$value": "{color.blue.60}"
+      },
+      "70": {
+        "$description": "Alert - Info title text",
+        "$type": "color",
+        "$value": "#003366"
+      },
+      "70-hsl": {
+        "$type": "color",
+        "$value": "{color.blue.70}"
+      },
+      "70-rgb": {
+        "$type": "color",
+        "$value": "{color.blue.70}"
+      }
+    },
+    "border": {
+      "$extensions": {
+        "com.redhat.ux": {
+          "category": "border",
+          "collapse": true,
+          "heading": "Color",
+          "order": 80
+        }
+      },
+      "destructive": {
+        "on-dark": {
+          "$description": "Destructive border color (dark theme)",
+          "$type": "color",
+          "$value": "{color.border.status.danger.on-dark}"
+        },
+        "on-light": {
+          "$description": "Destructive border color (light theme)",
+          "$type": "color",
+          "$value": "{color.border.status.danger.on-light}"
+        }
+      },
+      "interactive": {
+        "on-dark": {
+          "$description": "Interactive border color (dark theme)",
+          "$type": "color",
+          "$value": "{color.blue.30}"
+        },
+        "on-light": {
+          "$description": "Interactive border color (light theme)",
+          "$type": "color",
+          "$value": "{color.blue.50}"
+        }
+      },
+      "status": {
+        "caution": {
+          "on-dark": {
+            "$description": "Caution border color (dark theme)",
+            "$type": "color",
+            "$value": "{color.status.caution.on-dark}"
+          },
+          "on-light": {
+            "$description": "Caution border color (light theme)",
+            "$type": "color",
+            "$value": "{color.status.caution.on-light}"
+          }
+        },
+        "danger": {
+          "on-dark": {
+            "$description": "Danger border color (dark theme)",
+            "$type": "color",
+            "$value": "{color.status.danger.on-dark}"
+          },
+          "on-light": {
+            "$description": "Danger border color (light theme)",
+            "$type": "color",
+            "$value": "{color.status.danger.on-light}"
+          }
+        },
+        "info": {
+          "on-dark": {
+            "$description": "Info border color (dark theme)",
+            "$type": "color",
+            "$value": "{color.status.info.on-dark}"
+          },
+          "on-light": {
+            "$description": "Info border color (light theme)",
+            "$type": "color",
+            "$value": "{color.status.info.on-light}"
+          }
+        },
+        "neutral": {
+          "on-dark": {
+            "$description": "Neutral border color (dark theme)",
+            "$type": "color",
+            "$value": "{color.status.neutral.on-dark}"
+          },
+          "on-light": {
+            "$description": "Neutral border color (light theme)",
+            "$type": "color",
+            "$value": "{color.status.neutral.on-light}"
+          }
+        },
+        "success": {
+          "on-dark": {
+            "$description": "Success border color (dark theme)",
+            "$type": "color",
+            "$value": "{color.status.success.on-dark}"
+          },
+          "on-light": {
+            "$description": "Success border color (light theme)",
+            "$type": "color",
+            "$value": "{color.status.success.on-light}"
+          }
+        },
+        "warning": {
+          "on-dark": {
+            "$description": "Warning border color (dark theme)",
+            "$type": "color",
+            "$value": "{color.status.warning.on-dark}"
+          },
+          "on-light": {
+            "$description": "Warning border color (light theme)",
+            "$type": "color",
+            "$value": "{color.status.warning.on-light}"
+          }
+        }
+      },
+      "strong": {
+        "on-dark": {
+          "$description": "Strong border color (dark theme)",
+          "$type": "color",
+          "$value": "{color.white}"
+        },
+        "on-light": {
+          "$description": "Strong border color (light theme)",
+          "$type": "color",
+          "$value": "{color.gray.95}"
+        }
+      },
+      "subtle": {
+        "on-dark": {
+          "$description": "Subtle border color (dark theme)",
+          "$type": "color",
+          "$value": "{color.gray.50}"
+        },
+        "on-light": {
+          "$description": "Subtle border color (light theme)",
+          "$type": "color",
+          "$value": "{color.gray.30}"
+        }
+      }
+    },
+    "brand": {
+      "$extensions": {
+        "com.redhat.ux": {
+          "description": {},
+          "descriptionFile": "brand.md",
+          "order": 0
+        }
+      },
+      "red": {
+        "dark": {
+          "$description": "Dark brand red/Brand red hover",
+          "$type": "color",
+          "$value": "{color.red.60}"
+        },
+        "darker": {
+          "$description": "Darker brand red",
+          "$type": "color",
+          "$value": "{color.red.70}"
+        },
+        "darkest": {
+          "$description": "Darkest brand red",
+          "$type": "color",
+          "$value": "{color.red.80}"
+        },
+        "light": {
+          "$description": "Light brand red",
+          "$type": "color",
+          "$value": "{color.red.40}"
+        },
+        "lighter": {
+          "$description": "Lighter brand red",
+          "$type": "color",
+          "$value": "{color.red.30}"
+        },
+        "lightest": {
+          "$description": "Lightest brand red",
+          "$type": "color",
+          "$value": "{color.red.20}"
+        },
+        "on-dark": {
+          "$description": "Brand red on dark background",
+          "$type": "color",
+          "$value": "{color.red.50}"
+        },
+        "on-light": {
+          "$description": "Brand red on light background",
+          "$type": "color",
+          "$value": "{color.red.50}"
+        }
+      }
+    },
+    "canvas": {
+      "$extensions": {
+        "com.redhat.ux": {
+          "description": "The canvas tokens should be used for page backgrounds only. To add a background to contained sections, use a surface token.",
+          "order": 200
+        }
+      },
+      "black": {
+        "$description": "Primary canvas (dark theme)",
+        "$type": "color",
+        "$value": "{color.gray.95}"
+      },
+      "black-hsl": {
+        "$type": "color",
+        "$value": "{color.black}"
+      },
+      "black-rgb": {
+        "$type": "color",
+        "$value": "{color.black}"
+      },
+      "white": {
+        "$description": "Primary canvas (light theme)",
+        "$type": "color",
+        "$value": "{color.white}"
+      },
+      "white-hsl": {
+        "$type": "color",
+        "$value": "{color.white}"
+      },
+      "white-rgb": {
+        "$type": "color",
+        "$value": "{color.white}"
+      }
+    },
+    "gray": {
+      "$extensions": {
+        "com.redhat.ux": {
+          "description": "In addition to white and black, each theme features various shades of gray. Be mindful of accessibility when using text or components on top of shades of gray.",
+          "order": 390
+        },
+        "isCrayon": true
+      },
+      "10": {
+        "$description": "Tertiary surface (light theme)",
+        "$type": "color",
+        "$value": "#f2f2f2"
+      },
+      "10-hsl": {
+        "$type": "color",
+        "$value": "{color.gray.10}"
+      },
+      "10-rgb": {
+        "$type": "color",
+        "$value": "{color.gray.10}"
+      },
+      "20": {
+        "$description": "Secondary surface (light theme)",
+        "$type": "color",
+        "$value": "#e0e0e0"
+      },
+      "20-hsl": {
+        "$type": "color",
+        "$value": "{color.gray.20}"
+      },
+      "20-rgb": {
+        "$type": "color",
+        "$value": "{color.gray.20}"
+      },
+      "30": {
+        "$description": "Subtle borders (light theme)",
+        "$type": "color",
+        "$value": "#c7c7c7"
+      },
+      "30-hsl": {
+        "$type": "color",
+        "$value": "{color.gray.30}"
+      },
+      "30-rgb": {
+        "$type": "color",
+        "$value": "{color.gray.30}"
+      },
+      "40": {
+        "$description": "Subtle icon (hover state)",
+        "$type": "color",
+        "$value": "#a3a3a3"
+      },
+      "40-hsl": {
+        "$type": "color",
+        "$value": "{color.gray.40}"
+      },
+      "40-rgb": {
+        "$type": "color",
+        "$value": "{color.gray.40}"
+      },
+      "50": {
+        "$description": "Subtle icon",
+        "$type": "color",
+        "$value": "#707070"
+      },
+      "50-hsl": {
+        "$type": "color",
+        "$value": "{color.gray.50}"
+      },
+      "50-rgb": {
+        "$type": "color",
+        "$value": "{color.gray.50}"
+      },
+      "60": {
+        "$description": "Secondary text (light theme)",
+        "$type": "color",
+        "$value": "#4d4d4d"
+      },
+      "60-hsl": {
+        "$type": "color",
+        "$value": "{color.gray.60}"
+      },
+      "60-rgb": {
+        "$type": "color",
+        "$value": "{color.gray.60}"
+      },
+      "70": {
+        "$description": "Tertiary surface (dark theme)",
+        "$type": "color",
+        "$value": "#383838"
+      },
+      "70-hsl": {
+        "$type": "color",
+        "$value": "{color.gray.70}"
+      },
+      "70-rgb": {
+        "$type": "color",
+        "$value": "{color.gray.70}"
+      },
+      "80": {
+        "$description": "Alternative tertiary surface (not available for use with context provider)",
+        "$type": "color",
+        "$value": "#292929"
+      },
+      "80-hsl": {
+        "$type": "color",
+        "$value": "{color.gray.80}"
+      },
+      "80-rgb": {
+        "$type": "color",
+        "$value": "{color.gray.80}"
+      },
+      "90": {
+        "$description": "Secondary surface (dark theme)",
+        "$type": "color",
+        "$value": "#1f1f1f"
+      },
+      "90-hsl": {
+        "$type": "color",
+        "$value": "{color.gray.90}"
+      },
+      "90-rgb": {
+        "$type": "color",
+        "$value": "{color.gray.90}"
+      },
+      "95": {
+        "$description": "Primary surface (dark theme) or primary text (light theme)",
+        "$type": "color",
+        "$value": "#151515"
+      },
+      "95-hsl": {
+        "$type": "color",
+        "$value": "{color.gray.95}"
+      },
+      "95-rgb": {
+        "$type": "color",
+        "$value": "{color.gray.95}"
+      }
+    },
+    "green": {
+      "$extensions": {
+        "com.redhat.ux": {
+          "description": "The green color is primarily used to indicate a success state, but it can also be used sparingly in other situations where green is needed.",
+          "order": 304
+        },
+        "isCrayon": true
+      },
+      "10": {
+        "$description": "Alert - success background",
+        "$type": "color",
+        "$value": "#e9f7df"
+      },
+      "10-hsl": {
+        "$type": "color",
+        "$value": "{color.green.10}"
+      },
+      "10-rgb": {
+        "$type": "color",
+        "$value": "{color.green.10}"
+      },
+      "20": {
+        "$description": "Label - Filled (Green) border color",
+        "$type": "color",
+        "$value": "#d1f1bb"
+      },
+      "20-hsl": {
+        "$type": "color",
+        "$value": "{color.green.20}"
+      },
+      "20-rgb": {
+        "$type": "color",
+        "$value": "{color.green.20}"
+      },
+      "30": {
+        "$type": "color",
+        "$value": "#afdc8f"
+      },
+      "30-hsl": {
+        "$type": "color",
+        "$value": "{color.green.30}"
+      },
+      "30-rgb": {
+        "$type": "color",
+        "$value": "{color.green.30}"
+      },
+      "40": {
+        "$type": "color",
+        "$value": "#87bb62"
+      },
+      "40-hsl": {
+        "$type": "color",
+        "$value": "{color.green.40}"
+      },
+      "40-rgb": {
+        "$type": "color",
+        "$value": "{color.green.40}"
+      },
+      "50": {
+        "$type": "color",
+        "$value": "#63993d"
+      },
+      "50-hsl": {
+        "$type": "color",
+        "$value": "{color.green.50}"
+      },
+      "50-rgb": {
+        "$type": "color",
+        "$value": "{color.green.50}"
+      },
+      "60": {
+        "$description": "Alert - Success accent",
+        "$type": "color",
+        "$value": "#3d7317"
+      },
+      "60-hsl": {
+        "$type": "color",
+        "$value": "{color.green.60}"
+      },
+      "60-rgb": {
+        "$type": "color",
+        "$value": "{color.green.60}"
+      },
+      "70": {
+        "$description": "Alert - Success title text",
+        "$type": "color",
+        "$value": "#204d00"
+      },
+      "70-hsl": {
+        "$type": "color",
+        "$value": "{color.green.70}"
+      },
+      "70-rgb": {
+        "$type": "color",
+        "$value": "{color.green.70}"
+      }
+    },
+    "icon": {
+      "$extensions": {
+        "com.redhat.ux": {
+          "category": "icon",
+          "heading": "Color",
+          "order": 90
+        }
+      },
+      "primary": {
+        "on-dark": {
+          "$type": "color",
+          "$value": "{color.brand.red.on-dark}"
+        },
+        "on-light": {
+          "$type": "color",
+          "$value": "{color.brand.red.on-light}"
+        }
+      },
+      "secondary": {
+        "on-dark": {
+          "$type": "color",
+          "$value": "{color.white}"
+        },
+        "on-light": {
+          "$type": "color",
+          "$value": "{color.gray.95}"
+        }
+      },
+      "status": {
+        "caution": {
+          "on-dark": {
+            "$description": "Caution status icon color (dark theme)",
+            "$type": "color",
+            "$value": "{color.status.caution.on-dark}"
+          },
+          "on-light": {
+            "$description": "Caution status icon color (light theme)",
+            "$type": "color",
+            "$value": "{color.status.caution.on-light}"
+          }
+        },
+        "danger": {
+          "on-dark": {
+            "$description": "Danger status icon color (dark theme)",
+            "$type": "color",
+            "$value": "{color.status.danger.on-dark}"
+          },
+          "on-light": {
+            "$description": "Danger status icon color (light theme)",
+            "$type": "color",
+            "$value": "{color.status.danger.on-light}"
+          }
+        },
+        "default": {
+          "on-dark": {
+            "$description": "Default status icon color (dark theme)",
+            "$type": "color",
+            "$value": "{color.icon.status.neutral.on-light}"
+          },
+          "on-light": {
+            "$description": "Default status icon color (light theme)",
+            "$type": "color",
+            "$value": "{color.icon.status.neutral.on-light}"
+          }
+        },
+        "info": {
+          "on-dark": {
+            "$description": "Info status icon color (dark theme)",
+            "$type": "color",
+            "$value": "{color.status.info.on-dark}"
+          },
+          "on-light": {
+            "$description": "Info status icon color (light theme)",
+            "$type": "color",
+            "$value": "{color.status.info.on-light}"
+          }
+        },
+        "neutral": {
+          "on-dark": {
+            "$description": "Neutral status icon color (dark theme)",
+            "$type": "color",
+            "$value": "{color.status.neutral.on-dark}"
+          },
+          "on-light": {
+            "$description": "Neutral status icon color (light theme)",
+            "$type": "color",
+            "$value": "{color.status.neutral.on-light}"
+          }
+        },
+        "success": {
+          "on-dark": {
+            "$description": "Success status icon color (dark theme)",
+            "$type": "color",
+            "$value": "{color.status.success.on-dark}"
+          },
+          "on-light": {
+            "$description": "Success status icon color (light theme)",
+            "$type": "color",
+            "$value": "{color.status.success.on-light}"
+          }
+        },
+        "warning": {
+          "on-dark": {
+            "$description": "Warning status icon color (dark theme)",
+            "$type": "color",
+            "$value": "{color.status.warning.on-dark}"
+          },
+          "on-light": {
+            "$description": "Warning status icon color (light theme)",
+            "$type": "color",
+            "$value": "{color.status.warning.on-light}"
+          }
+        }
+      },
+      "subtle": {
+        "$description": "Subtle icons (like the close button in the dialog component) are used in both light and dark themes and also have interactive states.",
+        "$type": "color",
+        "$value": "{color.gray.50}"
+      },
+      "subtle-hover": {
+        "$type": "color",
+        "$value": "{color.gray.40}"
+      }
+    },
+    "interactive": {
+      "$extensions": {
+        "com.redhat.ux": {
+          "description": {},
+          "descriptionFile": "interactive.md",
+          "order": 30
+        }
+      },
+      "blue": {
+        "darker": {
+          "$description": "Inline link (light theme)",
+          "$extensions": {
+            "com.redhat.ux": {
+              "deprecated": true
+            }
+          },
+          "$type": "color",
+          "$value": "{color.interactive.primary.default.on-light}"
+        },
+        "darkest": {
+          "$description": "Inline link hover (light theme)",
+          "$extensions": {
+            "com.redhat.ux": {
+              "deprecated": true
+            }
+          },
+          "$type": "color",
+          "$value": "{color.interactive.primary.hover.on-light}"
+        },
+        "lighter": {
+          "$description": "Inline link (dark theme)",
+          "$extensions": {
+            "com.redhat.ux": {
+              "deprecated": true
+            }
+          },
+          "$type": "color",
+          "$value": "{color.interactive.primary.default.on-dark}"
+        },
+        "lightest": {
+          "$description": "Inline link hover (dark theme)",
+          "$extensions": {
+            "com.redhat.ux": {
+              "deprecated": true
+            }
+          },
+          "$type": "color",
+          "$value": "{color.interactive.primary.hover.on-dark}"
+        }
+      },
+      "primary": {
+        "active": {
+          "on-dark": {
+            "$description": "Primary interactive - active (Dark theme)",
+            "$type": "color",
+            "$value": "{color.blue.20}"
+          },
+          "on-light": {
+            "$description": "Primary interactive - active (Light theme)",
+            "$type": "color",
+            "$value": "{color.blue.70}"
+          }
+        },
+        "default": {
+          "on-dark": {
+            "$description": "Primary interactive - default (Dark theme)",
+            "$type": "color",
+            "$value": "{color.blue.30}"
+          },
+          "on-light": {
+            "$description": "Primary interactive - default (Light theme)",
+            "$type": "color",
+            "$value": "{color.blue.50}"
+          }
+        },
+        "focus": {
+          "on-dark": {
+            "$description": "Primary interactive - focus (Dark theme)",
+            "$type": "color",
+            "$value": "{color.blue.20}"
+          },
+          "on-light": {
+            "$description": "Primary interactive - focus (Light theme)",
+            "$type": "color",
+            "$value": "{color.blue.70}"
+          }
+        },
+        "hover": {
+          "on-dark": {
+            "$description": "Primary interactive - hover (Dark theme)",
+            "$type": "color",
+            "$value": "{color.blue.20}"
+          },
+          "on-light": {
+            "$description": "Primary interactive - hover (Light theme)",
+            "$type": "color",
+            "$value": "{color.blue.70}"
+          }
+        },
+        "visited": {
+          "active": {
+            "on-dark": {
+              "$description": "Primary interactive visited - active (Dark theme)",
+              "$type": "color",
+              "$value": "{color.purple.10}"
+            },
+            "on-light": {
+              "$description": "Primary interactive visited - active (Light theme)",
+              "$type": "color",
+              "$value": "{color.purple.70}"
+            }
+          },
+          "default": {
+            "on-dark": {
+              "$description": "Primary interactive visited - default (Dark theme)",
+              "$type": "color",
+              "$value": "{color.purple.30}"
+            },
+            "on-light": {
+              "$description": "Primary interactive visited - default (Light theme)",
+              "$type": "color",
+              "$value": "{color.purple.50}"
+            }
+          },
+          "focus": {
+            "on-dark": {
+              "$description": "Primary interactive visited - focus (Dark theme)",
+              "$type": "color",
+              "$value": "{color.purple.10}"
+            },
+            "on-light": {
+              "$description": "Primary interactive visited - focus (Light theme)",
+              "$type": "color",
+              "$value": "{color.purple.70}"
+            }
+          },
+          "hover": {
+            "on-dark": {
+              "$description": "Primary interactive visited - hover (Dark theme)",
+              "$type": "color",
+              "$value": "{color.purple.10}"
+            },
+            "on-light": {
+              "$description": "Primary interactive visited - hover (Light theme)",
+              "$type": "color",
+              "$value": "{color.purple.70}"
+            }
+          }
+        }
+      },
+      "purple": {
+        "darker": {
+          "$description": "Inline link visited (light theme)",
+          "$extensions": {
+            "com.redhat.ux": {
+              "deprecated": true
+            }
+          },
+          "$type": "color",
+          "$value": "{color.interactive.primary.visited.default.on-light}"
+        },
+        "darkest": {
+          "$description": "Inline link visited hover (light theme)",
+          "$extensions": {
+            "com.redhat.ux": {
+              "deprecated": true
+            }
+          },
+          "$type": "color",
+          "$value": "{color.interactive.primary.visited.hover.on-dark}"
+        },
+        "lighter": {
+          "$description": "Inline link visited (dark theme)",
+          "$extensions": {
+            "com.redhat.ux": {
+              "deprecated": true
+            }
+          },
+          "$type": "color",
+          "$value": "{color.interactive.primary.visited.default.on-dark}"
+        },
+        "lightest": {
+          "$description": "Inline link visited hover (dark theme)",
+          "$extensions": {
+            "com.redhat.ux": {
+              "deprecated": true
+            }
+          },
+          "$type": "color",
+          "$value": "{color.interactive.primary.visited.hover.on-dark}"
+        }
+      },
+      "secondary": {
+        "active": {
+          "on-dark": {
+            "$description": "Secondary interactive - active (Dark theme)",
+            "$type": "color",
+            "$value": "{color.gray.30}"
+          },
+          "on-light": {
+            "$description": "Secondary interactive - active (Light theme)",
+            "$type": "color",
+            "$value": "{color.gray.60}"
+          }
+        },
+        "default": {
+          "on-dark": {
+            "$description": "Secondary interactive - default (Dark theme)",
+            "$type": "color",
+            "$value": "{color.gray.30}"
+          },
+          "on-light": {
+            "$description": "Secondary interactive - default (Light theme)",
+            "$type": "color",
+            "$value": "{color.gray.60}"
+          }
+        },
+        "focus": {
+          "on-dark": {
+            "$description": "Secondary interactive - focus (Dark theme)",
+            "$type": "color",
+            "$value": "{color.gray.30}"
+          },
+          "on-light": {
+            "$description": "Secondary interactive - focus (Light theme)",
+            "$type": "color",
+            "$value": "{color.gray.60}"
+          }
+        },
+        "hover": {
+          "on-dark": {
+            "$description": "Secondary interactive - hover (Dark theme)",
+            "$type": "color",
+            "$value": "{color.gray.30}"
+          },
+          "on-light": {
+            "$description": "Secondary interactive - hover (Light theme)",
+            "$type": "color",
+            "$value": "{color.gray.60}"
+          }
+        },
+        "visited": {
+          "active": {
+            "on-dark": {
+              "$description": "Secondary interactive visited - active (Dark theme)",
+              "$type": "color",
+              "$value": "{color.gray.30}"
+            },
+            "on-light": {
+              "$description": "Secondary interactive visited - active (Light theme)",
+              "$type": "color",
+              "$value": "{color.gray.60}"
+            }
+          },
+          "default": {
+            "on-dark": {
+              "$description": "Secondary interactive visited - default (Dark theme)",
+              "$type": "color",
+              "$value": "{color.gray.30}"
+            },
+            "on-light": {
+              "$description": "Secondary interactive visited - default (Light theme)",
+              "$type": "color",
+              "$value": "{color.gray.60}"
+            }
+          },
+          "focus": {
+            "on-dark": {
+              "$description": "Secondary interactive visited - focus (Dark theme)",
+              "$type": "color",
+              "$value": "{color.gray.30}"
+            },
+            "on-light": {
+              "$description": "Secondary interactive visited - focus (Light theme)",
+              "$type": "color",
+              "$value": "{color.gray.60}"
+            }
+          },
+          "hover": {
+            "on-dark": {
+              "$description": "Secondary interactive visited - hover (Dark theme)",
+              "$type": "color",
+              "$value": "{color.gray.30}"
+            },
+            "on-light": {
+              "$description": "Secondary interactive visited - hover (Light theme)",
+              "$type": "color",
+              "$value": "{color.gray.60}"
+            }
+          }
+        }
+      }
+    },
+    "orange": {
+      "$extensions": {
+        "com.redhat.ux": {
+          "order": 302
+        },
+        "isCrayon": true
+      },
+      "10": {
+        "$description": "Label - Filled (Orange) background color",
+        "$type": "color",
+        "$value": "#ffe8cc"
+      },
+      "10-hsl": {
+        "$type": "color",
+        "$value": "{color.orange.10}"
+      },
+      "10-rgb": {
+        "$type": "color",
+        "$value": "{color.orange.10}"
+      },
+      "20": {
+        "$type": "color",
+        "$value": "#fccb8f"
+      },
+      "20-hsl": {
+        "$type": "color",
+        "$value": "{color.orange.20}"
+      },
+      "20-rgb": {
+        "$type": "color",
+        "$value": "{color.orange.20}"
+      },
+      "30": {
+        "$description": "Label - Filled (Orange) border color",
+        "$type": "color",
+        "$value": "#f8ae54"
+      },
+      "30-hsl": {
+        "$type": "color",
+        "$value": "{color.orange.30}"
+      },
+      "30-rgb": {
+        "$type": "color",
+        "$value": "{color.orange.30}"
+      },
+      "40": {
+        "$description": "Label - Filled (Orange) accent color",
+        "$type": "color",
+        "$value": "#f5921b"
+      },
+      "40-hsl": {
+        "$type": "color",
+        "$value": "{color.orange.40}"
+      },
+      "40-rgb": {
+        "$type": "color",
+        "$value": "{color.orange.40}"
+      },
+      "50": {
+        "$description": "Label - Filled (Orange) accent color",
+        "$type": "color",
+        "$value": "#ca6c0f"
+      },
+      "50-hsl": {
+        "$type": "color",
+        "$value": "{color.orange.50}"
+      },
+      "50-rgb": {
+        "$type": "color",
+        "$value": "{color.orange.50}"
+      },
+      "60": {
+        "$type": "color",
+        "$value": "#9e4a06"
+      },
+      "60-hsl": {
+        "$type": "color",
+        "$value": "{color.orange.60}"
+      },
+      "60-rgb": {
+        "$type": "color",
+        "$value": "{color.orange.60}"
+      },
+      "70": {
+        "$description": "Label - Filled (Orange) text color",
+        "$type": "color",
+        "$value": "#732e00"
+      },
+      "70-hsl": {
+        "$type": "color",
+        "$value": "{color.orange.70}"
+      },
+      "70-rgb": {
+        "$type": "color",
+        "$value": "{color.orange.70}"
+      },
+      "80": {
+        "$type": "color",
+        "$value": "#4d1f00"
+      },
+      "80-hsl": {
+        "$type": "color",
+        "$value": "{color.orange.80}"
+      },
+      "80-rgb": {
+        "$type": "color",
+        "$value": "{color.orange.80}"
+      }
+    },
+    "purple": {
+      "$extensions": {
+        "com.redhat.ux": {
+          "order": 307
+        },
+        "isCrayon": true
+      },
+      "10": {
+        "$description": "Label - Filled (Purple) background color",
+        "$type": "color",
+        "$value": "#ece6ff"
+      },
+      "10-hsl": {
+        "$type": "color",
+        "$value": "{color.purple.10}"
+      },
+      "10-rgb": {
+        "$type": "color",
+        "$value": "{color.purple.10}"
+      },
+      "20": {
+        "$description": "Inline link visited hover (dark theme)",
+        "$type": "color",
+        "$value": "#d0c5f4"
+      },
+      "20-hsl": {
+        "$type": "color",
+        "$value": "{color.purple.20}"
+      },
+      "20-rgb": {
+        "$type": "color",
+        "$value": "{color.purple.20}"
+      },
+      "30": {
+        "$type": "color",
+        "$value": "#b6a6e9"
+      },
+      "30-hsl": {
+        "$type": "color",
+        "$value": "{color.purple.30}"
+      },
+      "30-rgb": {
+        "$type": "color",
+        "$value": "{color.purple.30}"
+      },
+      "40": {
+        "$description": "Inline link visited (dark theme)",
+        "$type": "color",
+        "$value": "#876fd4"
+      },
+      "40-hsl": {
+        "$type": "color",
+        "$value": "{color.purple.40}"
+      },
+      "40-rgb": {
+        "$type": "color",
+        "$value": "{color.purple.40}"
+      },
+      "50": {
+        "$type": "color",
+        "$value": "#5e40be"
+      },
+      "50-hsl": {
+        "$type": "color",
+        "$value": "{color.purple.50}"
+      },
+      "50-rgb": {
+        "$type": "color",
+        "$value": "{color.purple.50}"
+      },
+      "60": {
+        "$description": "Inline link visited (light theme)",
+        "$type": "color",
+        "$value": "#3d2785"
+      },
+      "60-hsl": {
+        "$type": "color",
+        "$value": "{color.purple.60}"
+      },
+      "60-rgb": {
+        "$type": "color",
+        "$value": "{color.purple.60}"
+      },
+      "70": {
+        "$description": "Inline link visited hover (light theme)",
+        "$type": "color",
+        "$value": "#21134d"
+      },
+      "70-hsl": {
+        "$type": "color",
+        "$value": "{color.purple.70}"
+      },
+      "70-rgb": {
+        "$type": "color",
+        "$value": "{color.purple.70}"
+      },
+      "80": {
+        "$type": "color",
+        "$value": "#1b0d33"
+      },
+      "80-hsl": {
+        "$type": "color",
+        "$value": "{color.purple.80}"
+      },
+      "80-rgb": {
+        "$type": "color",
+        "$value": "{color.purple.80}"
+      }
+    },
+    "red": {
+      "$extensions": {
+        "com.redhat.ux": {
+          "description": "Avoid using *any* red color token for danger or error messaging.",
+          "order": 300
+        },
+        "isCrayon": true
+      },
+      "10": {
+        "$type": "color",
+        "$value": "#fce3e3"
+      },
+      "10-hsl": {
+        "$type": "color",
+        "$value": "{color.red.10}"
+      },
+      "10-rgb": {
+        "$type": "color",
+        "$value": "{color.red.10}"
+      },
+      "20": {
+        "$description": "Lightest brand red",
+        "$type": "color",
+        "$value": "#fbc5c5"
+      },
+      "20-hsl": {
+        "$type": "color",
+        "$value": "{color.red.20}"
+      },
+      "20-rgb": {
+        "$type": "color",
+        "$value": "{color.red.20}"
+      },
+      "30": {
+        "$description": "Lighter brand red",
+        "$type": "color",
+        "$value": "#f9a8a8"
+      },
+      "30-hsl": {
+        "$type": "color",
+        "$value": "{color.red.30}"
+      },
+      "30-rgb": {
+        "$type": "color",
+        "$value": "{color.red.30}"
+      },
+      "40": {
+        "$description": "Light brand red",
+        "$type": "color",
+        "$value": "#f56e6e"
+      },
+      "40-hsl": {
+        "$type": "color",
+        "$value": "{color.red.40}"
+      },
+      "40-rgb": {
+        "$type": "color",
+        "$value": "{color.red.40}"
+      },
+      "50": {
+        "$description": "Brand red (light and dark theme)",
+        "$type": "color",
+        "$value": "#ee0000"
+      },
+      "50-hsl": {
+        "$type": "color",
+        "$value": "{color.red.50}"
+      },
+      "50-rgb": {
+        "$type": "color",
+        "$value": "{color.red.50}"
+      },
+      "60": {
+        "$description": "Dark brand red",
+        "$type": "color",
+        "$value": "#a60000"
+      },
+      "60-hsl": {
+        "$type": "color",
+        "$value": "{color.red.60}"
+      },
+      "60-rgb": {
+        "$type": "color",
+        "$value": "{color.red.60}"
+      },
+      "70": {
+        "$description": "Darker brand red",
+        "$type": "color",
+        "$value": "#5f0000"
+      },
+      "70-hsl": {
+        "$type": "color",
+        "$value": "{color.red.70}"
+      },
+      "70-rgb": {
+        "$type": "color",
+        "$value": "{color.red.70}"
+      },
+      "80": {
+        "$description": "Darkest brand red",
+        "$type": "color",
+        "$value": "#3f0000"
+      },
+      "80-hsl": {
+        "$type": "color",
+        "$value": "{color.red.80}"
+      },
+      "80-rgb": {
+        "$type": "color",
+        "$value": "{color.red.80}"
+      }
+    },
+    "red-orange": {
+      "$extensions": {
+        "com.redhat.ux": {
+          "description": "The red orange color is reserved for danger or error states. Do not use it anywhere else.",
+          "order": 301
+        },
+        "isCrayon": true
+      },
+      "10": {
+        "$type": "color",
+        "$value": "#ffe3d9"
+      },
+      "10-hsl": {
+        "$type": "color",
+        "$value": "{color.red-orange.10}"
+      },
+      "10-rgb": {
+        "$type": "color",
+        "$value": "{color.red-orange.10}"
+      },
+      "20": {
+        "$type": "color",
+        "$value": "#fbbea8"
+      },
+      "20-hsl": {
+        "$type": "color",
+        "$value": "{color.red-orange.20}"
+      },
+      "20-rgb": {
+        "$type": "color",
+        "$value": "{color.red-orange.20}"
+      },
+      "30": {
+        "$type": "color",
+        "$value": "#f89b78"
+      },
+      "30-hsl": {
+        "$type": "color",
+        "$value": "{color.red-orange.30}"
+      },
+      "30-rgb": {
+        "$type": "color",
+        "$value": "{color.red-orange.30}"
+      },
+      "40": {
+        "$type": "color",
+        "$value": "#f4784a"
+      },
+      "40-hsl": {
+        "$type": "color",
+        "$value": "{color.red-orange.40}"
+      },
+      "40-rgb": {
+        "$type": "color",
+        "$value": "{color.red-orange.40}"
+      },
+      "50": {
+        "$type": "color",
+        "$value": "#f0561d"
+      },
+      "50-hsl": {
+        "$type": "color",
+        "$value": "{color.red-orange.50}"
+      },
+      "50-rgb": {
+        "$type": "color",
+        "$value": "{color.red-orange.50}"
+      },
+      "60": {
+        "$type": "color",
+        "$value": "#b1380b"
+      },
+      "60-hsl": {
+        "$type": "color",
+        "$value": "{color.red-orange.60}"
+      },
+      "60-rgb": {
+        "$type": "color",
+        "$value": "{color.red-orange.60}"
+      },
+      "70": {
+        "$type": "color",
+        "$value": "#731f00"
+      },
+      "70-hsl": {
+        "$type": "color",
+        "$value": "{color.red-orange.70}"
+      },
+      "70-rgb": {
+        "$type": "color",
+        "$value": "{color.red-orange.70}"
+      }
+    },
+    "status": {
+      "$extensions": {
+        "com.redhat.ux": {
+          "order": 500
+        }
+      },
+      "caution": {
+        "$description": "Represents an action or notice which should immediately draw the attention",
+        "on-dark": {
+          "$description": "Caution status color (dark theme)",
+          "$type": "color",
+          "$value": "{color.orange.40}"
+        },
+        "on-light": {
+          "$description": "Caution status color (light theme)",
+          "$type": "color",
+          "$value": "{color.orange.50}"
+        }
+      },
+      "danger": {
+        "$description": "Represents an action which could have destructive consequences, e.g. deleting a file.",
+        "on-dark": {
+          "$description": "Danger status color (dark theme)",
+          "$type": "color",
+          "$value": "{color.red-orange.50}"
+        },
+        "on-light": {
+          "$description": "Danger status color (light theme)",
+          "$type": "color",
+          "$value": "{color.red-orange.60}"
+        }
+      },
+      "info": {
+        "$description": "Represents an action or notice which is informational, or a tip on how best to complete a task.",
+        "on-dark": {
+          "$description": "Info status color (dark theme)",
+          "$type": "color",
+          "$value": "{color.purple.30}"
+        },
+        "on-light": {
+          "$description": "Info status color (light theme)",
+          "$type": "color",
+          "$value": "{color.purple.50}"
+        }
+      },
+      "neutral": {
+        "$description": "Represents an action or notice which has neither positive nor negative connotations, is neither explicitly constructive or explicitly destructive.",
+        "on-dark": {
+          "$description": "Neutral accent color (dark theme)",
+          "$type": "color",
+          "$value": "{color.gray.30}"
+        },
+        "on-light": {
+          "$description": "Neutral accent color (light theme)",
+          "$type": "color",
+          "$value": "{color.gray.60}"
+        }
+      },
+      "note": {
+        "$description": "Represents an action or notice which is informational, or a tip on how best to complete a task.",
+        "on-dark": {
+          "$description": "Note/tip status color (dark theme)",
+          "$type": "color",
+          "$value": "{color.status.info.on-dark}"
+        },
+        "on-light": {
+          "$description": "Note/tip status color (light theme)",
+          "$type": "color",
+          "$value": "{color.status.info.on-light}"
+        }
+      },
+      "success": {
+        "$description": "Represents a notice of success.",
+        "on-dark": {
+          "$description": "Success status color (dark theme)",
+          "$type": "color",
+          "$value": "{color.green.40}"
+        },
+        "on-light": {
+          "$description": "Success status color (light theme)",
+          "$type": "color",
+          "$value": "{color.green.60}"
+        }
+      },
+      "warning": {
+        "$description": "Represents an action or notice which elicits a warning of potential danger",
+        "on-dark": {
+          "$description": "Warning status color (dark theme)",
+          "$type": "color",
+          "$value": "{color.yellow.30}"
+        },
+        "on-light": {
+          "$description": "Warning status color (light theme)",
+          "$type": "color",
+          "$value": "{color.yellow.40}"
+        }
+      }
+    },
+    "surface": {
+      "$extensions": {
+        "com.redhat.ux": {
+          "order": 250
+        }
+      },
+      "dark": {
+        "$description": "Tertiary surface (dark theme)",
+        "$type": "color",
+        "$value": "{color.gray.70}"
+      },
+      "dark-alt": {
+        "$description": "Alternative tertiary surface (not available for use with context provider)",
+        "$type": "color",
+        "$value": "{color.gray.80}"
+      },
+      "darker": {
+        "$description": "Secondary surface (dark theme)",
+        "$type": "color",
+        "$value": "{color.gray.90}"
+      },
+      "darkest": {
+        "$description": "Primary surface (dark theme)",
+        "$type": "color",
+        "$value": "{color.gray.95}"
+      },
+      "light": {
+        "$description": "Secondary surface (light theme)",
+        "$type": "color",
+        "$value": "{color.gray.20}"
+      },
+      "lighter": {
+        "$description": "Tertiary surface (light theme)",
+        "$type": "color",
+        "$value": "{color.gray.10}"
+      },
+      "lightest": {
+        "$description": "Primary surface (light theme)",
+        "$type": "color",
+        "$value": "{color.white}"
+      },
+      "status": {
+        "caution": {
+          "on-dark": {
+            "$description": "Caution status surface color (dark theme)",
+            "$type": "color",
+            "$value": "{color.orange.10}"
+          },
+          "on-light": {
+            "$description": "Caution status surface color (light theme)",
+            "$type": "color",
+            "$value": "{color.orange.10}"
+          }
+        },
+        "danger": {
+          "on-dark": {
+            "$description": "Danger status surface color (dark theme)",
+            "$type": "color",
+            "$value": "{color.red-orange.10}"
+          },
+          "on-light": {
+            "$description": "Danger status surface color (light theme)",
+            "$type": "color",
+            "$value": "{color.red-orange.10}"
+          }
+        },
+        "default": {
+          "on-dark": {
+            "$description": "Default status surface color (dark theme)",
+            "$type": "color",
+            "$value": "{color.surface.status.neutral.on-light}"
+          },
+          "on-light": {
+            "$description": "Default status surface color (light theme)",
+            "$type": "color",
+            "$value": "{color.surface.status.neutral.on-light}"
+          }
+        },
+        "info": {
+          "on-dark": {
+            "$description": "Info status surface color (dark theme)",
+            "$type": "color",
+            "$value": "{color.purple.10}"
+          },
+          "on-light": {
+            "$description": "Info status surface color (light theme)",
+            "$type": "color",
+            "$value": "{color.purple.10}"
+          }
+        },
+        "neutral": {
+          "on-dark": {
+            "$description": "Neutral status surface color (dark theme)",
+            "$type": "color",
+            "$value": "{color.gray.10}"
+          },
+          "on-light": {
+            "$description": "Neutral status surface color (light theme)",
+            "$type": "color",
+            "$value": "{color.gray.10}"
+          }
+        },
+        "success": {
+          "on-dark": {
+            "$description": "Success status surface color (dark theme)",
+            "$type": "color",
+            "$value": "{color.green.10}"
+          },
+          "on-light": {
+            "$description": "Success status surface color (light theme)",
+            "$type": "color",
+            "$value": "{color.green.10}"
+          }
+        },
+        "warning": {
+          "on-dark": {
+            "$description": "Warning status surface color (dark theme)",
+            "$type": "color",
+            "$value": "{color.yellow.70}"
+          },
+          "on-light": {
+            "$description": "Warning status surface color (light theme)",
+            "$type": "color",
+            "$value": "{color.yellow.10}"
+          }
+        }
+      }
+    },
+    "teal": {
+      "$extensions": {
+        "com.redhat.ux": {
+          "order": 305
+        },
+        "isCrayon": true
+      },
+      "10": {
+        "$description": "Alert - Default background",
+        "$type": "color",
+        "$value": "#daf2f2"
+      },
+      "10-hsl": {
+        "$type": "color",
+        "$value": "{color.teal.10}"
+      },
+      "10-rgb": {
+        "$type": "color",
+        "$value": "{color.teal.10}"
+      },
+      "20": {
+        "$type": "color",
+        "$value": "#b9e5e5"
+      },
+      "20-hsl": {
+        "$type": "color",
+        "$value": "{color.teal.20}"
+      },
+      "20-rgb": {
+        "$type": "color",
+        "$value": "{color.teal.20}"
+      },
+      "30": {
+        "$description": "Label (Cyan) border color",
+        "$type": "color",
+        "$value": "#9ad8d8"
+      },
+      "30-hsl": {
+        "$type": "color",
+        "$value": "{color.teal.30}"
+      },
+      "30-rgb": {
+        "$type": "color",
+        "$value": "{color.teal.30}"
+      },
+      "40": {
+        "$type": "color",
+        "$value": "#63bdbd"
+      },
+      "40-hsl": {
+        "$type": "color",
+        "$value": "{color.teal.40}"
+      },
+      "40-rgb": {
+        "$type": "color",
+        "$value": "{color.teal.40}"
+      },
+      "50": {
+        "$description": "Alert - Default accent",
+        "$type": "color",
+        "$value": "#37a3a3"
+      },
+      "50-hsl": {
+        "$type": "color",
+        "$value": "{color.teal.50}"
+      },
+      "50-rgb": {
+        "$type": "color",
+        "$value": "{color.teal.50}"
+      },
+      "60": {
+        "$type": "color",
+        "$value": "#147878"
+      },
+      "60-hsl": {
+        "$type": "color",
+        "$value": "{color.teal.60}"
+      },
+      "60-rgb": {
+        "$type": "color",
+        "$value": "{color.teal.60}"
+      },
+      "70": {
+        "$description": "Alert - Default title text",
+        "$type": "color",
+        "$value": "#004d4d"
+      },
+      "70-hsl": {
+        "$type": "color",
+        "$value": "{color.teal.70}"
+      },
+      "70-rgb": {
+        "$type": "color",
+        "$value": "{color.teal.70}"
+      },
+      "80": {
+        "$type": "color",
+        "$value": "#003333"
+      },
+      "80-hsl": {
+        "$type": "color",
+        "$value": "{color.teal.80}"
+      },
+      "80-rgb": {
+        "$type": "color",
+        "$value": "{color.teal.80}"
+      }
+    },
+    "text": {
+      "$extensions": {
+        "com.redhat.ux": {
+          "collapse": true,
+          "description": "Each theme features two shades of gray for text, Primary and Secondary.\n#### Accessibility\nContrast is important when choosing colors for UI elements for visitors. Awareness of standards and best practices is the key to an accessible color palette. We are committed to complying with the [Web Content Accessibility Guidelines AA][wcag] standard contrast ratios. We choose colors that support usability by ensuring sufficient color contrast between elements so that visitors with low vision can browse our web properties.\n##### Text on backgrounds\nBlack text should be used on light backgrounds and vice versa. If a page features both light and dark themes, UI elements and text should be placed on contrasting background colors. Layouts with colored backgrounds or a photo changes the rules regarding the placement of text, so use white or black text for body copy applications.\n\n[wcag]: https://www.w3.org/WAI/WCAG2AA-Conformance.html",
+          "heading": "Text color"
+        }
+      },
+      "brand": {
+        "on-dark": {
+          "$description": "Brand text color for dark theme",
+          "$type": "color",
+          "$value": "{color.brand.red.on-dark}"
+        },
+        "on-light": {
+          "$description": "Brand text color for light theme",
+          "$type": "color",
+          "$value": "{color.brand.red.on-light}"
+        }
+      },
+      "primary": {
+        "on-dark": {
+          "$description": "Primary text color for dark theme",
+          "$type": "color",
+          "$value": "{color.white}"
+        },
+        "on-light": {
+          "$description": "Primary text color for light theme",
+          "$type": "color",
+          "$value": "{color.gray.95}"
+        }
+      },
+      "secondary": {
+        "on-dark": {
+          "$description": "Secondary text color for dark theme",
+          "$type": "color",
+          "$value": "{color.gray.30}"
+        },
+        "on-light": {
+          "$description": "Secondary text color for light theme",
+          "$type": "color",
+          "$value": "{color.gray.60}"
+        }
+      }
+    },
+    "white": {
+      "$description": "Lightest surface (light theme) or primary text (dark theme)",
+      "$type": "color",
+      "$value": "#ffffff"
+    },
+    "white-hsl": {
+      "$type": "color",
+      "$value": "{color.white}"
+    },
+    "white-rgb": {
+      "$type": "color",
+      "$value": "{color.white}"
+    },
+    "yellow": {
+      "$extensions": {
+        "com.redhat.ux": {
+          "order": 303
+        },
+        "isCrayon": true
+      },
+      "10": {
+        "$description": "Alert - Warning background",
+        "$type": "color",
+        "$value": "#fff4cc"
+      },
+      "10-hsl": {
+        "$type": "color",
+        "$value": "{color.yellow.10}"
+      },
+      "10-rgb": {
+        "$type": "color",
+        "$value": "{color.yellow.10}"
+      },
+      "20": {
+        "$type": "color",
+        "$value": "#ffe072"
+      },
+      "20-hsl": {
+        "$type": "color",
+        "$value": "{color.yellow.20}"
+      },
+      "20-rgb": {
+        "$type": "color",
+        "$value": "{color.yellow.20}"
+      },
+      "30": {
+        "$type": "color",
+        "$value": "#ffcc17"
+      },
+      "30-hsl": {
+        "$type": "color",
+        "$value": "{color.yellow.30}"
+      },
+      "30-rgb": {
+        "$type": "color",
+        "$value": "{color.yellow.30}"
+      },
+      "40": {
+        "$description": "Alert - Warning accent",
+        "$type": "color",
+        "$value": "#dca614"
+      },
+      "40-hsl": {
+        "$type": "color",
+        "$value": "{color.yellow.40}"
+      },
+      "40-rgb": {
+        "$type": "color",
+        "$value": "{color.yellow.40}"
+      },
+      "50": {
+        "$type": "color",
+        "$value": "#b98412"
+      },
+      "50-hsl": {
+        "$type": "color",
+        "$value": "{color.yellow.50}"
+      },
+      "50-rgb": {
+        "$type": "color",
+        "$value": "{color.yellow.50}"
+      },
+      "60": {
+        "$type": "color",
+        "$value": "#96640f"
+      },
+      "60-hsl": {
+        "$type": "color",
+        "$value": "{color.yellow.60}"
+      },
+      "60-rgb": {
+        "$type": "color",
+        "$value": "{color.yellow.60}"
+      },
+      "70": {
+        "$description": "Alert - Warning title text",
+        "$type": "color",
+        "$value": "#73480b"
+      },
+      "70-hsl": {
+        "$type": "color",
+        "$value": "{color.yellow.70}"
+      },
+      "70-rgb": {
+        "$type": "color",
+        "$value": "{color.yellow.70}"
+      },
+      "80": {
+        "$type": "color",
+        "$value": "#54330b"
+      },
+      "80-hsl": {
+        "$type": "color",
+        "$value": "{color.yellow.80}"
+      },
+      "80-rgb": {
+        "$type": "color",
+        "$value": "{color.yellow.80}"
+      }
+    }
+  },
+  "font": {
+    "$extensions": {
+      "com.redhat.ux": {
+        "description": "To learn more about how to use text, visit the [typography page](https://ux.redhat.com/foundations/typography).",
+        "heading": "Typography"
+      }
+    },
+    "family": {
+      "$extensions": {
+        "com.redhat.ux": {
+          "description": "[Red Hat Fonts](https://github.com/RedHatOfficial/RedHatFont), designed by Jeremy Mickel\nand released under Open Font License, form the typographic basis for the Red Hat Design\nSystem. Pages using non-latin characters should fall back to\n[Noto Sans](https://notofonts.github.io/). By loading language-specific Noto\nSans fonts, \u003cabbr title=\"Red Hat Design System\"\u003eRHDS\u003c/abbr\u003e can accomodate mixed-language\ncontent including \u003cspan lang=\"ar\"\u003eالعربية\u003c/span\u003e, \u003cspan lang=\"he\"\u003eעברית\u003c/span\u003e,\n\u003cspan lang=\"jp\"\u003e日本語\u003c/span\u003e, \u003cspan lang=\"kr\"\u003e조선말\u003c/span\u003e, \u003cspan lang=\"ml\"\u003eമലയാളം\u003c/span\u003e,\n\u003cspan lang=\"zh\"\u003e汉语\u003c/span\u003e, \u003cspan lang=\"zh\"\u003e漢語\u003c/span\u003e, or \u003cspan lang=\"th\"\u003eภาษาไทย\u003c/span\u003e.\n\nUsers may load those fonts from Google Fonts, for example with this HTML snippet pasted\ninto the `\u003chead\u003e`:\n\n```html\n\u003clink rel=\"preconnect\" href=\"https://fonts.googleapis.com\"\u003e\n\u003clink rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin\u003e\n\u003clink href=\"https://fonts.googleapis.com/css2?family=Noto+Sans+Hebrew:wght@500;700\u0026family=Noto+Sans+JP:wght@500;700\u0026family=Noto+Sans+KR:wght@500;700\u0026family=Noto+Sans+Malayalam:wght@500;700\u0026family=Noto+Sans+SC:wght@500;700\u0026family=Noto+Sans+TC:wght@500;700\u0026family=Noto+Sans+Tamil:wght@500;700\u0026family=Noto+Sans+Thai:wght@500;700\u0026display=swap\" rel=\"stylesheet\"\u003e\n```",
+          "heading": "Font family"
+        }
+      },
+      "body-text": {
+        "$description": "Body text font family",
+        "$extensions": {
+          "com.redhat.ux": {
+            "example": "Body text"
+          }
+        },
+        "$type": "fontFamily",
+        "$value": [
+          "RedHatText",
+          "Red Hat Text",
+          "Helvetica",
+          "Arial",
+          "sans-serif"
+        ]
+      },
+      "code": {
+        "$description": "Code font family",
+        "$extensions": {
+          "com.redhat.ux": {
+            "example": "Code"
+          }
+        },
+        "$type": "fontFamily",
+        "$value": [
+          "RedHatMono",
+          "Red Hat Mono",
+          "Courier New",
+          "Courier",
+          "monospace"
+        ]
+      },
+      "heading": {
+        "$description": "Heading font family",
+        "$extensions": {
+          "com.redhat.ux": {
+            "example": "Display"
+          }
+        },
+        "$type": "fontFamily",
+        "$value": [
+          "RedHatDisplay",
+          "Red Hat Display",
+          "Helvetica",
+          "Arial",
+          "sans-serif"
+        ]
+      },
+      "lang-ar": {
+        "$description": "Arabic font family",
+        "$extensions": {
+          "com.redhat.ux": {
+            "example": "Arabic"
+          }
+        },
+        "$type": "fontFamily",
+        "$value": [
+          "Noto Sans Arabic"
+        ]
+      },
+      "lang-he": {
+        "$description": "Hebrew font family",
+        "$extensions": {
+          "com.redhat.ux": {
+            "example": "Hebrew"
+          }
+        },
+        "$type": "fontFamily",
+        "$value": [
+          "Noto Sans Hebrew"
+        ]
+      },
+      "lang-hi": {
+        "$description": "Malayalam font family",
+        "$extensions": {
+          "com.redhat.ux": {
+            "example": "Malayalam"
+          }
+        },
+        "$type": "fontFamily",
+        "$value": [
+          "Noto Sans Malayalam"
+        ]
+      },
+      "lang-ja": {
+        "$description": "Japanese font family",
+        "$extensions": {
+          "com.redhat.ux": {
+            "example": "Japanese"
+          }
+        },
+        "$type": "fontFamily",
+        "$value": [
+          "Noto Sans JP"
+        ]
+      },
+      "lang-ko": {
+        "$description": "Korean font family",
+        "$extensions": {
+          "com.redhat.ux": {
+            "example": "Korean"
+          }
+        },
+        "$type": "fontFamily",
+        "$value": [
+          "Noto Sans KR"
+        ]
+      },
+      "lang-th": {
+        "$description": "Thai font family",
+        "$extensions": {
+          "com.redhat.ux": {
+            "example": "Thai"
+          }
+        },
+        "$type": "fontFamily",
+        "$value": [
+          "Noto Sans Thai"
+        ]
+      },
+      "lang-zh-cn": {
+        "$description": "Simplified Chinese font family",
+        "$extensions": {
+          "com.redhat.ux": {
+            "example": "Simplified Chinese"
+          }
+        },
+        "$type": "fontFamily",
+        "$value": [
+          "Noto Sans SC"
+        ]
+      },
+      "lang-zh-hk": {
+        "$description": "Traditional Chinese font family",
+        "$extensions": {
+          "com.redhat.ux": {
+            "example": "Traditional Chinese"
+          }
+        },
+        "$type": "fontFamily",
+        "$value": [
+          "Noto Sans TC"
+        ]
+      }
+    },
+    "size": {
+      "body-text": {
+        "$extensions": {
+          "com.redhat.ux": {
+            "example": "Aa",
+            "heading": "Font size (text)"
+          }
+        },
+        "2xl": {
+          "$description": "24px font size",
+          "$type": "dimension",
+          "$value": "1.5rem"
+        },
+        "lg": {
+          "$description": "18px font size",
+          "$type": "dimension",
+          "$value": "1.125rem"
+        },
+        "md": {
+          "$description": "16px font size",
+          "$type": "dimension",
+          "$value": "1rem"
+        },
+        "sm": {
+          "$description": "14px font size",
+          "$type": "dimension",
+          "$value": "0.875rem"
+        },
+        "xl": {
+          "$description": "20px font size",
+          "$type": "dimension",
+          "$value": "1.25rem"
+        },
+        "xs": {
+          "$description": "12px font size",
+          "$type": "dimension",
+          "$value": "0.75rem"
+        }
+      },
+      "code": {
+        "$extensions": {
+          "com.redhat.ux": {
+            "fontFamily": "var(--rh-font-family-code)",
+            "heading": "Font size (code)"
+          }
+        },
+        "2xl": {
+          "$description": "24px font size",
+          "$type": "dimension",
+          "$value": "{font.size.body-text.2xl}"
+        },
+        "lg": {
+          "$description": "18px font size",
+          "$type": "dimension",
+          "$value": "{font.size.body-text.lg}"
+        },
+        "md": {
+          "$description": "16px font size",
+          "$type": "dimension",
+          "$value": "{font.size.body-text.md}"
+        },
+        "sm": {
+          "$description": "14px font size",
+          "$type": "dimension",
+          "$value": "{font.size.body-text.sm}"
+        },
+        "xl": {
+          "$description": "20px font size",
+          "$type": "dimension",
+          "$value": "{font.size.body-text.xl}"
+        },
+        "xs": {
+          "$description": "12px font size",
+          "$type": "dimension",
+          "$value": "{font.size.body-text.xs}"
+        }
+      },
+      "heading": {
+        "$extensions": {
+          "com.redhat.ux": {
+            "fontFamily": "var(--rh-font-family-heading)",
+            "heading": "Font size (headings)"
+          }
+        },
+        "2xl": {
+          "$description": "h1 heading font size",
+          "$type": "dimension",
+          "$value": "3rem"
+        },
+        "lg": {
+          "$description": "h3 heading font size",
+          "$type": "dimension",
+          "$value": "2.25rem"
+        },
+        "md": {
+          "$description": "h4 heading font size",
+          "$type": "dimension",
+          "$value": "1.75rem"
+        },
+        "sm": {
+          "$description": "h5 heading font size",
+          "$type": "dimension",
+          "$value": "1.5rem"
+        },
+        "xl": {
+          "$description": "h2 heading font size",
+          "$type": "dimension",
+          "$value": "2.5rem"
+        },
+        "xs": {
+          "$description": "h6 heading font size",
+          "$type": "dimension",
+          "$value": "1.25rem"
+        }
+      }
+    },
+    "weight": {
+      "$extensions": {
+        "com.redhat.ux": {
+          "heading": "Font weights"
+        }
+      },
+      "body-text": {
+        "$extensions": {
+          "com.redhat.ux": {
+            "heading": "Font weights (body)"
+          }
+        },
+        "medium": {
+          "$description": "Medium font weight",
+          "$type": "fontWeight",
+          "$value": 500
+        },
+        "regular": {
+          "$description": "Regular font weight",
+          "$type": "fontWeight",
+          "$value": 400
+        }
+      },
+      "code": {
+        "$extensions": {
+          "com.redhat.ux": {
+            "fontFamily": "var(--rh-font-family-code)",
+            "heading": "Font weights (code)"
+          }
+        },
+        "medium": {
+          "$description": "Medium font weight",
+          "$type": "fontWeight",
+          "$value": 500
+        },
+        "regular": {
+          "$description": "Regular font weight",
+          "$type": "fontWeight",
+          "$value": 400
+        }
+      },
+      "heading": {
+        "$extensions": {
+          "com.redhat.ux": {
+            "fontFamily": "var(--rh-font-family-heading)",
+            "heading": "Font weights (headings)"
+          }
+        },
+        "bold": {
+          "$description": "Bold font weight for headings",
+          "$type": "fontWeight",
+          "$value": 700
+        },
+        "medium": {
+          "$description": "Medium font weight for headings",
+          "$type": "fontWeight",
+          "$value": 500
+        },
+        "regular": {
+          "$description": "Regular font weight for headings",
+          "$type": "fontWeight",
+          "$value": 400
+        }
+      }
+    }
+  },
+  "length": {
+    "2xl": {
+      "$description": "32px length token",
+      "$type": "dimension",
+      "$value": "32px"
+    },
+    "2xs": {
+      "$description": "3px length token",
+      "$type": "dimension",
+      "$value": "3px"
+    },
+    "3xl": {
+      "$description": "48px length token",
+      "$type": "dimension",
+      "$value": "48px"
+    },
+    "3xs": {
+      "$description": "2px length token",
+      "$type": "dimension",
+      "$value": "2px"
+    },
+    "4xl": {
+      "$description": "64px length token",
+      "$type": "dimension",
+      "$value": "64px"
+    },
+    "4xs": {
+      "$description": "1px length token",
+      "$type": "dimension",
+      "$value": "1px"
+    },
+    "5xl": {
+      "$description": "80px length token",
+      "$type": "dimension",
+      "$value": "80px"
+    },
+    "6xl": {
+      "$description": "96px length token",
+      "$type": "dimension",
+      "$value": "96px"
+    },
+    "7xl": {
+      "$description": "128px length token",
+      "$type": "dimension",
+      "$value": "128px"
+    },
+    "lg": {
+      "$description": "16px length token",
+      "$type": "dimension",
+      "$value": "16px"
+    },
+    "md": {
+      "$description": "8px length token",
+      "$type": "dimension",
+      "$value": "8px"
+    },
+    "sm": {
+      "$description": "6px length token",
+      "$type": "dimension",
+      "$value": "6px"
+    },
+    "xl": {
+      "$description": "24px length token",
+      "$type": "dimension",
+      "$value": "24px"
+    },
+    "xs": {
+      "$description": "4px length token",
+      "$type": "dimension",
+      "$value": "4px"
+    }
+  },
+  "letter-spacing": {
+    "body": {
+      "text": {
+        "$description": "Extra letter spacing for small body text sizes",
+        "$extensions": {
+          "com.style-dictionary": {
+            "sourceType": "letter-spacing"
+          }
+        },
+        "$type": "dimension",
+        "$value": "0.0125rem"
+      }
+    }
+  },
+  "line-height": {
+    "$extensions": {
+      "com.redhat.ux": {
+        "example": "Line\u003cbr/\u003eheight",
+        "heading": "Line height"
+      }
+    },
+    "body-text": {
+      "$description": "Line height for body text",
+      "$extensions": {
+        "com.style-dictionary": {
+          "sourceType": "line-height"
+        }
+      },
+      "$type": "number",
+      "$value": 1.5
+    },
+    "code": {
+      "$description": "Line height for code",
+      "$extensions": {
+        "com.style-dictionary": {
+          "sourceType": "line-height"
+        }
+      },
+      "$type": "number",
+      "$value": 1.5
+    },
+    "heading": {
+      "$description": "Line height for headings",
+      "$extensions": {
+        "com.style-dictionary": {
+          "sourceType": "line-height"
+        }
+      },
+      "$type": "number",
+      "$value": 1.3
+    }
+  },
+  "media": {
+    "$extensions": {
+      "com.redhat.ux": {
+        "description": {},
+        "descriptionFile": "media.md",
+        "heading": "Media Queries",
+        "use": "breakpoint"
+      }
+    },
+    "2xl": {
+      "$description": "Desktop Large",
+      "$extensions": {
+        "com.redhat.ux": {
+          "title": "Extra Extra Large"
+        },
+        "com.rhds.mcp": {
+          "vendorType": "mediaQuery"
+        }
+      },
+      "$type": "mediaQuery",
+      "$value": {
+        "min-width": "{breakpoint.2xl}"
+      }
+    },
+    "lg": {
+      "$description": "Tablet landscape",
+      "$extensions": {
+        "com.redhat.ux": {
+          "title": "Large"
+        },
+        "com.rhds.mcp": {
+          "vendorType": "mediaQuery"
+        }
+      },
+      "$type": "mediaQuery",
+      "$value": {
+        "min-width": "{breakpoint.lg}"
+      }
+    },
+    "md": {
+      "$description": "Tablet portrait",
+      "$extensions": {
+        "com.redhat.ux": {
+          "title": "Medium"
+        },
+        "com.rhds.mcp": {
+          "vendorType": "mediaQuery"
+        }
+      },
+      "$type": "mediaQuery",
+      "$value": {
+        "min-width": "{breakpoint.md}"
+      }
+    },
+    "sm": {
+      "$description": "Mobile landscape",
+      "$extensions": {
+        "com.redhat.ux": {
+          "title": "Small"
+        },
+        "com.rhds.mcp": {
+          "vendorType": "mediaQuery"
+        }
+      },
+      "$type": "mediaQuery",
+      "$value": {
+        "min-width": "{breakpoint.sm}"
+      }
+    },
+    "xl": {
+      "$description": "Desktop small",
+      "$extensions": {
+        "com.redhat.ux": {
+          "title": "Extra Large"
+        },
+        "com.rhds.mcp": {
+          "vendorType": "mediaQuery"
+        }
+      },
+      "$type": "mediaQuery",
+      "$value": {
+        "min-width": "{breakpoint.xl}"
+      }
+    },
+    "xs": {
+      "$description": "Mobile portrait",
+      "$extensions": {
+        "com.redhat.ux": {
+          "title": "Extra Small"
+        },
+        "com.rhds.mcp": {
+          "vendorType": "mediaQuery"
+        }
+      },
+      "$type": "mediaQuery",
+      "$value": {
+        "min-width": "{breakpoint.xs}"
+      }
+    }
+  },
+  "opacity": {
+    "0": {
+      "$description": "0% opacity",
+      "$extensions": {
+        "com.style-dictionary": {
+          "sourceType": "opacity"
+        }
+      },
+      "$type": "number",
+      "$value": 0
+    },
+    "10": {
+      "$description": "10% opacity",
+      "$extensions": {
+        "com.style-dictionary": {
+          "sourceType": "opacity"
+        }
+      },
+      "$type": "number",
+      "$value": 0.1
+    },
+    "100": {
+      "$description": "100% opacity",
+      "$extensions": {
+        "com.style-dictionary": {
+          "sourceType": "opacity"
+        }
+      },
+      "$type": "number",
+      "$value": 1
+    },
+    "20": {
+      "$description": "20% opacity",
+      "$extensions": {
+        "com.style-dictionary": {
+          "sourceType": "opacity"
+        }
+      },
+      "$type": "number",
+      "$value": 0.2
+    },
+    "30": {
+      "$description": "30% opacity",
+      "$extensions": {
+        "com.style-dictionary": {
+          "sourceType": "opacity"
+        }
+      },
+      "$type": "number",
+      "$value": 0.3
+    },
+    "40": {
+      "$description": "40% opacity",
+      "$extensions": {
+        "com.style-dictionary": {
+          "sourceType": "opacity"
+        }
+      },
+      "$type": "number",
+      "$value": 0.4
+    },
+    "50": {
+      "$description": "50% opacity",
+      "$extensions": {
+        "com.style-dictionary": {
+          "sourceType": "opacity"
+        }
+      },
+      "$type": "number",
+      "$value": 0.5
+    },
+    "60": {
+      "$description": "60% opacity",
+      "$extensions": {
+        "com.style-dictionary": {
+          "sourceType": "opacity"
+        }
+      },
+      "$type": "number",
+      "$value": 0.6
+    },
+    "70": {
+      "$description": "70% opacity",
+      "$extensions": {
+        "com.style-dictionary": {
+          "sourceType": "opacity"
+        }
+      },
+      "$type": "number",
+      "$value": 0.7
+    },
+    "80": {
+      "$description": "80% opacity",
+      "$extensions": {
+        "com.style-dictionary": {
+          "sourceType": "opacity"
+        }
+      },
+      "$type": "number",
+      "$value": 0.8
+    },
+    "90": {
+      "$description": "90% opacity",
+      "$extensions": {
+        "com.style-dictionary": {
+          "sourceType": "opacity"
+        }
+      },
+      "$type": "number",
+      "$value": 0.9
+    }
+  },
+  "size": {
+    "icon": {
+      "$extensions": {
+        "com.redhat.ux": {
+          "heading": "Icon"
+        }
+      },
+      "01": {
+        "$description": "16px icon box",
+        "$type": "dimension",
+        "$value": "{length.lg}"
+      },
+      "02": {
+        "$description": "24px icon box",
+        "$type": "dimension",
+        "$value": "{length.xl}"
+      },
+      "03": {
+        "$description": "32px icon box",
+        "$type": "dimension",
+        "$value": "{length.2xl}"
+      },
+      "04": {
+        "$description": "40px icon box",
+        "$type": "dimension",
+        "$value": "40px"
+      },
+      "05": {
+        "$description": "48px icon box",
+        "$type": "dimension",
+        "$value": "{length.3xl}"
+      },
+      "06": {
+        "$description": "64px icon box",
+        "$type": "dimension",
+        "$value": "{length.4xl}"
+      },
+      "07": {
+        "$description": "80px icon box",
+        "$type": "dimension",
+        "$value": "{length.5xl}"
+      },
+      "08": {
+        "$description": "96px icon box",
+        "$type": "dimension",
+        "$value": "{length.6xl}"
+      },
+      "09": {
+        "$description": "128px icon box",
+        "$type": "dimension",
+        "$value": "{length.7xl}"
+      }
+    }
+  },
+  "space": {
+    "$extensions": {
+      "com.redhat.ux": {
+        "description": "Spacers are visual cues used to define fixed amounts of space between elements. They make it easy for designers to maintain consistent spacing across components and patterns as well as simplify the handoff process between designers and developers. Consistent spacing helps maintain balance and rhythm across the system."
+      }
+    },
+    "2xl": {
+      "$description": "32px spacer",
+      "$extensions": {
+        "com.redhat.ux": {
+          "color": "#1893d2"
+        }
+      },
+      "$type": "dimension",
+      "$value": "{length.2xl}"
+    },
+    "3xl": {
+      "$description": "48px spacer",
+      "$extensions": {
+        "com.redhat.ux": {
+          "color": "#6743c6"
+        }
+      },
+      "$type": "dimension",
+      "$value": "{length.3xl}"
+    },
+    "4xl": {
+      "$description": "64px spacer",
+      "$extensions": {
+        "com.redhat.ux": {
+          "color": "#341974"
+        }
+      },
+      "$type": "dimension",
+      "$value": "{length.4xl}"
+    },
+    "5xl": {
+      "$description": "80px spacer",
+      "$extensions": {
+        "com.redhat.ux": {
+          "color": "#b300b3"
+        }
+      },
+      "$type": "dimension",
+      "$value": "{length.5xl}"
+    },
+    "6xl": {
+      "$description": "96px spacer",
+      "$extensions": {
+        "com.redhat.ux": {
+          "color": "#f279a1"
+        }
+      },
+      "$type": "dimension",
+      "$value": "{length.6xl}"
+    },
+    "7xl": {
+      "$description": "128px spacer",
+      "$extensions": {
+        "com.redhat.ux": {
+          "color": "#bf1d1d"
+        }
+      },
+      "$type": "dimension",
+      "$value": "{length.7xl}"
+    },
+    "lg": {
+      "$description": "16px spacer",
+      "$extensions": {
+        "com.redhat.ux": {
+          "color": "#51a549"
+        }
+      },
+      "$type": "dimension",
+      "$value": "{length.lg}"
+    },
+    "md": {
+      "$description": "8px spacer",
+      "$extensions": {
+        "com.redhat.ux": {
+          "color": "#9bd917"
+        }
+      },
+      "$type": "dimension",
+      "$value": "{length.md}"
+    },
+    "sm": {
+      "$description": "6px spacer",
+      "$extensions": {
+        "com.redhat.ux": {
+          "color": "#f3d53c"
+        }
+      },
+      "$type": "dimension",
+      "$value": "{length.sm}"
+    },
+    "xl": {
+      "$description": "24px spacer",
+      "$extensions": {
+        "com.redhat.ux": {
+          "color": "#1b8793"
+        }
+      },
+      "$type": "dimension",
+      "$value": "{length.xl}"
+    },
+    "xs": {
+      "$description": "4px spacer",
+      "$extensions": {
+        "com.redhat.ux": {
+          "color": "#ec861b"
+        }
+      },
+      "$type": "dimension",
+      "$value": "{length.xs}"
+    }
+  }
+}

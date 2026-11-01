@@ -9,22 +9,56 @@ here before a public release. See docs/PLAN.md section 9.3.
 Go dependencies
 ===============
 
-Module                                        Version  License       Copyright
---------------------------------------------  -------  ------------  ------------------------------------------------
-github.com/modelcontextprotocol/go-sdk        v1.8.0   MIT and       Copyright (c) 2024-2025 Model Context Protocol
-                                                       Apache-2.0    a Series of LF Projects, LLC.
-                                                       (code);
-                                                       CC-BY-4.0
-                                                       (docs)
-github.com/google/jsonschema-go               v0.4.3   MIT           Copyright (c) 2025 JSON Schema Go Project Authors
-github.com/segmentio/asm                      v1.1.3   MIT           Copyright (c) 2021 Segment
-github.com/segmentio/encoding                 v0.5.4   MIT           Copyright (c) 2019 Segment.io, Inc.
-github.com/yosida95/uritemplate/v3            v3.0.2   BSD-3-Clause  Copyright (C) 2016, Kohei YOSHIDA
-                                                                     <https://yosida95.com/>. All rights reserved.
-golang.org/x/oauth2                           v0.35.0  BSD-3-Clause  Copyright 2009 The Go Authors.
-golang.org/x/sync                             v0.20.0  BSD-3-Clause  Copyright 2009 The Go Authors.
-golang.org/x/sys                              v0.41.0  BSD-3-Clause  Copyright 2009 The Go Authors.
-golang.org/x/time                             v0.15.0  BSD-3-Clause  Copyright 2009 The Go Authors.
+Module                                        Version  License            Copyright
+--------------------------------------------  -------  -----------------  ------------------------------------------------
+bennypowers.dev/cem                           pinned   GPL-3.0-or-later   Copyright © 2025 Benny Powers
+bennypowers.dev/asimonim                      pinned   GPL-3.0-or-later   Copyright 2026 Benny Powers
+github.com/modelcontextprotocol/go-sdk        v1.8.0   MIT and            Copyright (c) 2024-2025 Model Context Protocol
+                                                       Apache-2.0 (code); a Series of LF Projects, LLC.
+                                                       CC-BY-4.0 (docs)
+github.com/google/jsonschema-go               v0.4.3   MIT                Copyright (c) 2025 JSON Schema Go Project Authors
+github.com/segmentio/asm                      v1.1.3   MIT                Copyright (c) 2021 Segment
+github.com/segmentio/encoding                 v0.5.4   MIT                Copyright (c) 2019 Segment.io, Inc.
+github.com/tree-sitter/go-tree-sitter         v0.25.0  MIT                Copyright (c) 2024 Amaan Qureshi
+github.com/tree-sitter/tree-sitter-css        v0.23.2  MIT                Copyright (c) 2018 Max Brunsfeld
+github.com/tree-sitter/tree-sitter-html       v0.23.2  MIT                Copyright (c) 2014 Max Brunsfeld
+github.com/tree-sitter/tree-sitter-typescript v0.23.2 MIT                Copyright (c) 2017 Max Brunsfeld
+github.com/tidwall/jsonc                      v0.3.3   MIT                Copyright (c) 2021 Josh Baker
+github.com/yosida95/uritemplate/v3            v3.0.2   BSD-3-Clause       Copyright (C) 2016, Kohei YOSHIDA
+                                                                    <https://yosida95.com/>. All rights reserved.
+go.lsp.dev/protocol                           v1.0.1   BSD-3-Clause       Copyright (c) 2019 The Go Language Server Authors
+go.lsp.dev/jsonrpc2                           v1.0.1   BSD-3-Clause       Copyright (c) 2019 The Go Language Server Authors
+go.lsp.dev/uri                                v1.0.1   BSD-3-Clause       Copyright (c) 2019 The Go Language Server Authors
+golang.org/x/mod                              v0.36.0  BSD-3-Clause       Copyright 2009 The Go Authors.
+golang.org/x/net                              v0.54.0  BSD-3-Clause       Copyright 2009 The Go Authors.
+golang.org/x/oauth2                           v0.35.0  BSD-3-Clause       Copyright 2009 The Go Authors.
+golang.org/x/sync                             v0.21.0  BSD-3-Clause       Copyright 2009 The Go Authors.
+golang.org/x/sys                              v0.45.0  BSD-3-Clause       Copyright 2009 The Go Authors.
+golang.org/x/time                             v0.15.0  BSD-3-Clause       Copyright 2009 The Go Authors.
+gopkg.in/yaml.v3                              v3.0.1   MIT and            Copyright (c) 2011-2019 Canonical Ltd.
+                                                       Apache-2.0
+
+Additional permissive dependencies linked through cem (not exhaustive; the
+exact module set and versions are in go.mod and go.sum):
+
+Module                                   Version  License  Copyright
+---------------------------------------  -------  -------  --------------------------------------------
+charm.land/bubbles/v2                    v2.1.0   MIT      Copyright (c) 2020-2026 Charmbracelet, Inc.
+charm.land/bubbletea/v2                  v2.0.6   MIT      Copyright (c) 2020-2026 Charmbracelet, Inc.
+charm.land/huh/v2                        v2.0.3   MIT      Copyright (c) 2023-2026 Charm
+charm.land/lipgloss/v2                   v2.0.4   MIT      Copyright (c) 2021-2026 Charmbracelet, Inc.
+github.com/alecthomas/chroma/v2          v2.24.1  MIT      Copyright (C) 2017 Alec Thomas
+github.com/atotto/clipboard              v0.1.4   BSD-3-Clause  Copyright (c) 2013 Ato Araki.
+github.com/charmbracelet/ultraviolet     pinned   MIT      Copyright (c) 2025 Charmbracelet, Inc.
+
+bennypowers.dev/cem, bennypowers.dev/asimonim, and
+github.com/Digital-Shane/treeview/v2 (transitive through cem) are
+GPL-3.0-or-later or GPL-3.0 and are compatible with this project's license.
+The GPL-3.0 text is in LICENSE.
+
+All remaining transitive Go dependencies are MIT, Apache-2.0, or BSD and are
+checked in CI by `make license-check`. The exact pinned versions are in go.mod
+and go.sum for each release tag.
 
 The MCP Go SDK is mid-transition from MIT to Apache-2.0. New contributions are
 Apache-2.0, contributions with relicensing consent are Apache-2.0, and
@@ -40,14 +74,14 @@ https://creativecommons.org/licenses/by/4.0/
 The binary statically links the Go runtime and standard library. Those are
 distributed under the BSD 3-Clause License reproduced below.
 
-Libraries expected in later phases (not yet linked)
-===================================================
+tools/gen-data and runtime libraries
+====================================
 
-Dependency                License      Notes
-------------------------  -----------  --------------------------------------------
-bennypowers.dev/cem       GPL-3.0-or-later  Added in Phase D
-bennypowers.dev/asimonim  GPL-3.0-or-later  Added in Phase D
-tree-sitter               MIT               Linked through cem for markup validation
+tools/gen-data imports bennypowers.dev/asimonim/schema and
+bennypowers.dev/asimonim/validator, and the server imports the cem manifest
+packages and asimonim parser/resolver/token. tools/gen-data is distributed as
+corresponding source and is not part of the shipped binary's link set beyond
+the runtime libraries named above.
 
 Embedded data
 =============

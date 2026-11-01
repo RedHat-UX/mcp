@@ -335,6 +335,10 @@ Generated data is not committed. It is a codegen step:
   versions with integrity hashes, git tags with commit SHAs, and the `ai-guidelines`
   submodule commit per tag. `make data-update` refreshes the lock (new RHDS release);
   `make data` only reads it. Same lock gives byte-identical output (NFR-05).
+- `index.json` records the sha256 of the canonical lock. `make data` compares it with
+  the committed lock and is a scoped no-op when every artifact named by the index still
+  exists with its recorded size. A missing or stale index regenerates; a no-op makes no
+  network requests.
 - Generation needs network (npm registry, GitHub). Building from an existing `dist/`
   does not.
 - Each GitHub release attaches the generated `dist/` archive with a checksum, so
@@ -398,7 +402,8 @@ Prereleases are excluded.
 Docs snapshots: latest release tag per elements major: `v1.4.5`, `v2.1.2`, `v3.2.0`,
 `v4.2.2`, `v5.0.0`. Docs-only topics use the latest snapshot. This trades complete
 historical prose for reasonable binary size. Revisit if users need minor-level docs
-history.
+history. `make data-update` derives the tag set from the latest stable elements version
+per major in the lock, so a new major must have a matching docs tag or the update fails.
 
 ### 5.2 CEM schema normalization
 
@@ -470,6 +475,34 @@ Normalization contract:
 The normalization code lives in `tools/gen-data`, not in the parser. Upstream issue
 #64 locks the contract with a fixture.
 
+Implementation notes from Phase C:
+
+- #64 was still open when this landed. Our fixtures are committed per tokens major
+  under `tools/gen-data/testdata/tokens/{1.x,2.x,3.x}/` (input and normalized golden).
+  Adopt the upstream fixture once #64 merges and keep our goldens as regression tests.
+- Style Dictionary's draft group-marker convention (`foo._` with sibling tokens under
+  `foo`) is flattened: the marker becomes the token at `foo` and siblings become
+  `foo-bar`. This keeps published CSS names such as `--rh-color-icon-subtle` and
+  `--rh-color-icon-subtle-hover` intact, because asimonim derives names from JSON keys
+  and would otherwise emit a trailing `-_`.
+- Keys that Style Dictionary left in camelCase (`2xsMax`) are rewritten from the token's
+  published `name` to kebab case (`2xs-max`), so CSS names match the generated CSS.
+- `mediaQuery` is an RHDS vendor type, not a DTCG type. The normalizer keeps
+  `$type: "mediaQuery"` and the object value verbatim, records
+  `$extensions["com.rhds.mcp"].vendorType = "mediaQuery"`, and does not resolve nested
+  `{breakpoint.*}` references. The 3.2.0 release has six such tokens.
+- The generated `css/default-theme.css` is authoritative for the theme map. At least one
+  release's token JSON disagrees with its own CSS for `rh-surface`, so a disagreement is
+  not fatal. Theme-map entries that have no DTCG token are added back at load time as
+  lookup tokens, so `rhds_query_tokens` can find `color-accent-base` and report its
+  light/dark values.
+- The `rh-surface` palette marker (six arms) is prose, not a light/dark token, so
+  `color-surface` is absent from normalized DTCG in tokens 2.1.0 through 2.2.4. Its
+  `color-surface-*` children remain. This is intentional per the palette rule above.
+- `tools/gen-data` records a generator version in `index.json`. `make data` regenerates
+  when it changes, so generator updates never leave a stale dist tree. Use
+  `make data-force` to regenerate unconditionally.
+
 All embedded token data is normalized DTCG, produced at `@rhds/mcp` development time.
 The runtime never sees Style Dictionary output. It parses normalized DTCG with asimonim
 on first use of a version and caches the result.
@@ -520,6 +553,12 @@ Processing:
 - Drop or rewrite image references; selected SVGs optional
 - Keep headings for chunking
 - Record source tag and path
+
+Indented prose that begins with an HTML tag is treated as prose rather than an
+indented code block so template image tags can be stripped. The trade-off is
+that a genuinely indented code sample whose first character is `<` is preserved
+verbatim as prose. Fences indented four or more spaces stay code, and a closing
+fence must use the same character and a run at least as long as the opener.
 
 Bundle release notes for migration. They contain Before/After examples. Also compute
 breaking changes from `cem/breaking.Compare` between embedded manifests.
