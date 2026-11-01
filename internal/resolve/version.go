@@ -76,16 +76,21 @@ const maxVersionDigits = 9
 const maxSpecScan = 4096
 
 // ParseVersionSpec extracts the first x.y.z semantic version from a package
-// specifier. It accepts ranges, npm aliases, workspace protocol prefixes, and
-// CDN URLs. When no exact version is present it accepts partial npm ranges
-// such as "^4", "4", "4.x", and "~4.2". It rejects non-version specifiers such
-// as "latest" and "*".
+// specifier. It accepts plain semver, npm ranges, v-prefixed tags, and npm:
+// aliases. Specifiers that name a local path or a remote artifact (file:,
+// link:, workspace:, git, http, and https) are not version constraints and are
+// rejected. When no exact version is present it accepts partial npm ranges such
+// as "^4", "4", "4.x", and "~4.2". It rejects non-version specifiers such as
+// "latest" and "*".
 func ParseVersionSpec(spec string) ParsedVersion {
 	spec = strings.TrimSpace(spec)
 	if spec == "" {
 		return ParsedVersion{}
 	}
-	scan := spec
+	scan, ok := versionSpecText(spec)
+	if !ok {
+		return ParsedVersion{}
+	}
 	if len(scan) > maxSpecScan {
 		scan = scan[:maxSpecScan]
 	}
@@ -102,7 +107,91 @@ func ParseVersionSpec(spec string) ParsedVersion {
 			return parsed
 		}
 	}
-	return parsePartialSpec(spec)
+	return parsePartialSpec(scan)
+}
+
+// versionSpecText returns the portion of spec that may hold a version. It
+// rejects protocol specifiers outright: a version-like substring in a local
+// path or remote URL is not dependency evidence.
+func versionSpecText(spec string) (string, bool) {
+	if strings.HasPrefix(strings.ToLower(spec), "npm:") {
+		rest := strings.TrimSpace(spec[len("npm:"):])
+		if rest == "" {
+			return "", false
+		}
+		// Yarn Berry records a resolved package as "npm:4.2.2", while an npm
+		// alias is "npm:pkg@^4". A version-shaped remainder is already the
+		// value to parse.
+		if looksLikeVersionText(rest) {
+			return rest, true
+		}
+		at := strings.LastIndex(rest, "@")
+		if at <= 0 {
+			return "", false
+		}
+		candidate := strings.TrimSpace(rest[at+1:])
+		if candidate == "" || hasNonVersionProtocol(candidate) {
+			return "", false
+		}
+		return candidate, true
+	}
+	if hasNonVersionProtocol(spec) {
+		return "", false
+	}
+	return spec, true
+}
+
+func looksLikeVersionText(text string) bool {
+	if text == "" {
+		return false
+	}
+	switch text[0] {
+	case 'v', 'V', '^', '~', '>', '<', '=', '*':
+		return true
+	default:
+		return isDigit(text[0])
+	}
+}
+
+func hasNonVersionProtocol(spec string) bool {
+	// A plain version, range, or tag never contains a path separator or a
+	// fragment. This also rejects GitHub shorthand such as user/repo#v4.2.2.
+	if strings.ContainsAny(spec, "/#") {
+		return true
+	}
+	lower := strings.ToLower(strings.TrimSpace(spec))
+	for _, prefix := range []string{
+		"file:", "link:", "workspace:", "portal:", "patch:",
+		"git:", "git+", "git@", "github:", "gitlab:", "bitbucket:",
+		"http:", "https:", "ssh:",
+	} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	if index := strings.IndexByte(spec, ':'); index > 0 {
+		return isSchemeToken(spec[:index])
+	}
+	return false
+}
+
+func isSchemeToken(text string) bool {
+	if text == "" {
+		return false
+	}
+	for i := 0; i < len(text); i++ {
+		value := text[i]
+		switch {
+		case value >= 'a' && value <= 'z',
+			value >= 'A' && value <= 'Z',
+			value >= '0' && value <= '9',
+			value == '+', value == '-', value == '.':
+		default:
+			return false
+		}
+	}
+	first := text[0]
+	return (first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z')
 }
 
 // operatorBefore returns the range operator immediately preceding the version
@@ -152,43 +241,46 @@ func parseVersionAt(spec string, start int) (ParsedVersion, bool) {
 	}
 	index = next
 
-	end := index
-	if end < len(spec) && spec[end] == '-' {
-		preEnd := end + 1
-		for preEnd < len(spec) && isPrereleaseChar(spec[preEnd]) {
+	prerelease := ""
+	if index < len(spec) && spec[index] == '-' {
+		preEnd := index + 1
+		for preEnd < len(spec) && isVersionIdentifierChar(spec[preEnd]) {
 			preEnd++
 		}
-		if preEnd == end+1 {
+		if preEnd == index+1 {
 			return ParsedVersion{}, false
 		}
-		end = preEnd
+		prerelease = spec[index+1 : preEnd]
+		if !validPrerelease(prerelease) {
+			return ParsedVersion{}, false
+		}
+		index = preEnd
 	}
-	if end < len(spec) && spec[end] == '+' {
-		buildEnd := end + 1
-		for buildEnd < len(spec) && isPrereleaseChar(spec[buildEnd]) {
+	if index < len(spec) && spec[index] == '+' {
+		buildEnd := index + 1
+		for buildEnd < len(spec) && isVersionIdentifierChar(spec[buildEnd]) {
 			buildEnd++
 		}
-		if buildEnd == end+1 {
+		if buildEnd == index+1 {
 			return ParsedVersion{}, false
 		}
-		end = buildEnd
-	}
-
-	text := spec[start:end]
-	prerelease := ""
-	if dash := strings.IndexByte(text, '-'); dash >= 0 {
-		prerelease = text[dash+1:]
-		if plus := strings.IndexByte(prerelease, '+'); plus >= 0 {
-			prerelease = prerelease[:plus]
+		if !validBuildMetadata(spec[index+1 : buildEnd]) {
+			return ParsedVersion{}, false
+		}
+		index = buildEnd
+		// SemVer has exactly one +; a second one starts a malformed value.
+		if index < len(spec) && spec[index] == '+' {
+			return ParsedVersion{}, false
 		}
 	}
+
 	return ParsedVersion{
 		Major:      major,
 		Minor:      minor,
 		Patch:      patch,
 		HasMinor:   true,
 		Prerelease: prerelease,
-		Text:       text,
+		Text:       spec[start:index],
 		OK:         true,
 	}, true
 }
@@ -201,8 +293,6 @@ func parsePartialSpec(spec string) ParsedVersion {
 	if len(text) > maxSpecScan {
 		text = text[:maxSpecScan]
 	}
-	text = strings.TrimPrefix(text, "workspace:")
-	text = strings.TrimPrefix(text, "npm:")
 	if index := strings.LastIndex(text, "@rhds/elements@"); index >= 0 {
 		text = text[index+len("@rhds/elements@"):]
 	}
@@ -288,11 +378,47 @@ func isDigit(value byte) bool {
 	return value >= '0' && value <= '9'
 }
 
-func isPrereleaseChar(value byte) bool {
+func isVersionIdentifierChar(value byte) bool {
 	return isDigit(value) ||
 		(value >= 'a' && value <= 'z') ||
 		(value >= 'A' && value <= 'Z') ||
-		value == '.' || value == '-' || value == '+'
+		value == '.' || value == '-'
+}
+
+// validPrerelease enforces SemVer 2.0.0 prerelease rules: dot-separated,
+// non-empty identifiers of alphanumerics and hyphens. A purely numeric
+// identifier must not have a leading zero.
+func validPrerelease(text string) bool {
+	return validIdentifiers(text, true)
+}
+
+// validBuildMetadata enforces SemVer 2.0.0 build metadata rules. Numeric
+// identifiers may have leading zeros, and a value never participates in
+// comparison ordering.
+func validBuildMetadata(text string) bool {
+	return validIdentifiers(text, false)
+}
+
+func validIdentifiers(text string, prerelease bool) bool {
+	for _, identifier := range strings.Split(text, ".") {
+		if identifier == "" {
+			return false
+		}
+		allDigits := true
+		for i := 0; i < len(identifier); i++ {
+			value := identifier[i]
+			if !isDigit(value) {
+				allDigits = false
+			}
+			if !isVersionIdentifierChar(value) {
+				return false
+			}
+		}
+		if prerelease && allDigits && len(identifier) > 1 && identifier[0] == '0' {
+			return false
+		}
+	}
+	return true
 }
 
 // CompareParsed orders two parsed versions. Partial ranges compare by their

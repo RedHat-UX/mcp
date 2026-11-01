@@ -27,8 +27,8 @@ func TestParseVersionSpec(t *testing.T) {
 		{">4.2.2", "4.2.2", 4, 2, 2, ">", true, true, true},
 		{"v5.0.0", "5.0.0", 5, 0, 0, "", false, true, true},
 		{"npm:@rhds/elements@5.0.0", "5.0.0", 5, 0, 0, "", false, true, true},
-		{"workspace:^5.0.0", "5.0.0", 5, 0, 0, "^", true, true, true},
-		{"https://cdn.jsdelivr.net/npm/@rhds/elements@5.0.0/+esm", "5.0.0", 5, 0, 0, "", false, true, true},
+		{"workspace:^5.0.0", "", 0, 0, 0, "", false, false, false},
+		{"https://cdn.jsdelivr.net/npm/@rhds/elements@5.0.0/+esm", "", 0, 0, 0, "", false, false, false},
 		{"5.0.0-beta.1", "5.0.0-beta.1", 5, 0, 0, "", false, true, true},
 		{"^4", "4", 4, 0, 0, "^", true, false, true},
 		{"4", "4", 4, 0, 0, "", true, false, true},
@@ -87,6 +87,88 @@ func TestCompareParsed(t *testing.T) {
 	rangeMajor := ParseVersionSpec("^5")
 	if CompareParsed(rangeMajor, ParseVersionSpec("5.0.0")) != 0 {
 		t.Errorf("partial major should compare equal to its zero components")
+	}
+}
+
+func TestParseVersionSpecOnlyAcceptsVersionSpecifiers(t *testing.T) {
+	tests := []struct {
+		name string
+		spec string
+		ok   bool
+		text string
+	}{
+		{"plain semver", "4.2.2", true, "4.2.2"},
+		{"caret range", "^4.2.2", true, "4.2.2"},
+		{"partial range", "4.x", true, "4"},
+		{"v prefix", "v4.2.2", true, "4.2.2"},
+		{"npm alias", "npm:@rhds/elements@4.2.2", true, "4.2.2"},
+		{"npm alias range", "npm:@rhds/elements@^4", true, "4"},
+		{"npm resolved form", "npm:4.2.2", true, "4.2.2"},
+		{"file path", "file:../elements-4.2.2", false, ""},
+		{"link path", "link:../elements-4.2.2", false, ""},
+		{"workspace path", "workspace:^4.2.2", false, ""},
+		{"git url", "git+https://github.com/RedHat-UX/red-hat-design-system.git#v4.2.2", false, ""},
+		{"git shorthand", "git@github.com:RedHat-UX/red-hat-design-system.git#v4.2.2", false, ""},
+		{"github shorthand", "RedHat-UX/red-hat-design-system#v4.2.2", false, ""},
+		{"https cdn", "https://cdn.jsdelivr.net/npm/@rhds/elements@4.2.2/+esm", false, ""},
+		{"http cdn", "http://cdn.jsdelivr.net/npm/@rhds/elements@4.2.2/+esm", false, ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			parsed := ParseVersionSpec(test.spec)
+			if parsed.OK != test.ok {
+				t.Fatalf("ParseVersionSpec(%q).OK = %v, want %v", test.spec, parsed.OK, test.ok)
+			}
+			if test.ok && parsed.Text != test.text {
+				t.Errorf("text = %q, want %q", parsed.Text, test.text)
+			}
+		})
+	}
+}
+
+func TestParseVersionSpecEnforcesSemVerPrereleaseAndBuild(t *testing.T) {
+	tests := []struct {
+		spec string
+		ok   bool
+		text string
+	}{
+		{"5.0.0-+build", false, ""},
+		{"5.0.0-01", false, ""},
+		{"5.0.0-00.1", false, ""},
+		{"5.0.0-alpha..1", false, ""},
+		{"5.0.0-.alpha", false, ""},
+		{"5.0.0-", false, ""},
+		{"5.0.0+", false, ""},
+		{"5.0.0+a+b", false, ""},
+		{"5.0.0-alpha.1", true, "5.0.0-alpha.1"},
+		{"5.0.0-0.a.1", true, "5.0.0-0.a.1"},
+		{"5.0.0-0.1", true, "5.0.0-0.1"},
+		{"5.0.0-0A.1", true, "5.0.0-0A.1"},
+		{"5.0.0+build.001", true, "5.0.0+build.001"},
+		{"5.0.0-alpha+build.1", true, "5.0.0-alpha+build.1"},
+	}
+	for _, test := range tests {
+		t.Run(test.spec, func(t *testing.T) {
+			parsed := ParseVersionSpec(test.spec)
+			if parsed.OK != test.ok {
+				t.Fatalf("ParseVersionSpec(%q).OK = %v, want %v", test.spec, parsed.OK, test.ok)
+			}
+			if test.ok && parsed.Text != test.text {
+				t.Errorf("text = %q, want %q", parsed.Text, test.text)
+			}
+		})
+	}
+}
+
+func TestCompareParsedIgnoresBuildMetadata(t *testing.T) {
+	first := ParseVersionSpec("5.0.0+build.1")
+	second := ParseVersionSpec("5.0.0+build.2")
+	if !first.OK || !second.OK {
+		t.Fatalf("build metadata versions should parse: %+v / %+v", first, second)
+	}
+	if CompareParsed(first, second) != 0 {
+		t.Errorf("CompareParsed() = %d, want 0; build metadata is not part of the comparison",
+			CompareParsed(first, second))
 	}
 }
 
