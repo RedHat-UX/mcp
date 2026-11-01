@@ -52,7 +52,7 @@ servers and it does not require Node at runtime.
 | Repository    | `redhat-ux/mcp`                                                                      |
 | Go module     | `github.com/redhat-ux/mcp`; command at `github.com/redhat-ux/mcp/cmd/rhds-mcp`       |
 | npm package   | `@rhds/mcp`, wrapper in `npm/`                                                       |
-| Go version    | `go 1.26.4` minimum (asimonim requirement); pin the build with a `toolchain` directive in `go.mod`, which `setup-go` and grw's `go-version-file` read |
+| Go version    | `go 1.26.4` minimum (asimonim requirement); pin the build with a `toolchain` directive in `go.mod`, which `setup-go` and grw's `go-version-file` read. The pin is the latest 1.26-line patch (`go1.26.10`); a toolchain directive equal to the `go` directive is redundant and `go mod tidy` removes it |
 | MCP SDK       | `github.com/modelcontextprotocol/go-sdk` v1.8.0                                      |
 | Protocol      | Negotiated. Advertise `2026-07-28`, `2025-11-25`, `2025-06-18`. See section 8        |
 | Transport     | stdio                                                                                |
@@ -90,10 +90,9 @@ Who carries obligations:
 Legal: Red Hat already ships GPL software routinely. Ask legal to confirm, but this does
 not block the spike.
 
-License variant: cem headers say GPL version 3 or later. asimonim PR #63 relicenses the
-project to `GPL-3.0-or-later`. `@rhds/mcp` targets `GPL-3.0-or-later`; until #63 merges,
-asimonim is GPL-3.0-only and the combined binary is effectively GPL-3.0-only at
-distribution time.
+License variant: cem headers say GPL version 3 or later. asimonim PR #63 relicensed the
+project to `GPL-3.0-or-later`, so the combined binary is distributed under
+`GPL-3.0-or-later`.
 
 ## 3. Upstream prerequisites
 
@@ -235,6 +234,9 @@ Makefile contract (checked by grw `validate-makefile`):
   (section 4.3). Pinned inputs keep the six runs identical
 - win32 targets run `make data` on the host runner, then build inside the grw container,
   which mounts the source tree. The container needs no network
+- grw `build-binaries.yml` v1.4 runs plain `make <platform>` and passes no `VERSION`.
+  The Makefile defaults it to `0.0.1`, so Phase F must pass `VERSION=<tag>` or derive it
+  from the release tag for release binaries to report the tag
 - Optional upstream improvement: a grw input to download a prebuilt data artifact, so
   data is generated once per workflow instead of six times. Not filed
 

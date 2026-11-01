@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 Red Hat, Inc.
+
+# Generated RHDS data. Never committed; regenerate with `make data`.
+/internal/data/dist/*
+!/internal/data/dist/.gitkeep
+
+# Build outputs.
+/dist/
+# Ad-hoc `go build` from the repository root.
+/rhds-mcp
+/rhds-mcp.exe
