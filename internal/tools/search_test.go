@@ -5,9 +5,17 @@ package tools
 
 import (
 	"context"
+	"io/fs"
+	"os"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"unicode/utf8"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/redhat-ux/mcp/internal/data"
+	"github.com/redhat-ux/mcp/internal/resolve"
 )
 
 func TestSearchComponents(t *testing.T) {
@@ -162,5 +170,139 @@ func TestExcerptTextHandlesMultibytePrefix(t *testing.T) {
 	}
 	if !utf8.ValidString(got) {
 		t.Errorf("excerpt is not valid UTF-8: %q", got)
+	}
+}
+
+// failingReadFS makes one file unreadable while the rest of the fixture tree
+// stays intact.
+type failingReadFS struct {
+	base     fs.FS
+	failPath string
+	err      error
+}
+
+func (f failingReadFS) Open(name string) (fs.File, error) {
+	if name == f.failPath {
+		return nil, f.err
+	}
+	return f.base.Open(name)
+}
+
+// tamperedFS changes one file's bytes without updating the fixture index, so
+// the store reports a checksum mismatch.
+type tamperedFS struct {
+	base     fs.FS
+	path     string
+	contents []byte
+}
+
+func (f tamperedFS) Open(name string) (fs.File, error) {
+	if name == f.path {
+		return fstest.MapFS{name: &fstest.MapFile{Data: f.contents}}.Open(name)
+	}
+	return f.base.Open(name)
+}
+
+func searchServiceFrom(t *testing.T, fsys fs.FS) *Service {
+	t.Helper()
+	store, err := data.Open(fsys)
+	if err != nil {
+		t.Fatalf("data.Open() error = %v", err)
+	}
+	return New(store, nil)
+}
+
+func TestSearchExamplesWarnsWhenElementsManifestUnavailable(t *testing.T) {
+	service := searchServiceFrom(t, failingReadFS{
+		base:     os.DirFS("testdata"),
+		failPath: "elements/custom-elements.json",
+		err:      fs.ErrPermission,
+	})
+
+	out := service.Search(context.Background(), SearchInput{
+		Query: "button",
+		Scope: scopeExamples,
+	})
+	if out.Error != nil {
+		t.Fatalf("Search() error = %+v", out.Error)
+	}
+	if !hasWarning(out.Resolved.Warnings, "component example search skipped") {
+		t.Errorf("warnings = %v, want a skipped component example search notice", out.Resolved.Warnings)
+	}
+	if len(out.Hits) == 0 {
+		t.Fatalf("hits = 0, want the pattern hits collected before the manifest failure")
+	}
+}
+
+func TestSearchDocsWarnsWhenContentIsUnavailable(t *testing.T) {
+	tests := []struct {
+		name string
+		fsys fs.FS
+	}{
+		{
+			name: "read failure",
+			fsys: failingReadFS{
+				base:     os.DirFS("testdata"),
+				failPath: "docs/v5.0.0/patterns/button.md",
+				err:      fs.ErrPermission,
+			},
+		},
+		{
+			name: "checksum mismatch",
+			fsys: tamperedFS{
+				base:     os.DirFS("testdata"),
+				path:     "docs/v5.0.0/patterns/button.md",
+				contents: []byte("# Tampered\n"),
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service := searchServiceFrom(t, test.fsys)
+			out := service.Search(context.Background(), SearchInput{
+				Query: "button",
+				Scope: scopeDocs,
+			})
+			if out.Error != nil {
+				t.Fatalf("Search() error = %+v", out.Error)
+			}
+			if !hasWarning(out.Resolved.Warnings, "docs content unavailable") {
+				t.Errorf("warnings = %v, want a docs content warning", out.Resolved.Warnings)
+			}
+			if len(out.Hits) == 0 {
+				t.Fatal("hits = 0, want title-based hits for the records that remain")
+			}
+		})
+	}
+}
+
+func TestSearchValidatesInputBeforeResolution(t *testing.T) {
+	service := fixtureService(t)
+	calls := 0
+	service.resolveWorkspace = func(resolve.Options) (resolve.Result, error) {
+		calls++
+		return resolve.Result{}, nil
+	}
+
+	tests := []struct {
+		name  string
+		input SearchInput
+	}{
+		{"empty query", SearchInput{Query: "  "}},
+		{"unknown scope", SearchInput{Query: "button", Scope: "everything"}},
+		{"negative limit", SearchInput{Query: "button", Limit: -1}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			calls = 0
+			_, out := service.searchWithEnv(
+				context.Background(), &mcp.CallToolRequest{}, test.input)
+			if calls != 0 {
+				t.Errorf("workspace resolver calls = %d, want 0 before validation", calls)
+			}
+			if out.Error == nil || out.Error.Code != "invalid_argument" {
+				t.Errorf("error = %+v, want invalid_argument", out.Error)
+			}
+		})
 	}
 }

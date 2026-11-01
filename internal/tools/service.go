@@ -103,6 +103,10 @@ type Service struct {
 	// maxResponseBytes is the NFR-03 hard cap. Tests set a smaller value to
 	// exercise the follow-up-call path.
 	maxResponseBytes int
+
+	// resolveWorkspace runs the workspace version cascade. Tests replace it
+	// with a recorder to prove that validation happens before resolution.
+	resolveWorkspace func(resolve.Options) (resolve.Result, error)
 }
 
 type tokenSet struct {
@@ -229,6 +233,15 @@ func (s *Service) bundledTokens() []string {
 	return s.store.Index().Versions(packageTokens, kindTokens)
 }
 
+// resolve runs the workspace cascade. Tests inject resolveWorkspace so they
+// can assert that invalid input is rejected before any resolution work.
+func (s *Service) resolve(options resolve.Options) (resolve.Result, error) {
+	if s != nil && s.resolveWorkspace != nil {
+		return s.resolveWorkspace(options)
+	}
+	return resolve.Resolve(options)
+}
+
 // bundledResolution resolves without touching the workspace. It is used by
 // direct service calls in tests and when a tool has an explicit version.
 func (s *Service) bundledResolution(explicit, tokensExplicit string) (resolution, *ToolError) {
@@ -236,7 +249,7 @@ func (s *Service) bundledResolution(explicit, tokensExplicit string) (resolution
 		return resolution{}, failure
 	}
 	if explicit != "" {
-		result, err := resolve.Resolve(resolve.Options{
+		result, err := s.resolve(resolve.Options{
 			Explicit:        explicit,
 			BundledElements: s.bundledElements(),
 		})
@@ -367,7 +380,7 @@ func (s *Service) prepareResolution(
 		return resolution{}, nil, failure
 	}
 	if explicit != "" {
-		result, err := resolve.Resolve(resolve.Options{
+		result, err := s.resolve(resolve.Options{
 			Explicit:        explicit,
 			BundledElements: s.bundledElements(),
 		})
@@ -387,7 +400,7 @@ func (s *Service) prepareResolution(
 		return resolution{}, required, nil
 	}
 
-	result, err := resolve.Resolve(resolve.Options{
+	result, err := s.resolve(resolve.Options{
 		Root:            root,
 		BundledElements: s.bundledElements(),
 		Limits:          resolve.DefaultLimits(),

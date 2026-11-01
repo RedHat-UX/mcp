@@ -44,7 +44,7 @@ func (s *Service) resolveVersionInWorkspace(root string, input ResolveVersionInp
 	if failure := s.dataFailure(); failure != nil {
 		return ResolveVersionOutput{Candidates: []resolve.Candidate{}, Error: failure}
 	}
-	result, err := resolve.Resolve(resolve.Options{
+	result, err := s.resolve(resolve.Options{
 		Root:            root,
 		Explicit:        input.Version,
 		BundledElements: s.bundledElements(),
