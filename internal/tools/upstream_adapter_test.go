@@ -150,6 +150,12 @@ func probeSource(version string) upstreamSource {
 // existingVersion is empty when the entries must carry no provenance.
 func hostWithConflicts(t *testing.T, existingVersion string) *mcp.Server {
 	t.Helper()
+	return hostWithConflictsSource(t, existingVersion, "probe")
+}
+
+// hostWithConflictsSource is hostWithConflicts with a chosen provenance source.
+func hostWithConflictsSource(t *testing.T, existingVersion, existingSource string) *mcp.Server {
+	t.Helper()
 	host := mcp.NewServer(&mcp.Implementation{Name: "host", Version: "0.0.0"}, nil)
 
 	meta := func() mcp.Meta {
@@ -157,7 +163,7 @@ func hostWithConflicts(t *testing.T, existingVersion string) *mcp.Server {
 			return nil
 		}
 		return mcp.Meta{provenanceMetaKey: map[string]any{
-			"source":  "probe",
+			"source":  existingSource,
 			"version": existingVersion,
 		}}
 	}
@@ -276,23 +282,27 @@ func TestMountSourcesConflictMatrix(t *testing.T) {
 	const bundled = "v0.11.6"
 
 	tests := []struct {
-		name            string
-		existingVersion string
-		policy          ConflictPolicy
-		wantReplaced    bool
-		wantWarnings    int
-		wantReason      string
+		name                string
+		existingVersion     string
+		policy              ConflictPolicy
+		wantReplaced        bool
+		wantWarnings        int
+		wantReason          string
+		wantExistingVersion string
 	}{
 		{name: "newest replaces older", existingVersion: "v0.11.5", policy: ConflictNewest, wantReplaced: true, wantWarnings: 3, wantReason: "older"},
 		{name: "newest keeps newer", existingVersion: "v0.11.7", policy: ConflictNewest, wantReplaced: false, wantWarnings: 3, wantReason: "shadowed"},
 		{name: "newest keeps equal", existingVersion: bundled, policy: ConflictNewest, wantReplaced: false, wantWarnings: 0},
 		{name: "newest replaces unknown provenance", existingVersion: "", policy: ConflictNewest, wantReplaced: true, wantWarnings: 3, wantReason: "unknown"},
+		{name: "newest replaces malformed provenance", existingVersion: "banana", policy: ConflictNewest, wantReplaced: true, wantWarnings: 3, wantReason: "unknown", wantExistingVersion: unknownUpstreamVersion},
+		{name: "newest replaces devel provenance", existingVersion: "(devel)", policy: ConflictNewest, wantReplaced: true, wantWarnings: 3, wantReason: "unknown", wantExistingVersion: unknownUpstreamVersion},
 		{name: "replace replaces older", existingVersion: "v0.11.5", policy: ConflictReplace, wantReplaced: true, wantWarnings: 3, wantReason: "policy"},
 		{name: "replace replaces newer", existingVersion: "v0.11.7", policy: ConflictReplace, wantReplaced: true, wantWarnings: 3, wantReason: "policy"},
 		{name: "replace replaces unknown provenance", existingVersion: "", policy: ConflictReplace, wantReplaced: true, wantWarnings: 3, wantReason: "unknown"},
 		{name: "skip keeps older", existingVersion: "v0.11.5", policy: ConflictSkip, wantReplaced: false, wantWarnings: 3, wantReason: "policy"},
 		{name: "skip keeps newer", existingVersion: "v0.11.7", policy: ConflictSkip, wantReplaced: false, wantWarnings: 3, wantReason: "policy"},
 		{name: "skip keeps unknown provenance", existingVersion: "", policy: ConflictSkip, wantReplaced: false, wantWarnings: 3, wantReason: "unknown"},
+		{name: "skip keeps malformed provenance", existingVersion: "banana", policy: ConflictSkip, wantReplaced: false, wantWarnings: 3, wantReason: "unknown", wantExistingVersion: unknownUpstreamVersion},
 	}
 
 	for _, test := range tests {
@@ -341,17 +351,17 @@ func TestMountSourcesConflictMatrix(t *testing.T) {
 					t.Errorf("warning message %q does not mention %q", warning.Message, test.wantReason)
 				}
 			}
-			if test.existingVersion == "" && test.wantWarnings > 0 {
-				for _, warning := range warnings {
-					if got := warning.Attrs["existingVersion"]; got != unknownUpstreamVersion {
-						t.Errorf("warning existingVersion = %v, want %q", got, unknownUpstreamVersion)
-					}
+			if test.wantWarnings > 0 {
+				wantExisting := test.existingVersion
+				if test.wantExistingVersion != "" {
+					wantExisting = test.wantExistingVersion
 				}
-			}
-			if test.existingVersion != "" && test.wantWarnings > 0 {
+				if wantExisting == "" {
+					wantExisting = unknownUpstreamVersion
+				}
 				for _, warning := range warnings {
-					if got := warning.Attrs["existingVersion"]; got != test.existingVersion {
-						t.Errorf("warning existingVersion = %v, want %q", got, test.existingVersion)
+					if got := warning.Attrs["existingVersion"]; got != wantExisting {
+						t.Errorf("warning existingVersion = %v, want %q", got, wantExisting)
 					}
 				}
 			}
@@ -652,4 +662,228 @@ func jsonDiff(t *testing.T, want, got any) string {
 func newRecordingLogger() (*slog.Logger, *recordingHandler) {
 	handler := &recordingHandler{}
 	return slog.New(handler), handler
+}
+
+func TestProvenanceFromMeta(t *testing.T) {
+	tests := []struct {
+		name   string
+		meta   map[string]any
+		want   upstreamProvenance
+		wantOK bool
+	}{
+		{name: "nil meta", meta: nil},
+		{name: "missing key", meta: map[string]any{"other": "value"}},
+		{name: "wrong value type", meta: map[string]any{provenanceMetaKey: "not-an-object"}},
+		{name: "object without fields", meta: map[string]any{provenanceMetaKey: map[string]any{}}, wantOK: true},
+		{name: "object with fields", meta: map[string]any{provenanceMetaKey: map[string]any{
+			"source": "cem", "version": "v0.11.6",
+		}}, want: upstreamProvenance{source: "cem", version: "v0.11.6"}, wantOK: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := provenanceFromMeta(test.meta)
+			if ok != test.wantOK {
+				t.Fatalf("provenanceFromMeta() ok = %v, want %v", ok, test.wantOK)
+			}
+			if ok && got != test.want {
+				t.Errorf("provenanceFromMeta() = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestRootsFromResponses(t *testing.T) {
+	tests := []struct {
+		name      string
+		responses mcp.InputResponseMap
+		wantOK    bool
+	}{
+		{name: "nil map", responses: nil},
+		{name: "missing key", responses: mcp.InputResponseMap{}},
+		{name: "other input response", responses: mcp.InputResponseMap{
+			rootsInputRequestKey: &mcp.ElicitResult{},
+		}},
+		{name: "typed nil roots", responses: mcp.InputResponseMap{
+			rootsInputRequestKey: (*mcp.ListRootsResult)(nil), //nolint:staticcheck // roots required by PLAN section 8.1
+		}},
+		{name: "roots", responses: mcp.InputResponseMap{
+			rootsInputRequestKey: &mcp.ListRootsResult{Roots: []*mcp.Root{{URI: "file:///tmp/project"}}}, //nolint:staticcheck // roots required by PLAN section 8.1
+		}, wantOK: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			roots, ok := rootsFromResponses(test.responses)
+			if ok != test.wantOK {
+				t.Fatalf("rootsFromResponses() ok = %v, want %v", ok, test.wantOK)
+			}
+			if ok && len(roots) != 1 {
+				t.Errorf("rootsFromResponses() = %d roots, want 1", len(roots))
+			}
+		})
+	}
+}
+
+// TestProxyCancellationReachesInternalClient exercises cancellation through
+// the real clientForwarder and in-memory transports, not the static test
+// forwarder.
+func TestProxyCancellationReachesInternalClient(t *testing.T) {
+	canceled := make(chan struct{})
+	internal := mcp.NewServer(&mcp.Implementation{Name: "slow", Version: "0.0.0"}, nil)
+	internal.AddTool(&mcp.Tool{
+		Name:        "slow_tool",
+		Description: "blocks until canceled",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(ctx context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		select {
+		case <-ctx.Done():
+			close(canceled)
+			return nil, ctx.Err()
+		case <-time.After(30 * time.Second):
+			return nil, errors.New("upstream did not observe cancellation")
+		}
+	})
+	internalSession, closeInternal := connectInMemory(t, internal, "2025-11-25")
+	defer closeInternal()
+
+	host := mcp.NewServer(&mcp.Implementation{Name: "host", Version: "0.0.0"}, nil)
+	logger, _ := newRecordingLogger()
+	if err := mountSources(host, []upstreamSource{{
+		name:    "slow",
+		version: "v1.0.0",
+		definitions: upstreamDefinitions{tools: []*mcp.Tool{{
+			Name:        "slow_tool",
+			Description: "blocks until canceled",
+			InputSchema: map[string]any{"type": "object"},
+		}}},
+		forward: &clientForwarder{client: internalSession},
+	}}, ConflictNewest, logger); err != nil {
+		t.Fatalf("mountSources() error = %v", err)
+	}
+
+	session := connectServer(t, host)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "slow_tool"}); err == nil {
+		t.Fatal("CallTool() error = nil, want a cancellation error")
+	}
+	select {
+	case <-canceled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("internal upstream handler never observed the cancellation")
+	}
+}
+
+func TestMountCloseIsIdempotent(t *testing.T) {
+	t.Chdir(projectWithManifest(t))
+	_, mount := newMountedServerWithMount(t, MountOptions{})
+	if err := mount.Close(); err != nil {
+		t.Fatalf("first Close() error = %v", err)
+	}
+	if err := mount.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+}
+
+func TestMountUpstreamsRejectsUnknownPolicy(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{Name: "host", Version: "0.0.0"}, nil)
+	mount, err := MountUpstreams(server, MountOptions{ConflictPolicy: ConflictPolicy("bogus")})
+	if err == nil {
+		t.Fatal("MountUpstreams() error = nil, want an unknown-policy error")
+	}
+	if mount != nil {
+		t.Errorf("MountUpstreams() mount = %v, want nil", mount)
+	}
+}
+
+// TestMountSourcesErrorPolicyWithoutConflictsMounts guards the strict policy's
+// happy path: error means "error on a collision", not "mount nothing".
+func TestMountSourcesErrorPolicyWithoutConflictsMounts(t *testing.T) {
+	host := mcp.NewServer(&mcp.Implementation{Name: "host", Version: "0.0.0"}, nil)
+	logger, records := newRecordingLogger()
+
+	if err := mountSources(host, []upstreamSource{probeSource("v1.0.0")}, ConflictError, logger); err != nil {
+		t.Fatalf("mountSources() error = %v, want nil without conflicts", err)
+	}
+	if warnings := records.warnings(); len(warnings) != 0 {
+		t.Errorf("warnings = %d, want 0: %#v", len(warnings), warnings)
+	}
+
+	tools, resources, templates := observedSurface(t, host)
+	if got := tools["probe_tool"].Description; got != "upstream probe_tool" {
+		t.Errorf("tool description = %q, want the upstream entry", got)
+	}
+	if got := resources["probe://resource"].Description; got != "upstream resource" {
+		t.Errorf("resource description = %q, want the upstream entry", got)
+	}
+	if got := templates["probe://resource/{id}"].Description; got != "upstream template" {
+		t.Errorf("template description = %q, want the upstream entry", got)
+	}
+}
+
+// TestMountSourcesCrossSourceVersionsAreNotComparable proves versions from
+// different upstreams are not compared as semver.
+func TestMountSourcesCrossSourceVersionsAreNotComparable(t *testing.T) {
+	host := hostWithConflictsSource(t, "v0.11.5", "other")
+	logger, records := newRecordingLogger()
+
+	if err := mountSources(host, []upstreamSource{probeSource("v0.11.6")}, ConflictNewest, logger); err != nil {
+		t.Fatalf("mountSources() error = %v", err)
+	}
+
+	tools, _, _ := observedSurface(t, host)
+	if got := tools["probe_tool"].Description; got != "upstream probe_tool" {
+		t.Errorf("tool description = %q, want a replacement under the unknown-version rule", got)
+	}
+
+	warnings := records.warnings()
+	if len(warnings) != 3 {
+		t.Fatalf("warnings = %d, want 3: %#v", len(warnings), warnings)
+	}
+	for _, warning := range warnings {
+		if !strings.Contains(warning.Message, "different upstream") {
+			t.Errorf("warning message %q does not mention a different upstream", warning.Message)
+		}
+		if got := warning.Attrs["existingVersion"]; got != "v0.11.5" {
+			t.Errorf("warning existingVersion = %v, want v0.11.5", got)
+		}
+		if got := warning.Attrs["existingSource"]; got != "other" {
+			t.Errorf("warning existingSource = %v, want other", got)
+		}
+	}
+}
+
+// TestMountCloseWithActiveSession closes the mount while a host session is
+// still connected: the internal client must close immediately and further
+// proxied calls must fail instead of hanging.
+func TestMountCloseWithActiveSession(t *testing.T) {
+	root := tokenProject(t, "alpha", "#ff0000")
+	t.Chdir(t.TempDir())
+	server, mount := newMountedServerWithMount(t, MountOptions{})
+	session := connectServerWithProtocol(t, server, "2026-07-28", &mcp.Root{URI: fileURI(root)}) //nolint:staticcheck // roots are required by PLAN section 8.1
+
+	if got := searchTokens(t, session, "alpha"); !strings.Contains(got, "alpha") {
+		t.Fatalf("search_tokens = %s, want the root's token", got)
+	}
+	if got := mount.activeSessions(); got != 1 {
+		t.Fatalf("active internal sessions = %d, want 1", got)
+	}
+
+	if err := mount.Close(); err != nil {
+		t.Fatalf("Mount.Close() error = %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "search_tokens",
+		Arguments: map[string]any{"query": "alpha"},
+	}); err == nil {
+		t.Error("CallTool() error = nil after Mount.Close, want a closed-mount error")
+	}
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("closing host session: %v", err)
+	}
+	waitFor(t, 5*time.Second, func() bool { return mount.activeSessions() == 0 },
+		"internal session was not cleaned up after close")
 }

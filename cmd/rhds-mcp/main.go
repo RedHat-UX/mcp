@@ -66,13 +66,6 @@ func serverInstructions() string {
 	return buildInstructions(supportedProtocolVersions, nil)
 }
 
-// newServer returns only the server. Tests use it; the process entry point
-// uses newServerWithMount so it can Close the upstream mount.
-func newServer(logger *slog.Logger, service *tools.Service) *mcp.Server {
-	server, _ := newServerWithMount(logger, service)
-	return server
-}
-
 // newServerWithMount builds the server and returns the upstream mount handle.
 // The caller must Close the mount when the server stops.
 func newServerWithMount(logger *slog.Logger, service *tools.Service) (*mcp.Server, *tools.Mount) {
@@ -91,8 +84,14 @@ func newServerWithMount(logger *slog.Logger, service *tools.Service) (*mcp.Serve
 	mount, err := tools.MountUpstreams(server, tools.MountOptions{})
 	if err != nil {
 		// A skipped upstream surface is advisory: the RHDS tools still serve.
-		// A conflict-policy error is fatal only when the caller selects it.
-		logger.Warn("upstream surface not mounted", "error", err)
+		// Any other mount failure is fatal to the upstream surface, not the
+		// whole server, so log it as an error and keep serving.
+		var warning *tools.MountWarning
+		if errors.As(err, &warning) {
+			logger.Warn("upstream surface not mounted", "error", err)
+		} else {
+			logger.Error("upstream mount failed", "error", err)
+		}
 	}
 	tools.RegisterPrompts(server, service)
 	tools.RegisterResources(server, service)

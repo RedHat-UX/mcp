@@ -8,6 +8,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -68,9 +69,11 @@ func preserveUpstreamError(err error) error {
 }
 
 // forwardedToolParams rebuilds a tools/call for the internal client. The
-// progress token is forwarded so cancellation and progress stay correlated;
-// host input responses are not forwarded because the proxy resolves roots
-// itself.
+// progress token is forwarded so an upstream that emits progress can address
+// it, but the proxy does not relay progress notifications back to the host
+// client. Host input responses are not forwarded because the proxy resolves
+// roots itself; upstream elicitation or sampling input requests are not
+// supported through the proxy.
 func forwardedToolParams(request *mcp.CallToolRequest) *mcp.CallToolParams {
 	params := new(mcp.CallToolParams)
 	if request == nil || request.Params == nil {
@@ -137,10 +140,8 @@ type asimonimForwarder struct {
 	server  *mcp.Server
 	version string
 
-	anonymousOnce   sync.Once
+	anonymousMu     sync.Mutex
 	anonymousClient *mcp.ClientSession
-	anonymousServer *mcp.ServerSession
-	anonymousErr    error
 }
 
 func (f *asimonimForwarder) callTool(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -194,23 +195,9 @@ func (f *asimonimForwarder) ensure(
 	}
 	f.state.mu.Unlock()
 
-	session.mu.Lock()
-	if session.closed {
-		session.mu.Unlock()
-		return nil, false, errMountClosed
-	}
-	if session.client != nil {
-		client := session.client
-		session.mu.Unlock()
-		return client, false, nil
-	}
-	session.mu.Unlock()
-
-	roots, advertiseRoots, needsInput := f.rootsFor(ctx, hostSession, responses, state)
-	if needsInput {
-		return nil, true, nil
-	}
-
+	// Hold the session lock across roots resolution and connection so
+	// concurrent first calls share one roots round trip and one internal
+	// client instead of dialing twice.
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	if session.closed {
@@ -218,6 +205,11 @@ func (f *asimonimForwarder) ensure(
 	}
 	if session.client != nil {
 		return session.client, false, nil
+	}
+
+	roots, advertiseRoots, needsInput := f.rootsFor(ctx, hostSession, responses, state)
+	if needsInput {
+		return nil, true, nil
 	}
 
 	client, serverSession, err := connectInternalClient(
@@ -271,6 +263,10 @@ func (f *asimonimForwarder) rootsFor(
 		// no contents before the legacy middleware can fulfill it.
 		result, err := hostSession.ListRoots(ctx, nil) //nolint:staticcheck // roots required by PLAN section 8.1
 		if err != nil || result == nil {
+			// Match asimonim's cwd fallback but keep the failure visible on
+			// stderr; a silently wrong workspace is worse than a warning.
+			slog.Warn("asimonim proxy: roots/list failed; falling back to the server working directory",
+				"session", hostSession.ID(), "error", err)
 			return nil, false, false
 		}
 		return result.Roots, true, false
@@ -283,32 +279,36 @@ func (f *asimonimForwarder) rootsFor(
 }
 
 // anonymous creates the fallback client used when a request has no session.
+// Failures are not cached, so a transient connect error does not poison later
+// requests.
 func (f *asimonimForwarder) anonymous(ctx context.Context) (*mcp.ClientSession, error) {
-	f.anonymousOnce.Do(func() {
-		f.state.mu.Lock()
-		closed := f.state.closed
-		f.state.mu.Unlock()
-		if closed {
-			f.anonymousErr = errMountClosed
-			return
-		}
-		client, serverSession, err := connectInternalClient(
-			ctx,
-			f.server,
-			"rhds-mcp-asimonim-proxy",
-			defaultInternalProtocol,
-			nil,
-			false,
-		)
-		if err != nil {
-			f.anonymousErr = err
-			return
-		}
-		f.anonymousClient = client
-		f.anonymousServer = serverSession
-		f.state.own(client, serverSession)
-	})
-	return f.anonymousClient, f.anonymousErr
+	f.anonymousMu.Lock()
+	defer f.anonymousMu.Unlock()
+	if f.anonymousClient != nil {
+		return f.anonymousClient, nil
+	}
+
+	f.state.mu.Lock()
+	closed := f.state.closed
+	f.state.mu.Unlock()
+	if closed {
+		return nil, errMountClosed
+	}
+
+	client, serverSession, err := connectInternalClient(
+		ctx,
+		f.server,
+		"rhds-mcp-asimonim-proxy",
+		defaultInternalProtocol,
+		nil,
+		false,
+	)
+	if err != nil {
+		return nil, err
+	}
+	f.anonymousClient = client
+	f.state.own(client, serverSession)
+	return client, nil
 }
 
 // hostAdvertisesRoots reports whether the host client advertised the roots

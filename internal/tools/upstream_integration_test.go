@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -267,6 +268,7 @@ func TestMountUpstreamsPerSessionRootsThroughProxy(t *testing.T) {
 
 	t.Chdir(t.TempDir())
 	server, mount := newMountedServerWithMount(t, MountOptions{})
+	baseline := runtime.NumGoroutine()
 
 	sessionA := connectServerWithProtocol(t, server, "2026-07-28", &mcp.Root{URI: fileURI(rootA)}) //nolint:staticcheck // roots are required by PLAN section 8.1
 	sessionB := connectServerWithProtocol(t, server, "2026-07-28", &mcp.Root{URI: fileURI(rootB)}) //nolint:staticcheck // roots are required by PLAN section 8.1
@@ -319,7 +321,6 @@ func TestMountUpstreamsPerSessionRootsThroughProxy(t *testing.T) {
 
 	// Closing the host sessions must close the internal per-session clients
 	// and drop them from the mount.
-	baseline := runtime.NumGoroutine()
 	if err := sessionA.Close(); err != nil {
 		t.Fatalf("closing session A: %v", err)
 	}
@@ -379,6 +380,14 @@ func TestMountUpstreamsConflictErrorPolicy(t *testing.T) {
 	names := listToolNames(t, connectServer(t, server))
 	if !slicesContains(names, "validate_html") {
 		t.Fatalf("tools/list lost the host tool: %v", names)
+	}
+	for _, name := range cemToolNames {
+		if name == "validate_html" {
+			continue
+		}
+		if slicesContains(names, name) {
+			t.Errorf("tools/list contains cem tool %q after an error-policy conflict; nothing should be mounted", name)
+		}
 	}
 	for _, name := range asimonimToolNames {
 		if slicesContains(names, name) {
@@ -462,4 +471,52 @@ func TestMountUpstreamsDisableListSkipsProvenance(t *testing.T) {
 	if _, ok := templates["cem://element/{tagName}/slots"]; ok {
 		t.Error("disabled template was mounted")
 	}
+}
+
+// TestMountUpstreamsConcurrentFirstCallsShareSession proves that concurrent
+// first calls on one host session resolve roots once and share one internal
+// client instead of dialing twice and leaking a session.
+func TestMountUpstreamsConcurrentFirstCallsShareSession(t *testing.T) {
+	root := tokenProject(t, "alpha", "#ff0000")
+	t.Chdir(t.TempDir())
+	server, mount := newMountedServerWithMount(t, MountOptions{})
+	session := connectServerWithProtocol(t, server, "2026-07-28", &mcp.Root{URI: fileURI(root)}) //nolint:staticcheck // roots are required by PLAN section 8.1
+
+	const callers = 8
+	var wait sync.WaitGroup
+	errs := make(chan error, callers)
+	for i := 0; i < callers; i++ {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			result, err := session.CallTool(ctx, &mcp.CallToolParams{
+				Name:      "search_tokens",
+				Arguments: map[string]any{"query": "alpha"},
+			})
+			switch {
+			case err != nil:
+				errs <- err
+			case result.IsError:
+				errs <- errors.New(contentText(result))
+			case !strings.Contains(contentText(result), "alpha"):
+				errs <- errors.New("result does not contain the root's alpha token")
+			}
+		}()
+	}
+	wait.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent call error = %v", err)
+	}
+
+	if got := mount.activeSessions(); got != 1 {
+		t.Errorf("active internal sessions = %d, want 1 per host session", got)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("closing host session: %v", err)
+	}
+	waitFor(t, 5*time.Second, func() bool { return mount.activeSessions() == 0 },
+		"internal session was not cleaned up after the host session closed")
 }

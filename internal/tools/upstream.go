@@ -43,7 +43,10 @@ type MountOptions struct {
 }
 
 // MountWarning reports an upstream surface that could not be mounted. It is
-// advisory: the server must still start and serve the surfaces that did mount.
+// advisory: the returned Mount is still usable and the server must still start
+// and serve the surfaces that did mount. It is the only error MountUpstreams
+// returns alongside a non-nil Mount; use errors.As to distinguish it from a
+// fatal mount failure.
 type MountWarning struct {
 	// Package names the upstream whose surface was skipped, for example "cem".
 	Package string
@@ -55,7 +58,7 @@ func (w *MountWarning) Error() string {
 	if w == nil {
 		return ""
 	}
-	return fmt.Sprintf("skipped %s upstream tools: %v", w.Package, w.Err)
+	return fmt.Sprintf("skipped %s upstream surface: %v", w.Package, w.Err)
 }
 
 func (w *MountWarning) Unwrap() error {
@@ -167,6 +170,10 @@ func (s *mountState) activeSessions() int {
 // Disable lists are passed to each upstream as registration exclusions, so the
 // excluded surface is never registered. Collisions with existing host entries
 // are resolved by opts.ConflictPolicy. Diagnostics go to stderr only.
+//
+// The returned error is a *MountWarning when an upstream could not be mounted
+// but the host server is still usable; any other error is fatal to mounting
+// upstreams, and the returned Mount is then nil.
 func MountUpstreams(server *mcp.Server, opts MountOptions) (*Mount, error) {
 	if server == nil {
 		return nil, fmt.Errorf("server must not be nil")
@@ -208,7 +215,9 @@ func MountUpstreams(server *mcp.Server, opts MountOptions) (*Mount, error) {
 	if len(sources) > 0 {
 		if err := mountSources(server, sources, policy, slog.Default()); err != nil {
 			_ = mount.Close()
-			return nil, errors.Join(warning, err)
+			// Warnings were already logged. Returning them alongside a fatal
+			// error would blur the advisory and fatal contracts.
+			return nil, err
 		}
 	}
 	return mount, warning

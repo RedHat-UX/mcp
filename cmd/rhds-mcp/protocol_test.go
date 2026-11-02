@@ -63,7 +63,7 @@ func connectProtocolClient(
 	config clientConfig,
 ) *mcp.ClientSession {
 	t.Helper()
-	server := newServer(slog.New(slog.DiscardHandler), protocolFixtureService(t))
+	server := newTestServer(t, slog.New(slog.DiscardHandler), protocolFixtureService(t))
 
 	capabilities := &mcp.ClientCapabilities{}
 	if config.roots {

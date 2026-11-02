@@ -75,14 +75,14 @@ func buildServerBinary(t *testing.T, extra ...string) string {
 
 // TestAdvertisedProtocolVersions checks the list a 2026-07-28 client sees in
 // server/discover. Comparing it with supportedProtocolVersions proves both the
-// contents and the order, and fails if newServer stops applying the
+// contents and the order, and fails if newTestServer stops applying the
 // SupportedProtocolVersions option: the SDK default list also contains
 // 2025-03-26 and 2024-11-05.
 func TestAdvertisedProtocolVersions(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	server := newServer(slog.New(slog.DiscardHandler), tools.New(nil, data.ErrNoData))
+	server := newTestServer(t, slog.New(slog.DiscardHandler), tools.New(nil, data.ErrNoData))
 	var advertised []string
 	server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
@@ -149,7 +149,7 @@ func TestInitializeAtEachAdvertisedVersion(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
-			server := newServer(slog.New(slog.DiscardHandler), tools.New(nil, data.ErrNoData))
+			server := newTestServer(t, slog.New(slog.DiscardHandler), tools.New(nil, data.ErrNoData))
 			serverTransport, clientTransport := mcp.NewInMemoryTransports()
 			session, err := server.Connect(ctx, serverTransport, nil)
 			if err != nil {
@@ -210,7 +210,7 @@ func TestInitializeFallsBackForExcludedLegacyVersion(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	server := newServer(slog.New(slog.DiscardHandler), tools.New(nil, data.ErrNoData))
+	server := newTestServer(t, slog.New(slog.DiscardHandler), tools.New(nil, data.ErrNoData))
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	session, err := server.Connect(ctx, serverTransport, nil)
 	if err != nil {
@@ -513,7 +513,7 @@ func connectTestClient(t *testing.T, server *mcp.Server) *mcp.ClientSession {
 
 func TestPhaseBToolsAreRegistered(t *testing.T) {
 	clientSession := connectTestClient(t,
-		newServer(slog.New(slog.DiscardHandler), tools.New(nil, data.ErrNoData)))
+		newTestServer(t, slog.New(slog.DiscardHandler), tools.New(nil, data.ErrNoData)))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -569,7 +569,7 @@ func TestInstructionsDerivedFromSupportedVersions(t *testing.T) {
 
 func TestPromptsAndResourcesAreRegisteredWithoutData(t *testing.T) {
 	clientSession := connectTestClient(t,
-		newServer(slog.New(slog.DiscardHandler), tools.New(nil, data.ErrNoData)))
+		newTestServer(t, slog.New(slog.DiscardHandler), tools.New(nil, data.ErrNoData)))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -604,7 +604,7 @@ func TestPromptsAndResourcesAreRegisteredWithoutData(t *testing.T) {
 
 func TestServerMountsUpstreamAndComponentResources(t *testing.T) {
 	clientSession := connectTestClient(t,
-		newServer(slog.New(slog.DiscardHandler), tools.New(nil, data.ErrNoData)))
+		newTestServer(t, slog.New(slog.DiscardHandler), tools.New(nil, data.ErrNoData)))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -638,7 +638,7 @@ func TestServerMountsUpstreamAndComponentResources(t *testing.T) {
 
 func TestDataToolsReturnStructuredErrorWithoutData(t *testing.T) {
 	clientSession := connectTestClient(t,
-		newServer(slog.New(slog.DiscardHandler), tools.New(nil, data.ErrNoData)))
+		newTestServer(t, slog.New(slog.DiscardHandler), tools.New(nil, data.ErrNoData)))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -710,4 +710,14 @@ func TestRealInstructionsWithBundledData(t *testing.T) {
 			t.Errorf("instructions missing %q:\n%s", want, instructions)
 		}
 	}
+}
+
+// newTestServer builds the server and closes the upstream mount with the test.
+func newTestServer(t *testing.T, logger *slog.Logger, service *tools.Service) *mcp.Server {
+	t.Helper()
+	server, mount := newServerWithMount(logger, service)
+	if mount != nil {
+		t.Cleanup(func() { _ = mount.Close() })
+	}
+	return server
 }

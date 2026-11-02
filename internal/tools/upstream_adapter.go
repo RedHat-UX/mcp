@@ -84,7 +84,8 @@ func normalizeConflictPolicy(policy ConflictPolicy) (ConflictPolicy, error) {
 }
 
 // UpstreamConflict describes one collision between a bundled entry and an
-// entry already registered on the host server.
+// entry already registered on the host server. Kind is one of
+// [ConflictKindTool], [ConflictKindResource], or [ConflictKindTemplate].
 type UpstreamConflict struct {
 	Kind            string
 	Source          string
@@ -92,6 +93,13 @@ type UpstreamConflict struct {
 	BundledVersion  string
 	ExistingVersion string
 }
+
+// Kind values reported by [UpstreamConflict].
+const (
+	ConflictKindTool     = "tool"
+	ConflictKindResource = "resource"
+	ConflictKindTemplate = "template"
+)
 
 // UpstreamConflictError reports collisions under [ConflictError].
 type UpstreamConflictError struct {
@@ -127,6 +135,7 @@ const (
 	reasonShadowed      conflictReason = "shadowed"
 	reasonEqual         conflictReason = "equal"
 	reasonUnknown       conflictReason = "unknown"
+	reasonIncomparable  conflictReason = "different-upstream"
 	reasonPolicyReplace conflictReason = "policy-replace"
 	reasonPolicyKeep    conflictReason = "policy-keep"
 )
@@ -139,8 +148,9 @@ type conflictDecision struct {
 
 // decideConflict applies policy to one collision. exists reports whether the
 // host already has an entry with the same name or URI; existing is its
-// provenance when the entry carries ours.
-func decideConflict(policy ConflictPolicy, bundledVersion string, exists bool, existing *upstreamProvenance) conflictDecision {
+// provenance when the entry carries ours. Versions from different upstreams
+// are not comparable and take the unknown-version path.
+func decideConflict(policy ConflictPolicy, source, bundledVersion string, exists bool, existing *upstreamProvenance) conflictDecision {
 	if !exists {
 		return conflictDecision{action: actionRegister}
 	}
@@ -158,6 +168,12 @@ func decideConflict(policy ConflictPolicy, bundledVersion string, exists bool, e
 		return conflictDecision{action: actionReplace, reason: reasonPolicyReplace, existingVersion: existingVersion}
 	case ConflictSkip:
 		return conflictDecision{action: actionKeep, reason: reasonPolicyKeep, existingVersion: existingVersion}
+	}
+
+	if existing.source != source {
+		// Versions from different modules are not comparable. Treat the
+		// existing entry as unknown and let the default policy replace it.
+		return conflictDecision{action: actionReplace, reason: reasonIncomparable, existingVersion: existingVersion}
 	}
 
 	bundledCanonical := canonicalVersion(bundledVersion)
@@ -199,24 +215,28 @@ func existingVersionOrUnknown(existing *upstreamProvenance) string {
 	return existing.version
 }
 
+func existingSourceOrUnknown(existing *upstreamProvenance) string {
+	if existing == nil || existing.source == "" {
+		return unknownUpstreamVersion
+	}
+	return existing.source
+}
+
 // provenanceFromMeta reads our provenance key from an entry's _meta. The value
-// is a JSON object after crossing the wire and an [upstreamProvenance] when
-// read directly, so both forms are accepted.
+// is always a JSON object: definitions cross the in-memory client wire before
+// they reach the host surface.
 func provenanceFromMeta(meta map[string]any) (upstreamProvenance, bool) {
 	raw, ok := meta[provenanceMetaKey]
 	if !ok {
 		return upstreamProvenance{}, false
 	}
-	switch value := raw.(type) {
-	case map[string]any:
-		source, _ := value["source"].(string)
-		version, _ := value["version"].(string)
-		return upstreamProvenance{source: source, version: version}, true
-	case upstreamProvenance:
-		return value, true
-	default:
+	value, ok := raw.(map[string]any)
+	if !ok {
 		return upstreamProvenance{}, false
 	}
+	source, _ := value["source"].(string)
+	version, _ := value["version"].(string)
+	return upstreamProvenance{source: source, version: version}, true
 }
 
 func cloneMeta(meta map[string]any) mcp.Meta {
@@ -430,21 +450,21 @@ func mountSources(host *mcp.Server, sources []upstreamSource, policy ConflictPol
 				ExistingVersion: existingVersionOrUnknown(existing),
 			})
 		}
-		if normalized == ConflictError {
+		if normalized == ConflictError && exists {
 			return
 		}
 
-		decision := decideConflict(normalized, source.version, exists, existing)
+		decision := decideConflict(normalized, source.name, source.version, exists, existing)
 		switch decision.action {
 		case actionRegister, actionReplace:
 			commit()
 			plan = append(plan, plannedEntry{register: register})
 			if exists {
-				logConflictDecision(logger, decision, kind, name, source)
+				logConflictDecision(logger, decision, kind, name, source, existing)
 			}
 		case actionKeep:
 			if decision.reason != reasonEqual {
-				logConflictDecision(logger, decision, kind, name, source)
+				logConflictDecision(logger, decision, kind, name, source, existing)
 			}
 		}
 	}
@@ -468,7 +488,7 @@ func mountSources(host *mcp.Server, sources []upstreamSource, policy ConflictPol
 			definition := cloneTool(tool)
 			definition.Meta = withUpstreamProvenance(definition.Meta, source.name, source.version)
 			forward := source.forward
-			consider("tool", tool.Name, source, existing != nil, existingProvenance,
+			consider(ConflictKindTool, tool.Name, source, existing != nil, existingProvenance,
 				func() { surface.tools[tool.Name] = definition },
 				func(host *mcp.Server) {
 					host.AddTool(definition, func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -491,7 +511,7 @@ func mountSources(host *mcp.Server, sources []upstreamSource, policy ConflictPol
 			definition := cloneResource(resource)
 			definition.Meta = withUpstreamProvenance(definition.Meta, source.name, source.version)
 			forward := source.forward
-			consider("resource", resource.URI, source, existing != nil, existingProvenance,
+			consider(ConflictKindResource, resource.URI, source, existing != nil, existingProvenance,
 				func() { surface.resources[resource.URI] = definition },
 				func(host *mcp.Server) {
 					host.AddResource(definition, func(ctx context.Context, request *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
@@ -514,7 +534,7 @@ func mountSources(host *mcp.Server, sources []upstreamSource, policy ConflictPol
 			definition := cloneTemplate(template)
 			definition.Meta = withUpstreamProvenance(definition.Meta, source.name, source.version)
 			forward := source.forward
-			consider("template", template.URITemplate, source, existing != nil, existingProvenance,
+			consider(ConflictKindTemplate, template.URITemplate, source, existing != nil, existingProvenance,
 				func() { surface.templates[template.URITemplate] = definition },
 				func(host *mcp.Server) {
 					host.AddResourceTemplate(definition, func(ctx context.Context, request *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
@@ -541,6 +561,7 @@ func logConflictDecision(
 	kind string,
 	name string,
 	source upstreamSource,
+	existing *upstreamProvenance,
 ) {
 	action := "replacing"
 	if decision.action == actionKeep {
@@ -555,6 +576,8 @@ func logConflictDecision(
 		message = "upstream conflict: bundled " + kind + " shadowed by newer existing entry"
 	case reasonUnknown:
 		message = "upstream conflict: " + action + " " + kind + " with unknown version"
+	case reasonIncomparable:
+		message = "upstream conflict: " + action + " " + kind + " from a different upstream"
 	case reasonPolicyReplace:
 		message = "upstream conflict: replacing " + kind + " by policy"
 	case reasonPolicyKeep:
@@ -569,5 +592,6 @@ func logConflictDecision(
 		"name", name,
 		"bundledVersion", source.version,
 		"existingVersion", decision.existingVersion,
+		"existingSource", existingSourceOrUnknown(existing),
 	)
 }
