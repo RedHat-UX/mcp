@@ -580,13 +580,15 @@ that a genuinely indented code sample whose first character is `<` is preserved
 verbatim as prose. Fences indented four or more spaces stay code, and a closing
 fence must use the same character and a run at least as long as the opener.
 
-Bundle release notes for migration. They contain Before/After examples. Also compute
-breaking changes from `cem/breaking.Compare` between embedded manifests.
+Bundle release notes for migration. They contain Before/After examples. gen-data writes
+the combined changelog plus one release-note artifact per bundled elements version. Also
+compute breaking changes from `cem/breaking.Compare` between embedded manifests.
 
 Token renames and removals across tokens majors are not in any manifest. Curate them
 into `tokens-migrations.json` during `@rhds/mcp` development (agent-assisted from the
 tokens changelog and a name diff between normalized versions), and review them like
-code.
+code. The committed document records its changelog source, the normalized-name diff,
+and curation notes for entries the changelog got wrong.
 
 ## 6. Version resolution
 
@@ -645,6 +647,10 @@ opaque (base64 of the resolved version, offset, and deprecated filter). A cursor
 different resolved version or with a different deprecated filter is rejected with a
 structured error.
 
+An entry with `truncated: true` was shortened by a fixed per-field cap, not by the
+response budget. A warning names the field, the cap, and the longest original value.
+Paging never hides an entry without that signal.
+
 ### `rhds_get_component_api`
 
 Input: `tagName`, `version?`, `sections?` (`attributes`, `properties`, `events`, `slots`,
@@ -694,9 +700,18 @@ through `lsp/document`. HTML tag and attribute names are matched case-insensitiv
 ### `rhds_query_tokens`
 
 Input: `query?`, `token?`, `version?`, `theme?` (`light`, `dark`, `auto`), `format?`
-(`value`, `css`, `chain`).
+(`value`, `css`, `chain`), `detail?` (`summary` default, `full`), `pageSize?`,
+`cursor?`.
 Output: token name, CSS custom property, type, value, alias chain, theme value, and
 source (`json` or `css/default-theme.css`). `chain` puts the alias path in `value`.
+Exact lookup accepts dot paths and `--rh-*` names. When `version` names an
+`@rhds/elements` release instead of a tokens release, the coupled tokens version is
+used (section 5.3). `summary` uses the 8k budget and `full` may use the 32k cap; when
+the budget is reached the response carries `nextCursor`, never a silent truncation.
+
+An entry with `truncated: true` was shortened by a fixed per-field cap, not by the
+response budget. This covers individual fields and the alias chain. A warning names
+the field, the cap, and the longest original value.
 
 ### `rhds_get_design_guidelines`
 
@@ -706,16 +721,23 @@ Output: heading chunks with source path and release tag. Respect response budget
 ### `rhds_get_migration_guide`
 
 Input: `fromVersion`, `toVersion?` (default: latest bundled stable), `element?`,
-`includeTokens?` (default true).
+`includeTokens?` (default true), `detail?` (`summary` default, `full`),
+`sections?` (`changes`, `releaseNotes`, `tokens`; default all), `limit?` (entries per
+category).
 Output: breaking changes from `cem/breaking.Compare`, plus release-note Before/After
 examples, plus token renames and removals from `tokens-migrations.json` when the
-coupled tokens major changes (section 5.5).
+coupled tokens major changes (section 5.5). `summary` uses the 8k budget and `full`
+may use the 32k cap. The budget is allocated across the selected categories so one
+large category does not evict the others by default; `sections`, `limit`, `element`,
+and a narrower version range are the follow-up controls.
 
 ### `rhds_get_usage_examples`
 
-Input: `tagName`, `version?`, `kind?` (`demo`, `docs`, `pattern`, `twig`).
-Output: CEM `demos`, docs snippets, pattern HTML from the docs snapshot, generic Twig
-slot markup. Do not claim a Drupal library key.
+Input: `tagName`, `version?`, `kind?` (`demo`, `docs`, `pattern`, `twig`),
+`detail?` (`summary` default, `full`). Output: CEM `demos`, docs snippets, pattern
+HTML from the docs snapshot, generic Twig slot markup. Do not claim a Drupal library
+key. `summary` uses the 8k budget and `full` may use the 32k cap, so a single pattern
+larger than the summary budget stays reachable.
 
 ### Out of scope for v1
 

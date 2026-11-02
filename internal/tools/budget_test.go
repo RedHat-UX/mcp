@@ -4,6 +4,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -16,6 +17,43 @@ import (
 	"github.com/redhat-ux/mcp/internal/cem"
 	"github.com/redhat-ux/mcp/internal/resolve"
 )
+
+// wireResponseBytes reproduces the bytes the SDK puts on the wire for a tool
+// output: the structured JSON, the same JSON re-encoded as a TextContent
+// string, and the JSON-RPC envelope. applySchema re-marshals object outputs
+// through map[string]any, which preserves length but sorts keys, so the test
+// round-trips objects the same way before measuring.
+func wireResponseBytes(value any) int {
+	return wireResponseBytesForID(value, 1)
+}
+
+func wireResponseBytesForID(value any, id any) int {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return 0
+	}
+	if len(encoded) > 0 && encoded[0] == '{' {
+		var decoded any
+		if err := json.Unmarshal(encoded, &decoded); err == nil {
+			if remarshaled, err := json.Marshal(decoded); err == nil {
+				encoded = remarshaled
+			}
+		}
+	}
+	result := &mcp.CallToolResult{
+		Content:           []mcp.Content{&mcp.TextContent{Text: string(encoded)}},
+		StructuredContent: json.RawMessage(encoded),
+	}
+	envelope, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"result":  result,
+	})
+	if err != nil {
+		return 0
+	}
+	return len(envelope)
+}
 
 func manyWarnings(count int) []string {
 	warnings := make([]string, 0, count)
@@ -41,39 +79,46 @@ func manyCandidates(count int) []resolve.Candidate {
 
 func TestEstimatedResponseBytesCountsTextDuplication(t *testing.T) {
 	value := map[string]string{"value": strings.Repeat("a", 1000)}
-	if got := estimatedResponseBytes(value); got < 2000 {
-		t.Errorf("estimated = %d, want at least the doubled JSON size", got)
+	wire := wireResponseBytes(value)
+	if got := estimatedResponseBytes(value); got < wire {
+		t.Errorf("estimated = %d, want at least the %d byte wire size", got, wire)
 	}
 }
 
-func TestEstimatedResponseBytesIncludesEscaping(t *testing.T) {
-	value := map[string]string{"value": strings.Repeat("\"\\\n", 500)}
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
+// TestEstimatedResponseBytesIsUpperBoundOnWire guards the estimator against
+// undercounting the escaped TextContent copy. Budget tests that only compare
+// the estimator to itself pass even when the estimator is wrong.
+func TestEstimatedResponseBytesIsUpperBoundOnWire(t *testing.T) {
+	payloads := map[string]any{
+		"plain":           map[string]string{"value": strings.Repeat("a", 4000)},
+		"quote-heavy":     map[string]string{"value": strings.Repeat(`"quoted" `, 500)},
+		"backslash-heavy": map[string]string{"value": strings.Repeat(`a\b\\c`, 800)},
+		"html-heavy":      map[string]string{"value": strings.Repeat(`<div class="x">&</div>`, 400)},
+		"mixed-nested": map[string]any{"items": []map[string]string{
+			{"path": `docs/"quoted"/<tag>.md`, "text": strings.Repeat(`\n"x"<`, 300)},
+		}},
 	}
-	if got, doubled := estimatedResponseBytes(value), len(encoded)*2; got <= doubled {
-		t.Errorf("estimated = %d, want more than the naive double %d for escaped text", got, doubled)
+	for name, payload := range payloads {
+		t.Run(name, func(t *testing.T) {
+			estimate := estimatedResponseBytes(payload)
+			wire := wireResponseBytes(payload)
+			t.Logf("estimate = %d, wire = %d", estimate, wire)
+			if estimate < wire {
+				t.Errorf("estimate = %d, want an upper bound on wire = %d", estimate, wire)
+			}
+		})
 	}
-}
 
-func TestEstimatedResponseBytesIsAWireUpperBound(t *testing.T) {
-	value := map[string]string{"text": strings.Repeat("\"\\\n<>&", 200)}
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result := mcp.CallToolResult{
-		StructuredContent: json.RawMessage(encoded),
-		Content:           []mcp.Content{&mcp.TextContent{Text: string(encoded)}},
-	}
-	wire, err := json.Marshal(result)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if estimate := estimatedResponseBytes(value); estimate < len(wire) {
-		t.Errorf("estimate = %d, wire = %d; estimate must be an upper bound", estimate, len(wire))
-	}
+	t.Run("uuid-request-id", func(t *testing.T) {
+		payload := map[string]string{"value": strings.Repeat(`"quoted" `, 200)}
+		const id = "123e4567-e89b-12d3-a456-426614174000"
+		estimate := estimatedResponseBytes(payload)
+		wire := wireResponseBytesForID(payload, id)
+		t.Logf("estimate = %d, wire with 36-character string id = %d", estimate, wire)
+		if estimate < wire {
+			t.Errorf("estimate = %d, want an upper bound on wire = %d", estimate, wire)
+		}
+	})
 }
 
 func TestFitResolveVersionBoundsOutput(t *testing.T) {
@@ -87,7 +132,7 @@ func TestFitResolveVersionBoundsOutput(t *testing.T) {
 		Candidates: manyCandidates(500),
 	}
 	fitResolveVersion(&out, defaultResponseBudget)
-	if got := estimatedResponseBytes(out); got > defaultResponseBudget {
+	if got := wireResponseBytes(out); got > defaultResponseBudget {
 		t.Errorf("estimated response = %d, want <= %d", got, defaultResponseBudget)
 	}
 	if len(out.Resolved.Warnings) > maxResponseWarnings+1 {
@@ -115,7 +160,7 @@ func TestFitListComponentsTrimsAndPreservesCursor(t *testing.T) {
 	}
 	out.NextCursor = encodeCursor("5.0.0", 0, false)
 	fitListComponents(&out, 0, false, defaultResponseBudget)
-	if got := estimatedResponseBytes(out); got > defaultResponseBudget {
+	if got := wireResponseBytes(out); got > defaultResponseBudget {
 		t.Errorf("estimated response = %d, want <= %d", got, defaultResponseBudget)
 	}
 	if len(out.Components) == 0 || len(out.Components) >= 100 {
@@ -144,7 +189,7 @@ func TestFitSearchTrimsOutput(t *testing.T) {
 		})
 	}
 	fitSearch(&out, defaultResponseBudget)
-	if got := estimatedResponseBytes(out); got > defaultResponseBudget {
+	if got := wireResponseBytes(out); got > defaultResponseBudget {
 		t.Errorf("estimated response = %d, want <= %d", got, defaultResponseBudget)
 	}
 	if len(out.Hits) == 0 || len(out.Hits) >= 100 {
@@ -459,48 +504,84 @@ func TestFitComponentAPIRejectsOversizedResponse(t *testing.T) {
 	}
 }
 
-// wireResponseBytes reproduces the bytes the SDK puts on the wire for a tool
-// output: the structured JSON, the same JSON re-encoded as a TextContent
-// string, and the JSON-RPC envelope.
-func wireResponseBytes(value any) int {
-	return wireResponseBytesForID(value, 1)
+func TestNewToolBudgets(t *testing.T) {
+	svc := New(nil, nil)
+	if got := svc.responseBudget(false); got != defaultResponseBudget {
+		t.Errorf("summary budget = %d, want %d", got, defaultResponseBudget)
+	}
+	if got := svc.responseBudget(true); got != hardResponseBudget {
+		t.Errorf("full budget = %d, want %d", got, hardResponseBudget)
+	}
+	svc.maxResponseBytes = 1000
+	if got := svc.responseBudget(false); got != 1000 {
+		t.Errorf("overridden summary budget = %d, want 1000", got)
+	}
+	if got := svc.responseBudget(true); got != 1000 {
+		t.Errorf("overridden full budget = %d, want 1000", got)
+	}
 }
 
-func wireResponseBytesForID(value any, id any) int {
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return 0
+// TestExistingToolsRespectServiceBudget checks the section 7 tools that have
+// their own pagination or follow-up controls. When a response is over the
+// configured wire budget it must either be trimmed with an explicit control or
+// return a structured response_too_large error.
+func TestExistingToolsRespectServiceBudget(t *testing.T) {
+	svc := fixtureService(t)
+	markupInput := ValidateMarkupInput{
+		Markup:  `<rh-button ` + strings.Repeat(`bogus="x" `, 40) + `></rh-button>`,
+		Version: "5.0.0",
 	}
-	if len(encoded) > 0 && encoded[0] == '{' {
-		var decoded any
-		if err := json.Unmarshal(encoded, &decoded); err == nil {
-			if remarshaled, err := json.Marshal(decoded); err == nil {
-				encoded = remarshaled
-			}
-		}
-	}
-	result := &mcp.CallToolResult{
-		Content:           []mcp.Content{&mcp.TextContent{Text: string(encoded)}},
-		StructuredContent: json.RawMessage(encoded),
-	}
-	envelope, err := json.Marshal(map[string]any{
-		"jsonrpc": "2.0",
-		"id":      id,
-		"result":  result,
+	baselineMarkup := svc.ValidateMarkup(context.Background(), markupInput)
+	svc.maxResponseBytes = 1400
+
+	t.Run("resolve_version", func(t *testing.T) {
+		out := svc.ResolveVersion(context.Background(), ResolveVersionInput{Version: "5.0.0"})
+		hasControl := out.Truncated || (out.Error != nil && out.Error.Code == "response_too_large")
+		assertWithinBudget(t, out, 1400, out.Truncated, hasControl, out.Error)
 	})
-	if err != nil {
-		return 0
-	}
-	return len(envelope)
+
+	t.Run("list_components", func(t *testing.T) {
+		out := svc.ListComponents(context.Background(), ListComponentsInput{
+			Version:  "5.0.0",
+			PageSize: 100,
+		})
+		dropped := out.Total > len(out.Components)
+		hasControl := out.Truncated || out.NextCursor != ""
+		assertWithinBudget(t, out, 1400, dropped, hasControl, out.Error)
+	})
+
+	t.Run("search", func(t *testing.T) {
+		out := svc.Search(context.Background(), SearchInput{
+			Query:   "button",
+			Version: "5.0.0",
+			Limit:   50,
+		})
+		dropped := out.Total > len(out.Hits)
+		assertWithinBudget(t, out, 1400, dropped, out.Truncated, out.Error)
+	})
+
+	t.Run("validate_markup", func(t *testing.T) {
+		out := svc.ValidateMarkup(context.Background(), markupInput)
+		dropped := len(out.Issues) < len(baselineMarkup.Issues)
+		hasControl := out.Truncated || (out.Error != nil && out.Error.Code == "response_too_large")
+		assertWithinBudget(t, out, 1400, dropped, hasControl, out.Error)
+	})
 }
 
-func hasWarning(warnings []string, needle string) bool {
-	for _, warning := range warnings {
-		if strings.Contains(warning, needle) {
-			return true
-		}
+func assertWithinBudget(t *testing.T, value any, budget int, dropped, hasControl bool, toolErr *ToolError) {
+	t.Helper()
+	size := wireResponseBytes(value)
+	estimate := estimatedResponseBytes(value)
+	t.Logf("wire size = %d bytes, estimate = %d (test budget %d)", size, estimate, budget)
+	if size > budget {
+		t.Errorf("response = %d bytes, over the %d byte budget", size, budget)
 	}
-	return false
+	if dropped && !hasControl && (toolErr == nil || toolErr.Code != "response_too_large") {
+		t.Error("dropped entries have no explicit follow-up control")
+	}
+	if toolErr != nil && toolErr.Code != "response_too_large" {
+		t.Errorf("unexpected tool error: %+v", toolErr)
+	}
 }
 
 func hasSectionLink(out ComponentAPIOutput, section string) bool {
@@ -538,6 +619,8 @@ func TestFitSearchNoticeDoesNotEmptyHits(t *testing.T) {
 	if out.Error != nil && out.Error.Code != "response_too_large" {
 		t.Fatalf("unexpected error = %+v", out.Error)
 	}
+	t.Logf("hits = %d, estimate = %d, budget = %d, warnings = %v",
+		len(out.Hits), estimatedResponseBytes(out), budget, out.Resolved.Warnings)
 	if len(out.Hits) == 0 {
 		t.Fatalf("hits = 0, want a non-empty page; warnings = %v", out.Resolved.Warnings)
 	}
@@ -552,6 +635,8 @@ func TestFitSearchNoticeDoesNotEmptyHits(t *testing.T) {
 func TestFitResolveVersionNoticeDoesNotEmptyCandidates(t *testing.T) {
 	out := ResolveVersionOutput{Resolved: ResolvedVersion{Elements: "5.0.0"}, Candidates: manyCandidates(100)}
 	fitResolveVersion(&out, defaultResponseBudget)
+	t.Logf("candidates = %d, estimate = %d, budget = %d, warnings = %v",
+		len(out.Candidates), estimatedResponseBytes(out), defaultResponseBudget, out.Resolved.Warnings)
 	if len(out.Candidates) == 0 {
 		t.Fatalf("candidates = 0, want a non-empty page; warnings = %v error = %+v",
 			out.Resolved.Warnings, out.Error)
@@ -606,6 +691,8 @@ func TestFitValidateMarkupNoticeDoesNotEmptyIssues(t *testing.T) {
 	}
 	out := ValidateMarkupOutput{Resolved: ResolvedVersion{Elements: "5.0.0"}, Issues: issues}
 	fitted := fitValidateMarkup(out, 3000)
+	t.Logf("issues = %d, estimate = %d, budget = 3000, warnings = %v",
+		len(fitted.Issues), estimatedResponseBytes(fitted), fitted.Warnings)
 	if len(fitted.Issues) == 0 {
 		t.Fatalf("issues = 0, want a non-empty page; warnings = %v", fitted.Warnings)
 	}
@@ -655,6 +742,231 @@ func TestMarkCandidateTruncationSetsFlag(t *testing.T) {
 	}
 	if len(candidate.Version) > maxCandidateRunes+3 {
 		t.Errorf("version length = %d, want the cap plus ellipsis", len(candidate.Version))
+	}
+}
+
+func TestFitResolveVersionTinyBudgetReturnsStructuredError(t *testing.T) {
+	out := ResolveVersionOutput{
+		Resolved:   ResolvedVersion{Warnings: manyWarnings(100)},
+		Candidates: manyCandidates(10),
+	}
+	fitResolveVersion(&out, 64)
+	if out.Error == nil || out.Error.Code != "response_too_large" {
+		t.Fatalf("error = %+v, want response_too_large", out.Error)
+	}
+}
+
+func TestFitListComponentsMarksFieldTruncation(t *testing.T) {
+	out := ListComponentsOutput{
+		Resolved: ResolvedVersion{Elements: "5.0.0"},
+		Total:    1,
+		Components: []ComponentSummary{{
+			TagName:        "rh-x",
+			Summary:        strings.Repeat("s", 600),
+			ModulePath:     strings.Repeat("m", 400),
+			PackageSubpath: strings.Repeat("p", 400),
+		}},
+	}
+	fitListComponents(&out, 0, false, defaultResponseBudget)
+	if out.Error != nil {
+		t.Fatalf("fitListComponents() error = %+v", out.Error)
+	}
+	if len(out.Components) != 1 {
+		t.Fatalf("components = %d, want one", len(out.Components))
+	}
+	if !out.Components[0].Truncated {
+		t.Error("component Truncated = false, want true")
+	}
+	if !out.Truncated {
+		t.Error("output Truncated = false, want true")
+	}
+	if !hasWarning(out.Resolved.Warnings, "summary") {
+		t.Errorf("warnings = %v, want a summary truncation warning", out.Resolved.Warnings)
+	}
+	if !hasWarning(out.Resolved.Warnings, "modulePath") {
+		t.Errorf("warnings = %v, want a modulePath truncation warning", out.Resolved.Warnings)
+	}
+	if size := wireResponseBytes(out); size > defaultResponseBudget {
+		t.Errorf("response = %d bytes, over the %d byte default", size, defaultResponseBudget)
+	}
+}
+
+// TestFitListComponentsNoticesCountReturnedEntries checks that a notice
+// describes the page actually returned, not entries the budget trimmed away.
+func TestFitListComponentsNoticesCountReturnedEntries(t *testing.T) {
+	components := make([]ComponentSummary, 40)
+	for i := range components {
+		components[i] = ComponentSummary{
+			TagName:    fmt.Sprintf("rh-component-%03d", i),
+			Summary:    strings.Repeat("s", 600),
+			ModulePath: "rh-component.js",
+		}
+	}
+	out := ListComponentsOutput{
+		Resolved:   ResolvedVersion{Elements: "5.0.0"},
+		Total:      len(components),
+		Components: components,
+	}
+	fitListComponents(&out, 0, false, 2500)
+	if out.Error != nil {
+		t.Fatalf("fitListComponents() error = %+v", out.Error)
+	}
+	if len(out.Components) == 0 || len(out.Components) == len(components) {
+		t.Fatalf("components = %d, want a trimmed non-empty page", len(out.Components))
+	}
+	if !out.Truncated {
+		t.Error("output Truncated = false, want true when components are dropped")
+	}
+	want := fmt.Sprintf("component %s summary truncated", out.Components[0].TagName)
+	if !hasWarning(out.Resolved.Warnings, want) {
+		t.Errorf("warnings = %v, want %q", out.Resolved.Warnings, want)
+	}
+	last := components[len(components)-1].TagName
+	if !slices.ContainsFunc(out.Components, func(c ComponentSummary) bool { return c.TagName == last }) &&
+		hasWarning(out.Resolved.Warnings, "component "+last+" summary truncated") {
+		t.Errorf("warnings = %v, still describe a trimmed entry (%s)", out.Resolved.Warnings, last)
+	}
+}
+
+// TestFitListComponentsKeepsWarningsWhenTruncationFits checks that field
+// truncation, which alone brings the response under budget, does not replace
+// substantive resolution warnings with an omission summary.
+func TestFitListComponentsKeepsWarningsWhenTruncationFits(t *testing.T) {
+	components := make([]ComponentSummary, 3)
+	for i := range components {
+		components[i] = ComponentSummary{
+			TagName:    fmt.Sprintf("rh-component-%03d", i),
+			Summary:    strings.Repeat("s", 5000),
+			ModulePath: "rh-component.js",
+		}
+	}
+	out := ListComponentsOutput{
+		Resolved: ResolvedVersion{Elements: "5.0.0", Warnings: []string{
+			"resolved @rhds/elements 5.0.0 from package-lock.json",
+			"workspace root came from MCP roots",
+		}},
+		Total:      len(components),
+		Components: components,
+	}
+	fitListComponents(&out, 0, false, defaultResponseBudget)
+	if out.Error != nil {
+		t.Fatalf("fitListComponents() error = %+v", out.Error)
+	}
+	if !hasWarning(out.Resolved.Warnings, "package-lock.json") {
+		t.Errorf("warnings = %v, lost the lockfile resolution warning", out.Resolved.Warnings)
+	}
+	if !hasWarning(out.Resolved.Warnings, "MCP roots") {
+		t.Errorf("warnings = %v, lost the roots warning", out.Resolved.Warnings)
+	}
+	if hasWarning(out.Resolved.Warnings, "warnings omitted") {
+		t.Errorf("warnings = %v, summarized warnings that truncation made fit", out.Resolved.Warnings)
+	}
+}
+
+// TestTruncationAndTrimNoticesSurviveWarningCap checks that the warning cap
+// cannot hide the field or trim notice behind a generic omission line.
+func TestTruncationAndTrimNoticesSurviveWarningCap(t *testing.T) {
+	base := make([]string, 0, 20)
+	for i := 0; i < 20; i++ {
+		base = append(base, fmt.Sprintf("workspace warning %02d: %s", i, strings.Repeat("w", 20)))
+	}
+
+	t.Run("field notice", func(t *testing.T) {
+		out := ListComponentsOutput{
+			Resolved: ResolvedVersion{Elements: "5.0.0", Warnings: base},
+			Total:    1,
+			Components: []ComponentSummary{{
+				TagName:    "rh-x",
+				Summary:    strings.Repeat("s", 600),
+				ModulePath: "rh-x.js",
+			}},
+		}
+		fitListComponents(&out, 0, false, defaultResponseBudget)
+		if !hasWarning(out.Resolved.Warnings, "summary truncated") {
+			t.Errorf("warnings = %v, want the field notice", out.Resolved.Warnings)
+		}
+		// sanitizeWarningsLimit may add one omission line after the reserved
+		// notices, so the absolute ceiling is one above maxResponseWarnings.
+		if len(out.Resolved.Warnings) > maxResponseWarnings+1 {
+			t.Errorf("warnings = %d, want at most %d", len(out.Resolved.Warnings), maxResponseWarnings+1)
+		}
+	})
+
+	t.Run("trim notice", func(t *testing.T) {
+		components := make([]ComponentSummary, 40)
+		for i := range components {
+			components[i] = ComponentSummary{
+				TagName:    fmt.Sprintf("rh-component-%03d", i),
+				Summary:    strings.Repeat("s", 80),
+				ModulePath: "rh-component.js",
+			}
+		}
+		out := ListComponentsOutput{
+			Resolved:   ResolvedVersion{Elements: "5.0.0", Warnings: base},
+			Total:      len(components),
+			Components: components,
+		}
+		fitListComponents(&out, 0, false, defaultResponseBudget)
+		if !hasWarning(out.Resolved.Warnings, "response limited to fit the budget") {
+			t.Errorf("warnings = %v, want the trim notice", out.Resolved.Warnings)
+		}
+		// sanitizeWarningsLimit may add one omission line after the reserved
+		// notices, so the absolute ceiling is one above maxResponseWarnings.
+		if len(out.Resolved.Warnings) > maxResponseWarnings+1 {
+			t.Errorf("warnings = %d, want at most %d", len(out.Resolved.Warnings), maxResponseWarnings+1)
+		}
+	})
+}
+
+// TestFitListComponentsCountsCursorBytes sweeps budgets where a single
+// component plus its cursor fits. Any larger page must trim to fit, so the
+// fitter must not fail with response_too_large just because the cursor pushed
+// the response over after the last trim.
+func TestFitListComponentsCountsCursorBytes(t *testing.T) {
+	components := make([]ComponentSummary, 40)
+	for i := range components {
+		components[i] = ComponentSummary{
+			TagName:    fmt.Sprintf("rh-component-%03d", i),
+			Summary:    strings.Repeat("s", 80),
+			ModulePath: "rh-component.js",
+		}
+	}
+	tested := 0
+	for budget := 500; budget <= 4000; budget += 13 {
+		// The minimum feasible page is one component plus the budget warning
+		// and the cursor. Only sweep budgets where that page fits.
+		single := ListComponentsOutput{
+			Resolved: ResolvedVersion{
+				Elements: "5.0.0",
+				Warnings: []string{"response limited to fit the budget; continue with nextCursor"},
+			},
+			Total:      len(components),
+			Components: append([]ComponentSummary(nil), components[:1]...),
+			NextCursor: encodeCursor("5.0.0", 1, false),
+			Truncated:  true,
+		}
+		if estimatedResponseBytes(single) > budget {
+			continue
+		}
+		tested++
+		out := ListComponentsOutput{
+			Resolved:   ResolvedVersion{Elements: "5.0.0"},
+			Total:      len(components),
+			Components: append([]ComponentSummary(nil), components...),
+		}
+		fitListComponents(&out, 0, false, budget)
+		if out.Error != nil {
+			t.Fatalf("budget %d: %+v, but one component with its cursor fits", budget, out.Error)
+		}
+		if got := wireResponseBytes(out); got > budget {
+			t.Errorf("budget %d: response = %d bytes", budget, got)
+		}
+		if out.NextCursor == "" {
+			t.Errorf("budget %d: partial page has no cursor", budget)
+		}
+	}
+	if tested == 0 {
+		t.Fatal("no budget exercised the cursor path")
 	}
 }
 
@@ -750,6 +1062,9 @@ func TestFitComponentAPIOmitsRequestedSectionOnlyWhenTruncationFails(t *testing.
 	}
 }
 
+// wireResponseBytes reproduces the bytes the SDK puts on the wire for a tool
+// output: the structured JSON, the same JSON re-encoded as a TextContent
+// string, and the JSON-RPC envelope.
 func TestFitComponentAPIOmittedPropertiesEmitsLink(t *testing.T) {
 	out := ComponentAPIOutput{
 		Resolved: ResolvedVersion{Elements: "5.0.0"},
@@ -800,7 +1115,7 @@ func TestErrorResponsesStayWithinBudgetWithLongWarnings(t *testing.T) {
 	}
 
 	tokens := QueryTokensOutput{Resolved: resolved, Error: failure}
-	tokens = fitQueryTokens(tokens, budget)
+	tokens = fitQueryTokensPage(tokens, budget, 0)
 	if size := estimatedResponseBytes(tokens); size > budget {
 		t.Errorf("tokens error response = %d bytes, want <= %d", size, budget)
 	}
@@ -815,5 +1130,138 @@ func TestErrorResponsesStayWithinBudgetWithLongWarnings(t *testing.T) {
 	api = fitComponentAPI(api, budget, true, nil)
 	if size := estimatedResponseBytes(api); size > budget {
 		t.Errorf("component API error response = %d bytes, want <= %d", size, budget)
+	}
+}
+
+// A hostile or mistaken version string must not be echoed back at full length,
+// and every migration-guide return path must respect the response budget.
+func TestMigrationGuideErrorResponseIsBounded(t *testing.T) {
+	huge := strings.Repeat("9", 100_000)
+	out := fixtureService(t).GetMigrationGuide(context.Background(), MigrationGuideInput{
+		FromVersion: huge,
+		ToVersion:   "4.2.2",
+	})
+	if out.Error == nil {
+		t.Fatal("error = nil, want artifact_not_found")
+	}
+	if size := wireResponseBytes(out); size > defaultResponseBudget {
+		t.Errorf("migration guide error response = %d bytes, want <= %d", size, defaultResponseBudget)
+	}
+	if len(out.Error.Message) > maxWarningRunes+3 {
+		t.Errorf("error message = %d runes, want <= %d", len(out.Error.Message), maxWarningRunes+3)
+	}
+}
+
+func TestDesignGuidelinesEchoedInputIsBounded(t *testing.T) {
+	huge := strings.Repeat("x", 100_000)
+	svc := fixtureService(t)
+
+	topic := svc.GetDesignGuidelines(context.Background(), DesignGuidelinesInput{
+		Topic:   huge,
+		Version: "5.0.0",
+	})
+	if size := wireResponseBytes(topic); size > defaultResponseBudget {
+		t.Errorf("topic response = %d bytes, want <= %d", size, defaultResponseBudget)
+	}
+	if len(topic.Topic) > maxCandidateRunes+3 {
+		t.Errorf("topic = %d runes, want <= %d", len(topic.Topic), maxCandidateRunes+3)
+	}
+
+	element := svc.GetDesignGuidelines(context.Background(), DesignGuidelinesInput{
+		Element: huge,
+		Version: "5.0.0",
+	})
+	if element.Error == nil {
+		t.Fatal("element error = nil, want docs_not_found")
+	}
+	if size := wireResponseBytes(element); size > defaultResponseBudget {
+		t.Errorf("element response = %d bytes, want <= %d", size, defaultResponseBudget)
+	}
+	if len(element.Element) > maxCandidateRunes+3 {
+		t.Errorf("element = %d runes, want <= %d", len(element.Element), maxCandidateRunes+3)
+	}
+}
+
+func TestUsageExamplesEchoedTagNameIsBounded(t *testing.T) {
+	huge := strings.Repeat("x", 100_000)
+	out := fixtureService(t).GetUsageExamples(context.Background(), UsageExamplesInput{
+		TagName: huge,
+	})
+	if out.Error == nil {
+		t.Fatal("error = nil, want component_not_found")
+	}
+	if size := wireResponseBytes(out); size > defaultResponseBudget {
+		t.Errorf("usage examples response = %d bytes, want <= %d", size, defaultResponseBudget)
+	}
+	if len(out.TagName) > maxCandidateRunes+3 {
+		t.Errorf("tag name = %d runes, want <= %d", len(out.TagName), maxCandidateRunes+3)
+	}
+}
+
+// A usable pattern whose escaped wire form exceeds 8k must remain reachable.
+// The budget is advisory for an explicitly requested kind, so summary returns
+// it in full with an over-budget warning and full detail still fits.
+func TestUsageExamplesPatternFitsFullDetail(t *testing.T) {
+	out := UsageExamplesOutput{
+		TagName:  "rh-accordion",
+		Kind:     "pattern",
+		Examples: []UsageExample{{Kind: "pattern", Content: strings.Repeat("x", 4500)}},
+		Total:    1,
+	}
+	summary := fitUsageExamples(out, defaultResponseBudget)
+	if summary.Error != nil {
+		t.Fatalf("summary error = %+v, want the requested example returned over budget", summary.Error)
+	}
+	if len(summary.Examples) != 1 {
+		t.Errorf("summary examples = %d, want 1", len(summary.Examples))
+	}
+	if !hasWarning(summary.Resolved.Warnings, "budget") {
+		t.Errorf("summary warnings = %v, want an over-budget warning", summary.Resolved.Warnings)
+	}
+	full := fitUsageExamples(out, hardResponseBudget)
+	if full.Error != nil {
+		t.Fatalf("full detail error = %+v", full.Error)
+	}
+	if len(full.Examples) != 1 {
+		t.Errorf("full detail examples = %d, want 1", len(full.Examples))
+	}
+}
+
+func TestUsageExamplesSingleLargeExampleIsReturnedOverBudget(t *testing.T) {
+	content := strings.Repeat("x", 40*1024)
+	for _, tc := range []struct {
+		name   string
+		kind   string
+		budget int
+	}{
+		{"summary explicit kind", "pattern", defaultResponseBudget},
+		{"full explicit kind", "pattern", hardResponseBudget},
+		{"summary single all", "all", defaultResponseBudget},
+		{"full single all", "all", hardResponseBudget},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := UsageExamplesOutput{
+				TagName:  "rh-card",
+				Kind:     tc.kind,
+				Examples: []UsageExample{{Kind: "pattern", Content: content}},
+				Total:    1,
+			}
+			fitted := fitUsageExamples(out, tc.budget)
+			if fitted.Error != nil {
+				t.Fatalf("error = %+v, want the example returned in full", fitted.Error)
+			}
+			if len(fitted.Examples) != 1 {
+				t.Fatalf("examples = %d, want 1", len(fitted.Examples))
+			}
+			if got := fitted.Examples[0].Content; got != content {
+				t.Errorf("content length = %d, want the full %d bytes", len(got), len(content))
+			}
+			if !hasWarning(fitted.Resolved.Warnings, "budget") {
+				t.Errorf("warnings = %v, want an explicit over-budget warning", fitted.Resolved.Warnings)
+			}
+			if fitted.Truncated {
+				t.Error("truncated = true, but nothing was dropped")
+			}
+		})
 	}
 }

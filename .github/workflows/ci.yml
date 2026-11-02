@@ -74,7 +74,7 @@ jobs:
             echo "real artifact tests skipped; generated data was not available" >&2
             exit 1
           fi
-
+          grep -q -- '--- PASS' /tmp/real-tests.log
   actionlint:
     name: Lint workflows
     runs-on: ubuntu-latest

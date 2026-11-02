@@ -5,6 +5,8 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -15,15 +17,21 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const maxTokenResults = 100
+const (
+	maxTokenResults  = 100
+	defaultTokenPage = 100
+)
 
 // QueryTokensInput is the input for rhds_query_tokens.
 type QueryTokensInput struct {
-	Query   string `json:"query,omitempty" jsonschema:"Case-insensitive substring to search across token names and descriptions"`
-	Token   string `json:"token,omitempty" jsonschema:"Exact token name, dot path, or CSS custom property"`
-	Version string `json:"version,omitempty" jsonschema:"RHDS tokens version; defaults to the latest bundled version"`
-	Theme   string `json:"theme,omitempty" jsonschema:"Theme to resolve: light, dark, or auto"`
-	Format  string `json:"format,omitempty" jsonschema:"Value format: value, css, or chain. chain puts the alias path in value"`
+	Query    string `json:"query,omitempty" jsonschema:"Case-insensitive substring to search across token names and descriptions"`
+	Token    string `json:"token,omitempty" jsonschema:"Exact token name, dot path, or CSS custom property"`
+	Version  string `json:"version,omitempty" jsonschema:"RHDS tokens version; defaults to the workspace resolution, then the latest bundled version"`
+	Theme    string `json:"theme,omitempty" jsonschema:"Theme to resolve: light, dark, or auto"`
+	Format   string `json:"format,omitempty" jsonschema:"Value format: value, css, or chain"`
+	Detail   string `json:"detail,omitempty" jsonschema:"Detail level: summary (default, 8k budget) or full (32k budget)"`
+	PageSize int    `json:"pageSize,omitempty" jsonschema:"Maximum tokens per page; default 100, maximum 100"`
+	Cursor   string `json:"cursor,omitempty" jsonschema:"Opaque cursor from a previous rhds_query_tokens call"`
 }
 
 // TokenResult is one token in rhds_query_tokens output.
@@ -40,21 +48,144 @@ type TokenResult struct {
 	Description string   `json:"description,omitempty"`
 	Deprecated  bool     `json:"deprecated"`
 	Deprecation string   `json:"deprecationMessage,omitempty"`
+	// Truncated reports that at least one field or the alias chain was
+	// shortened by a fixed per-field cap. The warning list names the field,
+	// the cap, and the longest original value.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // QueryTokensOutput is the output for rhds_query_tokens.
 type QueryTokensOutput struct {
-	Resolved  ResolvedVersion `json:"resolved"`
-	Tokens    []TokenResult   `json:"tokens"`
-	Total     int             `json:"total"`
-	Truncated bool            `json:"truncated,omitempty"`
-	Error     *ToolError      `json:"error,omitempty"`
+	Resolved   ResolvedVersion `json:"resolved"`
+	Tokens     []TokenResult   `json:"tokens"`
+	Total      int             `json:"total"`
+	Detail     string          `json:"detail"`
+	NextCursor string          `json:"nextCursor,omitempty"`
+	Truncated  bool            `json:"truncated"`
+	Error      *ToolError      `json:"error,omitempty"`
+
+	// cursorFingerprint binds any cursor this response emits to the filters
+	// that produced it. It is internal and never serialized.
+	cursorFingerprint string
 }
 
+// tokenCursorFingerprint is a stable hash of the filters that shape a token
+// result set. Query matching is case-insensitive and trims surrounding space,
+// so the fingerprint normalizes the query the same way.
+func tokenCursorFingerprint(query, token string) string {
+	normalized := strings.ToLower(strings.TrimSpace(query)) + "\x00" + strings.TrimSpace(token)
+	sum := sha256.Sum256([]byte(normalized))
+	return hex.EncodeToString(sum[:16])
+}
+
+func encodeTokenCursor(version string, offset int, fingerprint string) string {
+	return encodeCursorPayload(cursorPayload{
+		Version:     version,
+		Offset:      offset,
+		Fingerprint: fingerprint,
+	})
+}
+
+// matchesTokenQuery reports whether the cursor was produced by the same query
+// and token filters. A cursor with no fingerprint cannot be verified, so it is
+// rejected as a mismatch.
+func (p cursorPayload) matchesTokenQuery(query, token string) bool {
+	return p.Fingerprint == tokenCursorFingerprint(query, token)
+}
+
+func cursorQueryMismatch() *ToolError {
+	return invalidCursor("cursor was issued for a different query or token; restart pagination without a cursor")
+}
+
+// Source values for token results. The theme map is extracted from the
+// generated css/default-theme.css at data generation time, so tokens that only
+// exist there must not claim to come from the JSON document.
+const (
+	tokenSourceJSON = "json"
+	tokenSourceCSS  = "css/default-theme.css"
+)
+
 // QueryTokens implements rhds_query_tokens.
-func (s *Service) QueryTokens(_ context.Context, input QueryTokensInput) (out QueryTokensOutput) {
-	defer func() { out = fitQueryTokens(out, defaultResponseBudget) }()
-	out = QueryTokensOutput{Tokens: []TokenResult{}}
+func (s *Service) QueryTokens(_ context.Context, input QueryTokensInput) QueryTokensOutput {
+	budget := s.responseBudget(input.Detail == "full")
+	if failure := s.dataFailure(); failure != nil {
+		return fitQueryTokensPage(
+			QueryTokensOutput{Tokens: []TokenResult{}, Error: failure}, budget, 0)
+	}
+	requested := input.Version
+	source := "bundled"
+	// A cursor carries the version that produced it. Direct callers have no
+	// workspace cascade to rerun, so resolve that version instead of latest.
+	if requested == "" && input.Cursor != "" {
+		payload, cursorErr := decodeCursor(input.Cursor)
+		if cursorErr != nil {
+			return fitQueryTokensPage(
+				QueryTokensOutput{Tokens: []TokenResult{}, Error: cursorErr}, budget, 0)
+		}
+		if !payload.matchesTokenQuery(input.Query, input.Token) {
+			return fitQueryTokensPage(
+				QueryTokensOutput{Tokens: []TokenResult{}, Error: cursorQueryMismatch()}, budget, 0)
+		}
+		requested = payload.Version
+		source = "cursor"
+	}
+	version, fromElements, failure := s.resolveTokensVersion(requested)
+	if failure != nil {
+		return fitQueryTokensPage(
+			QueryTokensOutput{Tokens: []TokenResult{}, Error: failure}, budget, 0)
+	}
+	resolved := ResolvedVersion{Tokens: version, Source: source}
+	if fromElements != "" {
+		resolved.Elements = fromElements
+		resolved.Warnings = append(resolved.Warnings,
+			fmt.Sprintf("version %s is an elements version; using its coupled tokens@%s", fromElements, version))
+	}
+	return s.queryTokens(resolved, input)
+}
+
+// queryTokensWithEnv runs the normal workspace cascade when the caller does
+// not pass a version. The resolved block keeps the elements, tokens, docs, and
+// resolution source from that cascade.
+func (s *Service) queryTokensWithEnv(
+	ctx context.Context,
+	request *mcp.CallToolRequest,
+	input QueryTokensInput,
+) (*mcp.CallToolResult, QueryTokensOutput) {
+	if input.Version != "" {
+		return nil, s.QueryTokens(ctx, input)
+	}
+	// A cursor carries the tokens version that produced it. Use that version
+	// instead of re-running the workspace cascade, which could be ambiguous on
+	// a follow-up page.
+	if input.Cursor != "" {
+		payload, failure := decodeCursor(input.Cursor)
+		if failure != nil {
+			return nil, QueryTokensOutput{Tokens: []TokenResult{}, Error: failure}
+		}
+		return nil, s.queryTokens(ResolvedVersion{
+			Tokens: payload.Version,
+			Source: "cursor",
+		}, input)
+	}
+	resolved, required, failure := s.prepareResolution(ctx, newCallEnv(request), "", "", true)
+	if required != nil {
+		return required, QueryTokensOutput{}
+	}
+	if failure != nil {
+		return nil, fitQueryTokensPage(
+			QueryTokensOutput{Tokens: []TokenResult{}, Error: failure},
+			s.responseBudget(input.Detail == "full"), 0)
+	}
+	return nil, s.queryTokens(resolved.Resolved, input)
+}
+
+func (s *Service) queryTokens(resolved ResolvedVersion, input QueryTokensInput) (out QueryTokensOutput) {
+	pageOffset := 0
+	defer func() {
+		out = fitQueryTokensPage(out, s.responseBudget(input.Detail == "full"), pageOffset)
+	}()
+	out = QueryTokensOutput{Tokens: []TokenResult{}, Resolved: resolved}
+	out.cursorFingerprint = tokenCursorFingerprint(input.Query, input.Token)
 	if failure := s.dataFailure(); failure != nil {
 		out.Error = failure
 		return out
@@ -71,6 +202,18 @@ func (s *Service) QueryTokens(_ context.Context, input QueryTokensInput) (out Qu
 		return out
 	}
 
+	detail := input.Detail
+	if detail == "" {
+		detail = "summary"
+	}
+	switch detail {
+	case "summary", "full":
+	default:
+		out.Error = invalidArgument("detail must be summary or full")
+		return out
+	}
+	out.Detail = detail
+
 	theme := input.Theme
 	switch theme {
 	case "", "light", "dark", "auto":
@@ -79,12 +222,24 @@ func (s *Service) QueryTokens(_ context.Context, input QueryTokensInput) (out Qu
 		return out
 	}
 
-	version, failure := s.resolveVersion(packageTokens, kindTokens, input.Version)
-	if failure != nil {
-		out.Error = failure
+	if input.PageSize < 0 {
+		out.Error = invalidArgument("pageSize must be zero or positive")
 		return out
 	}
-	out.Resolved = ResolvedVersion{Tokens: version, Source: "bundled"}
+
+	version := out.Resolved.Tokens
+	if version == "" {
+		out.Error = &ToolError{
+			Code:    "artifact_not_found",
+			Message: "no bundled tokens data",
+			Hint:    "build with generated data: make data build",
+		}
+		return out
+	}
+	if input.Query != "" && input.Token != "" {
+		out.Resolved.Warnings = append(out.Resolved.Warnings,
+			"both query and token were supplied; token took precedence and query was ignored")
+	}
 
 	tokens, tokenMap, failure := s.loadTokens(version)
 	if failure != nil {
@@ -100,15 +255,35 @@ func (s *Service) QueryTokens(_ context.Context, input QueryTokensInput) (out Qu
 			return out
 		}
 	}
+	effectiveTheme := theme
+	if theme == "auto" {
+		effectiveTheme = "light"
+		out.Resolved.Warnings = append(out.Resolved.Warnings,
+			"theme auto used the light theme; resolve dark values on the client")
+	}
+	if theme != "" && len(themes["light"]) == 0 && len(themes["dark"]) == 0 {
+		out.Resolved.Warnings = append(out.Resolved.Warnings,
+			fmt.Sprintf("tokens@%s has no light/dark theme map", version))
+	}
 
 	var selected []*token.Token
 	if input.Token != "" {
 		found, ok := tokenMap.Get(input.Token)
 		if !ok {
 			out.Error = &ToolError{
-				Code:    "token_not_found",
-				Message: fmt.Sprintf("token %q is not bundled in tokens@%s", input.Token, version),
-				Hint:    "use query to search by name or description",
+				Code: "token_not_found",
+				Message: fmt.Sprintf("token %q is not bundled in tokens@%s",
+					truncateResponseText(input.Token, maxCandidateRunes), version),
+				Hint: "use query to search by name or description",
+			}
+			return out
+		}
+		if only := themeOnlyName(found); only != "" && only != effectiveTheme {
+			out.Error = &ToolError{
+				Code: "token_not_found",
+				Message: fmt.Sprintf("token %q is only defined in the %s theme",
+					truncateResponseText(input.Token, maxCandidateRunes), only),
+				Hint: fmt.Sprintf("pass theme=%s to resolve it", only),
 			}
 			return out
 		}
@@ -116,6 +291,9 @@ func (s *Service) QueryTokens(_ context.Context, input QueryTokensInput) (out Qu
 	} else {
 		needle := strings.ToLower(strings.TrimSpace(input.Query))
 		for _, tok := range tokens {
+			if only := themeOnlyName(tok); only != "" && only != effectiveTheme {
+				continue
+			}
 			if needle == "" || tokenMatches(tok, needle) {
 				selected = append(selected, tok)
 			}
@@ -126,85 +304,171 @@ func (s *Service) QueryTokens(_ context.Context, input QueryTokensInput) (out Qu
 		return selected[i].Name < selected[j].Name
 	})
 	out.Total = len(selected)
-	if len(selected) > maxTokenResults {
-		selected = selected[:maxTokenResults]
+
+	pageSize := input.PageSize
+	if pageSize == 0 {
+		pageSize = defaultTokenPage
+	}
+	if pageSize > maxTokenResults {
+		pageSize = maxTokenResults
 		out.Resolved.Warnings = append(out.Resolved.Warnings,
-			fmt.Sprintf("results were capped at %d tokens; narrow the query", maxTokenResults))
+			fmt.Sprintf("pageSize was capped at %d", maxTokenResults))
 	}
 
-	effectiveTheme := theme
-	if theme == "auto" {
-		effectiveTheme = "light"
-		if themes != nil {
-			out.Resolved.Warnings = append(out.Resolved.Warnings,
-				"theme auto used the light theme; resolve dark values on the client")
+	offset := 0
+	if input.Cursor != "" {
+		payload, cursorErr := decodeCursor(input.Cursor)
+		if cursorErr != nil {
+			out.Error = cursorErr
+			return out
 		}
-	}
-	if theme != "" && themes == nil {
-		out.Resolved.Warnings = append(out.Resolved.Warnings,
-			fmt.Sprintf("no theme data is bundled for tokens@%s; themeValue is omitted", version))
-	}
-
-	for _, tok := range selected {
-		result := TokenResult{
-			Name:        tok.Name,
-			CSSVariable: tok.CSSVariableName(),
-			Type:        tok.Type,
-			RawValue:    rawTokenValue(tok),
-			AliasChain:  slices.Clone(tok.ResolutionChain),
-			Description: tok.Description,
-			Deprecated:  tok.Deprecated,
-			Theme:       theme,
+		if !payload.matchesTokenQuery(input.Query, input.Token) {
+			out.Error = cursorQueryMismatch()
+			return out
 		}
-		if tok.Deprecated && tok.DeprecationMessage != "" {
-			result.Deprecation = tok.DeprecationMessage
-		}
-		switch format {
-		case "css":
-			result.Value = fmt.Sprintf("%s: %s;", tok.CSSVariableName(), tok.DisplayValue())
-		case "chain":
-			if len(tok.ResolutionChain) > 0 {
-				result.Value = strings.Join(tok.ResolutionChain, " -> ")
-			} else {
-				result.Value = tok.DisplayValue()
+		if payload.Version != version {
+			out.Error = &ToolError{
+				Code: "cursor_version_mismatch",
+				Message: fmt.Sprintf(
+					"cursor resolves tokens@%s but this call resolves tokens@%s",
+					payload.Version, version),
+				Hint: "restart pagination without a cursor or use the same version",
 			}
-		default:
-			result.Value = tok.DisplayValue()
+			return out
 		}
-		result.Source = "json"
-		if themeValue, ok := lookupThemeValue(themes, effectiveTheme, tok); ok {
-			result.ThemeValue = themeValue
-			result.Source = "css/default-theme.css"
+		if payload.Offset > len(selected) {
+			out.Error = invalidCursor("cursor offset is past the end of the result set")
+			return out
 		}
-		out.Tokens = append(out.Tokens, result)
+		offset = payload.Offset
+	}
+	pageOffset = offset
+
+	end := min(offset+pageSize, len(selected))
+	out.Tokens = make([]TokenResult, 0, end-offset)
+	for _, tok := range selected[offset:end] {
+		out.Tokens = append(out.Tokens, tokenResultFor(tok, themes, effectiveTheme, theme, format))
+	}
+	if end < len(selected) {
+		out.NextCursor = encodeTokenCursor(version, end, out.cursorFingerprint)
 	}
 	return out
 }
 
-// queryTokensWithEnv implements rhds_query_tokens for an MCP call. It resolves
-// the workspace elements version so tokens follow the elements-to-tokens
-// coupling instead of always using the latest bundled tokens.
-func (s *Service) queryTokensWithEnv(
-	ctx context.Context,
-	request *mcp.CallToolRequest,
-	input QueryTokensInput,
-) (*mcp.CallToolResult, QueryTokensOutput) {
-	resolved, required, failure := s.prepareResolution(
-		ctx, newCallEnv(request), "", input.Version, true)
-	if required != nil {
-		return required, QueryTokensOutput{}
+// resolveTokensVersion accepts a tokens version or, when the argument is not a
+// bundled tokens release, an elements version whose coupled tokens release is
+// used. This mirrors the coupling rule in docs/PLAN.md section 5.3.
+func (s *Service) resolveTokensVersion(requested string) (version, fromElements string, failure *ToolError) {
+	if requested == "" {
+		version, failure := s.resolveVersion(packageTokens, kindTokens, requested)
+		return version, "", failure
 	}
-	if failure != nil {
-		out := QueryTokensOutput{Tokens: []TokenResult{}, Error: failure}
-		return nil, fitQueryTokens(out, defaultResponseBudget)
+	if tokensVersion := s.bundledTokensVersion(requested); tokensVersion != "" {
+		return tokensVersion, "", nil
 	}
-	if resolved.Resolved.Tokens == "" {
-		return nil, s.QueryTokens(ctx, input)
+	if elementsVersion, ok := s.bundledVersion(packageElements, kindManifest, requested); ok {
+		if coupled, ok := s.store.Index().TokensForElements(elementsVersion); ok &&
+			s.store.Has(packageTokens, coupled, kindTokens) {
+			return coupled, elementsVersion, nil
+		}
 	}
-	input.Version = resolved.Resolved.Tokens
-	out := s.QueryTokens(ctx, input)
-	mergeResolution(&out.Resolved, resolved.Resolved)
-	return nil, out
+	requested = truncateResponseText(requested, maxCandidateRunes)
+	return "", "", &ToolError{
+		Code: "artifact_not_found",
+		Message: fmt.Sprintf(
+			"no tokens data for tokens@%s, and no coupled tokens release for elements@%s",
+			requested, requested),
+		Hint: "call rhds_resolve_version to list bundled tokens versions",
+	}
+}
+
+func tokenResultFor(
+	tok *token.Token,
+	themes map[string]map[string]string,
+	effectiveTheme, requestedTheme, format string,
+) TokenResult {
+	result := TokenResult{
+		Name:        tok.Name,
+		CSSVariable: tok.CSSVariableName(),
+		Type:        tok.Type,
+		RawValue:    rawTokenValue(tok),
+		AliasChain:  slices.Clone(tok.ResolutionChain),
+		Source:      tokenSource(tok),
+		Description: tok.Description,
+		Deprecated:  tok.Deprecated,
+		Theme:       requestedTheme,
+	}
+	if tok.Deprecated && tok.DeprecationMessage != "" {
+		result.Deprecation = tok.DeprecationMessage
+	}
+	switch format {
+	case "css":
+		result.Value = fmt.Sprintf("%s: %s;", tok.CSSVariableName(), tok.DisplayValue())
+	case "chain":
+		result.Value = tokenChainValue(tok)
+	default:
+		result.Value = tok.DisplayValue()
+	}
+	if themeValue, ok := lookupThemeValue(themes, effectiveTheme, tok); ok {
+		result.ThemeValue = themeValue
+	}
+	return result
+}
+
+// themeOnlyExtension marks a synthesized token that appears only in a
+// non-light theme map. Such a token has no light or unthemed base value.
+const themeOnlyExtension = "themeOnly"
+
+// tokenSource reports where the token's value comes from. Theme composites
+// that only exist in the generated default-theme.css are synthesized at load
+// time and must not be reported as JSON tokens.
+func tokenSource(tok *token.Token) string {
+	extensions, ok := tok.Extensions["com.redhat.ux"].(map[string]any)
+	if !ok {
+		return tokenSourceJSON
+	}
+	if composite, _ := extensions["themeComposite"].(bool); composite {
+		return tokenSourceCSS
+	}
+	return tokenSourceJSON
+}
+
+// themeOnlyName returns the theme that defines a synthesized token when that
+// token exists in no other theme map. It returns "" for ordinary tokens and
+// for tokens with a light value, which do have a base value.
+func themeOnlyName(tok *token.Token) string {
+	extensions, ok := tok.Extensions["com.redhat.ux"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	name, _ := extensions[themeOnlyExtension].(string)
+	return name
+}
+
+func tokenChainValue(tok *token.Token) string {
+	parts := []string{tok.CSSVariableName()}
+	for _, name := range tok.ResolutionChain {
+		parts = append(parts, prefixedCSSName(name, tok.Prefix))
+	}
+	if len(parts) == 1 {
+		return parts[0] + " (no alias)"
+	}
+	return strings.Join(parts, " -> ")
+}
+
+func prefixedCSSName(name, prefix string) string {
+	if strings.HasPrefix(name, "--") {
+		return name
+	}
+	prefix = strings.TrimLeft(prefix, "-")
+	if prefix == "" {
+		return "--" + strings.TrimLeft(name, "-")
+	}
+	name = strings.TrimLeft(name, "-")
+	if strings.HasPrefix(name, prefix+"-") {
+		return "--" + name
+	}
+	return "--" + prefix + "-" + name
 }
 
 func tokenMatches(tok *token.Token, needle string) bool {

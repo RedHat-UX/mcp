@@ -397,7 +397,7 @@ func (s *Service) documentManager() (cemtypes.Manager, error) {
 // encode required slots or cardinality, and the #458 API will expose the
 // structure-aware findings this spike cannot make through DocumentManager.
 func (s *Service) ValidateMarkup(_ context.Context, input ValidateMarkupInput) (out ValidateMarkupOutput) {
-	defer func() { out = fitValidateMarkup(out, defaultResponseBudget) }()
+	defer func() { out = fitValidateMarkup(out, s.responseBudget(false)) }()
 	out = ValidateMarkupOutput{Issues: []MarkupIssue{}}
 	if failure := s.dataFailure(); failure != nil {
 		out.Error = failure

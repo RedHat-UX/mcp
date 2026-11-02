@@ -40,7 +40,7 @@ func (s *Service) ResolveVersionInWorkspace(root string, input ResolveVersionInp
 }
 
 func (s *Service) resolveVersionInWorkspace(root string, input ResolveVersionInput) (out ResolveVersionOutput) {
-	defer func() { fitResolveVersion(&out, defaultResponseBudget) }()
+	defer func() { fitResolveVersion(&out, s.responseBudget(false)) }()
 	if failure := s.dataFailure(); failure != nil {
 		return ResolveVersionOutput{Candidates: []resolve.Candidate{}, Error: failure}
 	}
@@ -99,7 +99,7 @@ func (s *Service) resolveVersionWithEnv(
 ) (result *mcp.CallToolResult, out ResolveVersionOutput) {
 	defer func() {
 		if result == nil {
-			fitResolveVersion(&out, defaultResponseBudget)
+			fitResolveVersion(&out, s.responseBudget(false))
 		}
 	}()
 	resolved, required, failure := s.prepareResolution(

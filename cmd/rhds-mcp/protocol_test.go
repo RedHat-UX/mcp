@@ -469,3 +469,102 @@ func TestProtocolExplicitVersionSkipsRoots(t *testing.T) {
 		})
 	}
 }
+
+// TestQueryTokensUsesWorkspaceCoupledTokens checks that an omitted version
+// runs the normal cascade instead of silently using the latest tokens release.
+func TestQueryTokensUsesWorkspaceCoupledTokens(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "package.json"), []byte(
+		`{"name":"app","dependencies":{"@rhds/elements":"1.0.0"}}`), 0o644); err != nil {
+		t.Fatalf("writing package.json: %v", err)
+	}
+	session := connectProtocolClient(t, "2025-11-25", clientConfig{
+		roots:     true,
+		rootsList: []*mcp.Root{fileRoot(t, workspace)}, //nolint:staticcheck // roots required by PLAN
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "rhds_query_tokens",
+		Arguments: map[string]any{"token": "color-brand"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool(rhds_query_tokens) error = %v", err)
+	}
+	encoded, err := json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshaling structured content: %v", err)
+	}
+	var out tools.QueryTokensOutput
+	if err := json.Unmarshal(encoded, &out); err != nil {
+		t.Fatalf("decoding structured content %s: %v", encoded, err)
+	}
+	if result.IsError {
+		t.Fatalf("IsError = true: %+v", out.Error)
+	}
+	if out.Resolved.Elements != "1.0.0" {
+		t.Errorf("elements = %q, want 1.0.0", out.Resolved.Elements)
+	}
+	if out.Resolved.Tokens != "1.1.2" {
+		t.Errorf("tokens = %q, want the coupled 1.1.2", out.Resolved.Tokens)
+	}
+	if out.Resolved.Source != "package.json" {
+		t.Errorf("source = %q, want package.json", out.Resolved.Source)
+	}
+	if len(out.Tokens) != 1 {
+		t.Errorf("tokens = %+v, want one", out.Tokens)
+	}
+}
+
+// TestQueryTokensCursorSkipsWorkspaceResolution checks that a follow-up page
+// uses the cursor-bound tokens version instead of re-running the workspace
+// cascade. An ambiguous workspace must not break page two.
+func TestQueryTokensCursorSkipsWorkspaceResolution(t *testing.T) {
+	workspace := ambiguousWorkspace(t)
+	t.Chdir(workspace)
+	session := connectProtocolClient(t, "2025-11-25", clientConfig{})
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	call := func(args map[string]any) tools.QueryTokensOutput {
+		t.Helper()
+		result, err := session.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "rhds_query_tokens",
+			Arguments: args,
+		})
+		if err != nil {
+			t.Fatalf("CallTool(rhds_query_tokens) error = %v", err)
+		}
+		encoded, err := json.Marshal(result.StructuredContent)
+		if err != nil {
+			t.Fatalf("marshaling structured content: %v", err)
+		}
+		var out tools.QueryTokensOutput
+		if err := json.Unmarshal(encoded, &out); err != nil {
+			t.Fatalf("decoding structured content %s: %v", encoded, err)
+		}
+		return out
+	}
+
+	first := call(map[string]any{"version": "5.0.0", "pageSize": 2})
+	if first.Error != nil {
+		t.Fatalf("page 1 error = %+v", first.Error)
+	}
+	if first.NextCursor == "" {
+		t.Fatal("page 1 has no next cursor")
+	}
+
+	second := call(map[string]any{"cursor": first.NextCursor, "pageSize": 2})
+	if second.Error != nil {
+		t.Fatalf("page 2 error = %+v; the cursor should bypass resolution", second.Error)
+	}
+	if second.Resolved.Tokens != "3.2.0" {
+		t.Errorf("page 2 tokens = %q, want the cursor-bound 3.2.0", second.Resolved.Tokens)
+	}
+	if second.Resolved.Source != "cursor" {
+		t.Errorf("page 2 source = %q, want cursor", second.Resolved.Source)
+	}
+	if len(second.Tokens) == 0 {
+		t.Error("page 2 has no tokens")
+	}
+}

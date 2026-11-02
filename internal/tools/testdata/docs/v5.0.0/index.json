@@ -1,5 +1,12 @@
 [
   {
+    "path": "elements/rh-button/docs/10-style.md",
+    "title": "Button style",
+    "source": "RedHat-UX/red-hat-design-system@v5.0.0 elements/rh-button/docs/10-style.md",
+    "artifact": "docs/v5.0.0/elements/rh-button/docs/10-style.md",
+    "kind": "doc:elements/rh-button/docs/10-style.md"
+  },
+  {
     "path": "get-started/introduction.md",
     "title": "Get started",
     "source": "RedHat-UX/red-hat-design-system@v5.0.0 get-started/introduction.md",

@@ -77,7 +77,11 @@ func testInputs() *Inputs {
 				Path:    "docs/patterns/button/patterns/basic.html",
 				Content: []byte("<rh-button>Click</rh-button>\n"),
 			}},
-			Changelog: []byte("# Changelog\n\n## 1.0.0\n\n- Initial release.\n"),
+			Changelog: []byte("# Changelog\n\n" +
+				"## 4.0.0\n\n- Not bundled.\n\n" +
+				"## 3.0.0\n\n- Removed a thing.\n\n" +
+				"## 2.0.0\n\n- Added a thing.\n\n" +
+				"## 1.0.0\n\n- Initial release.\n"),
 		}},
 	}
 }
@@ -167,6 +171,27 @@ func TestGenerateProducesIndexAndArtifacts(t *testing.T) {
 	}
 	if !bytes.Contains(changelog, []byte("Initial release")) {
 		t.Errorf("changelog = %s", changelog)
+	}
+
+	for version, want := range map[string]string{
+		"3.0.0": "Removed a thing",
+		"2.0.0": "Added a thing",
+		"1.0.0": "Initial release",
+	} {
+		notes, err := store.Read("release-notes", version, "release-notes")
+		if err != nil {
+			t.Errorf("release notes for %s: %v", version, err)
+			continue
+		}
+		if !bytes.Contains(notes, []byte(want)) {
+			t.Errorf("release notes for %s = %s, want %q", version, notes, want)
+		}
+		if !bytes.Contains(notes, []byte("<!-- source: RedHat-UX/red-hat-design-system@v1.0.0 CHANGELOG.md")) {
+			t.Errorf("release notes for %s have no source header: %s", version, notes)
+		}
+	}
+	if _, err := store.Read("release-notes", "4.0.0", "release-notes"); err == nil {
+		t.Error("generated release notes for a version that is not bundled")
 	}
 
 	docsIndex, err := store.Read("docs", "v1.0.0", "docs")
@@ -812,4 +837,37 @@ func listFiles(t *testing.T, root string) []string {
 		t.Fatal(err)
 	}
 	return files
+}
+
+// GeneratorVersion is omitempty, so trees written before it existed have no
+// value. They are still gen-data output and must be regenerated, not treated
+// as foreign directories.
+func TestGenerateAcceptsLegacyIndexWithoutGeneratorVersion(t *testing.T) {
+	out := t.TempDir()
+	if _, err := Generate(testInputs(), out); err != nil {
+		t.Fatalf("Generate() = %v", err)
+	}
+	indexPath := filepath.Join(out, data.IndexPath)
+	raw, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var index data.Index
+	if err := json.Unmarshal(raw, &index); err != nil {
+		t.Fatal(err)
+	}
+	index.GeneratorVersion = 0
+	encoded, err := marshalJSON(&index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(indexPath, encoded, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if upToDate, err := IsUpToDate(out, lockDigest); err != nil || upToDate {
+		t.Fatalf("IsUpToDate(legacy) = %v, %v; want false", upToDate, err)
+	}
+	if _, err := Generate(testInputs(), out); err != nil {
+		t.Fatalf("Generate() over legacy output = %v, want regeneration", err)
+	}
 }

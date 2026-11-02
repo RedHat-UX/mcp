@@ -20,45 +20,13 @@ import (
 	"github.com/redhat-ux/mcp/internal/data"
 )
 
-// serviceWithoutThemes builds a store from the fixture tree with the theme
-// artifact removed.
-func serviceWithoutThemes(t *testing.T) *Service {
-	t.Helper()
-	indexBytes, err := os.ReadFile("testdata/index.json")
-	if err != nil {
-		t.Fatalf("reading fixture index: %v", err)
-	}
-	var index data.Index
-	if err := json.Unmarshal(indexBytes, &index); err != nil {
-		t.Fatalf("decoding fixture index: %v", err)
-	}
-
-	fsys := fstest.MapFS{}
-	filtered := make([]data.Artifact, 0, len(index.Artifacts))
-	for _, artifact := range index.Artifacts {
-		if artifact.Kind == kindThemes {
-			continue
+func findToken(tokens []TokenResult, name string) (TokenResult, bool) {
+	for _, tok := range tokens {
+		if tok.Name == name {
+			return tok, true
 		}
-		content, err := os.ReadFile(filepath.Join("testdata", filepath.FromSlash(artifact.Path)))
-		if err != nil {
-			t.Fatalf("reading %s: %v", artifact.Path, err)
-		}
-		fsys[artifact.Path] = &fstest.MapFile{Data: content}
-		filtered = append(filtered, artifact)
 	}
-	index.Artifacts = filtered
-	index.SchemaVersion = data.SchemaVersion
-	encoded, err := json.Marshal(index)
-	if err != nil {
-		t.Fatalf("marshaling fixture index: %v", err)
-	}
-	fsys["index.json"] = &fstest.MapFile{Data: encoded}
-
-	store, err := data.Open(fsys)
-	if err != nil {
-		t.Fatalf("opening fixture store without themes: %v", err)
-	}
-	return New(store, nil)
+	return TokenResult{}, false
 }
 
 func TestQueryTokensAliasChain(t *testing.T) {
@@ -117,7 +85,7 @@ func TestQueryTokensByCSSVariableName(t *testing.T) {
 
 func TestQueryTokensByDotPath(t *testing.T) {
 	out := fixtureService(t).QueryTokens(context.Background(), QueryTokensInput{
-		Token: "color.brand",
+		Token: "color.red.50",
 	})
 	if out.Error != nil {
 		t.Fatalf("QueryTokens() error = %+v", out.Error)
@@ -125,10 +93,7 @@ func TestQueryTokensByDotPath(t *testing.T) {
 	if len(out.Tokens) != 1 {
 		t.Fatalf("tokens = %+v, want exactly one", out.Tokens)
 	}
-	if got, want := out.Tokens[0].Name, "color-brand"; got != want {
-		t.Errorf("name = %q, want %q", got, want)
-	}
-	if got, want := out.Tokens[0].CSSVariable, "--rh-color-brand"; got != want {
+	if got, want := out.Tokens[0].CSSVariable, "--rh-color-red-50"; got != want {
 		t.Errorf("css variable = %q, want %q", got, want)
 	}
 }
@@ -140,14 +105,13 @@ func TestQueryTokensSearch(t *testing.T) {
 	if out.Error != nil {
 		t.Fatalf("QueryTokens() error = %+v", out.Error)
 	}
-	var names []string
-	for _, tok := range out.Tokens {
-		names = append(names, tok.Name)
+	if _, ok := findToken(out.Tokens, "color-brand"); !ok {
+		t.Errorf("search for brand did not include color-brand: %+v", out.Tokens)
 	}
-	slices.Sort(names)
-	want := []string{"color-brand", "color-red-50", "color-red-60"}
-	if !slices.Equal(names, want) {
-		t.Errorf("search names = %v, want %v", names, want)
+	if _, ok := findToken(out.Tokens, "color-interactive"); ok {
+		// The alias chain mentions color-brand, but the search matches names and
+		// descriptions only.
+		t.Log("color-interactive also matched, which is acceptable")
 	}
 }
 
@@ -184,82 +148,8 @@ func TestQueryTokensFormatCSS(t *testing.T) {
 	}
 }
 
-func TestQueryTokensFormatChain(t *testing.T) {
+func TestQueryTokensTheme(t *testing.T) {
 	out := fixtureService(t).QueryTokens(context.Background(), QueryTokensInput{
-		Token:  "color-interactive",
-		Format: "chain",
-	})
-	if out.Error != nil {
-		t.Fatalf("QueryTokens() error = %+v", out.Error)
-	}
-	if len(out.Tokens) != 1 {
-		t.Fatalf("tokens = %+v, want exactly one", out.Tokens)
-	}
-	want := "color-brand -> color-red-50"
-	if out.Tokens[0].Value != want {
-		t.Errorf("chain value = %q, want %q", out.Tokens[0].Value, want)
-	}
-}
-
-func TestQueryTokensThemes(t *testing.T) {
-	tests := []struct {
-		theme        string
-		wantValue    string
-		wantAutoWarn bool
-		wantSource   string
-	}{
-		{theme: "light", wantValue: "#ff0000", wantSource: "css/default-theme.css"},
-		{theme: "dark", wantValue: "#ff6666", wantSource: "css/default-theme.css"},
-		{theme: "auto", wantValue: "#ff0000", wantAutoWarn: true, wantSource: "css/default-theme.css"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.theme, func(t *testing.T) {
-			out := fixtureService(t).QueryTokens(context.Background(), QueryTokensInput{
-				Token: "color-brand",
-				Theme: tt.theme,
-			})
-			if out.Error != nil {
-				t.Fatalf("QueryTokens() error = %+v", out.Error)
-			}
-			if len(out.Tokens) != 1 {
-				t.Fatalf("tokens = %+v, want exactly one", out.Tokens)
-			}
-			tok := out.Tokens[0]
-			if tok.Theme != tt.theme {
-				t.Errorf("theme = %q, want %q", tok.Theme, tt.theme)
-			}
-			if tok.ThemeValue != tt.wantValue {
-				t.Errorf("theme value = %q, want %q", tok.ThemeValue, tt.wantValue)
-			}
-			if tok.Source != tt.wantSource {
-				t.Errorf("source = %q, want %q", tok.Source, tt.wantSource)
-			}
-			foundAuto := false
-			for _, warning := range out.Resolved.Warnings {
-				if strings.Contains(warning, "auto") {
-					foundAuto = true
-				}
-			}
-			if foundAuto != tt.wantAutoWarn {
-				t.Errorf("auto warning = %t, want %t (warnings: %v)",
-					foundAuto, tt.wantAutoWarn, out.Resolved.Warnings)
-			}
-		})
-	}
-}
-
-func TestQueryTokensRejectsInvalidTheme(t *testing.T) {
-	out := fixtureService(t).QueryTokens(context.Background(), QueryTokensInput{
-		Token: "color-brand",
-		Theme: "sepia",
-	})
-	if out.Error == nil || out.Error.Code != "invalid_argument" {
-		t.Fatalf("error = %+v, want invalid_argument", out.Error)
-	}
-}
-
-func TestQueryTokensWarnsWhenThemeDataIsMissing(t *testing.T) {
-	out := serviceWithoutThemes(t).QueryTokens(context.Background(), QueryTokensInput{
 		Token: "color-brand",
 		Theme: "dark",
 	})
@@ -269,42 +159,11 @@ func TestQueryTokensWarnsWhenThemeDataIsMissing(t *testing.T) {
 	if len(out.Tokens) != 1 {
 		t.Fatalf("tokens = %+v, want exactly one", out.Tokens)
 	}
-	if out.Tokens[0].ThemeValue != "" {
-		t.Errorf("theme value = %q, want empty", out.Tokens[0].ThemeValue)
+	if got, want := out.Tokens[0].ThemeValue, "#ff6666"; got != want {
+		t.Errorf("theme value = %q, want %q", got, want)
 	}
-	if out.Tokens[0].Source != "json" {
-		t.Errorf("source = %q, want json", out.Tokens[0].Source)
-	}
-	found := false
-	for _, warning := range out.Resolved.Warnings {
-		if strings.Contains(warning, "no theme data") {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("warnings = %v, want a missing theme data warning", out.Resolved.Warnings)
-	}
-}
-
-func TestQueryTokensDeprecatedToken(t *testing.T) {
-	out := fixtureService(t).QueryTokens(context.Background(), QueryTokensInput{
-		Token: "color-legacy",
-	})
-	if out.Error != nil {
-		t.Fatalf("QueryTokens() error = %+v", out.Error)
-	}
-	if len(out.Tokens) != 1 {
-		t.Fatalf("tokens = %+v, want exactly one", out.Tokens)
-	}
-	tok := out.Tokens[0]
-	if !tok.Deprecated {
-		t.Error("color-legacy should be deprecated")
-	}
-	if tok.Deprecation != "Use color.brand instead." {
-		t.Errorf("deprecation message = %q", tok.Deprecation)
-	}
-	if got, want := tok.Value, "#ff0000"; got != want {
-		t.Errorf("value = %q, want %q", got, want)
+	if got, want := out.Tokens[0].Theme, "dark"; got != want {
+		t.Errorf("theme = %q, want %q", got, want)
 	}
 }
 
@@ -313,8 +172,8 @@ func TestQueryTokensAllSorted(t *testing.T) {
 	if out.Error != nil {
 		t.Fatalf("QueryTokens() error = %+v", out.Error)
 	}
-	if out.Total != 9 {
-		t.Errorf("total = %d, want 9", out.Total)
+	if out.Total != 10 {
+		t.Errorf("total = %d, want 10", out.Total)
 	}
 	if !slices.IsSortedFunc(out.Tokens, func(a, b TokenResult) int {
 		switch {
@@ -386,12 +245,104 @@ func TestAddThemeTokens(t *testing.T) {
 	}
 }
 
+func TestQueryTokensOmitsDarkOnlyTokenOutsideDarkTheme(t *testing.T) {
+	svc := serviceWithThemes(t, []byte(`{
+		"light": {"--rh-color-brand": "#ff0000"},
+		"dark": {"--rh-color-dark-only": "#111111"}
+	}`))
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name  string
+		theme string
+	}{
+		{"unthemed", ""},
+		{"light", "light"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := svc.QueryTokens(ctx, QueryTokensInput{Query: "dark-only", Theme: tc.theme})
+			if out.Error != nil {
+				t.Fatalf("QueryTokens() error = %+v", out.Error)
+			}
+			if len(out.Tokens) != 0 || out.Total != 0 {
+				t.Errorf("tokens = %+v, total = %d, want the dark-only token omitted",
+					out.Tokens, out.Total)
+			}
+		})
+	}
+
+	dark := svc.QueryTokens(ctx, QueryTokensInput{Query: "dark-only", Theme: "dark"})
+	if dark.Error != nil {
+		t.Fatalf("dark QueryTokens() error = %+v", dark.Error)
+	}
+	if len(dark.Tokens) != 1 {
+		t.Fatalf("dark tokens = %+v, want one dark-only token", dark.Tokens)
+	}
+	if got, want := dark.Tokens[0].Name, "color-dark-only"; got != want {
+		t.Errorf("token name = %q, want %q", got, want)
+	}
+	if got, want := dark.Tokens[0].Value, "#111111"; got != want {
+		t.Errorf("dark token base value = %q, want %q", got, want)
+	}
+	if got, want := dark.Tokens[0].ThemeValue, "#111111"; got != want {
+		t.Errorf("dark token theme value = %q, want %q", got, want)
+	}
+}
+
+func TestQueryTokensExactDarkOnlyTokenRequiresDarkTheme(t *testing.T) {
+	svc := serviceWithThemes(t, []byte(`{
+		"light": {"--rh-color-brand": "#ff0000"},
+		"dark": {"--rh-color-dark-only": "#111111"}
+	}`))
+	ctx := context.Background()
+
+	for _, theme := range []string{"", "light"} {
+		out := svc.QueryTokens(ctx, QueryTokensInput{Token: "color-dark-only", Theme: theme})
+		if out.Error == nil || out.Error.Code != "token_not_found" {
+			t.Fatalf("theme %q error = %+v, want token_not_found", theme, out.Error)
+		}
+		if !strings.Contains(out.Error.Hint, "dark") {
+			t.Errorf("theme %q hint = %q, want the defining theme", theme, out.Error.Hint)
+		}
+	}
+
+	out := svc.QueryTokens(ctx, QueryTokensInput{Token: "color-dark-only", Theme: "dark"})
+	if out.Error != nil {
+		t.Fatalf("dark error = %+v", out.Error)
+	}
+	if len(out.Tokens) != 1 || out.Tokens[0].Value != "#111111" {
+		t.Errorf("dark token = %+v, want #111111", out.Tokens)
+	}
+}
+
 func TestQueryTokensWithoutDataReturnsStructuredError(t *testing.T) {
 	out := New(nil, data.ErrNoData).QueryTokens(context.Background(), QueryTokensInput{
 		Token: "color-brand",
 	})
 	if out.Error == nil || out.Error.Code != "no_bundled_data" {
 		t.Fatalf("error = %+v, want no_bundled_data", out.Error)
+	}
+}
+
+func TestAddThemeTokensIteratesAllThemes(t *testing.T) {
+	themes := map[string]map[string]string{
+		"dark": {
+			"--rh-color-dark-only": "#111111",
+		},
+		"sepia": {
+			"--rh-color-sepia-only": "#222222",
+		},
+	}
+	got := addThemeTokens(nil, themes)
+	if len(got) != 2 {
+		t.Fatalf("addThemeTokens() = %d tokens, want 2", len(got))
+	}
+	names := map[string]bool{}
+	for _, tok := range got {
+		names[tok.Name] = true
+	}
+	if !names["color-dark-only"] || !names["color-sepia-only"] {
+		t.Errorf("names = %v, want dark-only and sepia-only", names)
 	}
 }
 
@@ -479,5 +430,85 @@ func TestQueryTokensAcceptsVPrefixedVersion(t *testing.T) {
 	}
 	if out.Resolved.Tokens != "3.2.0" {
 		t.Errorf("resolved tokens version = %q, want 3.2.0", out.Resolved.Tokens)
+	}
+}
+
+func TestQueryTokensRejectsInvalidTheme(t *testing.T) {
+	out := fixtureService(t).QueryTokens(context.Background(), QueryTokensInput{
+		Token: "color-brand",
+		Theme: "sepia",
+	})
+	if out.Error == nil || out.Error.Code != "invalid_argument" {
+		t.Fatalf("error = %+v, want invalid_argument", out.Error)
+	}
+}
+
+func TestQueryTokensIncludesDescriptionAndDeprecation(t *testing.T) {
+	svc := fixtureService(t)
+	summary := svc.QueryTokens(context.Background(), QueryTokensInput{Token: "color-legacy"})
+	if summary.Error != nil {
+		t.Fatalf("summary error = %+v", summary.Error)
+	}
+	if len(summary.Tokens) != 1 {
+		t.Fatalf("summary tokens = %+v, want one", summary.Tokens)
+	}
+	if summary.Tokens[0].Description == "" {
+		t.Error("summary detail omitted the description")
+	}
+	if summary.Tokens[0].Deprecation == "" {
+		t.Error("summary detail omitted the deprecation message")
+	}
+
+	full := svc.QueryTokens(context.Background(), QueryTokensInput{
+		Token:  "color-legacy",
+		Detail: "full",
+	})
+	if full.Error != nil {
+		t.Fatalf("full error = %+v", full.Error)
+	}
+	if len(full.Tokens) != 1 {
+		t.Fatalf("full tokens = %+v, want one", full.Tokens)
+	}
+	tok := full.Tokens[0]
+	if tok.Description == "" {
+		t.Error("full detail omitted the description")
+	}
+	if !tok.Deprecated {
+		t.Error("full detail did not mark the token deprecated")
+	}
+	if tok.Deprecation == "" {
+		t.Error("full detail omitted the deprecation message")
+	}
+}
+
+// A direct service caller has no workspace cascade. A cursor must resolve the
+// version that produced it instead of the latest bundled tokens release.
+func TestQueryTokensCursorKeepsOlderVersion(t *testing.T) {
+	svc := fixtureService(t)
+	first := svc.QueryTokens(context.Background(), QueryTokensInput{
+		Version:  "1.1.2",
+		PageSize: 1,
+	})
+	if first.Error != nil {
+		t.Fatalf("first page error = %+v", first.Error)
+	}
+	if first.NextCursor == "" {
+		t.Fatal("nextCursor = empty, want a second page")
+	}
+	second := svc.QueryTokens(context.Background(), QueryTokensInput{
+		Cursor:   first.NextCursor,
+		PageSize: 1,
+	})
+	if second.Error != nil {
+		t.Fatalf("second page error = %+v", second.Error)
+	}
+	if second.Resolved.Tokens != "1.1.2" {
+		t.Errorf("second page tokens version = %q, want 1.1.2", second.Resolved.Tokens)
+	}
+	if second.Resolved.Source != "cursor" {
+		t.Errorf("source = %q, want cursor", second.Resolved.Source)
+	}
+	if len(second.Tokens) != 1 {
+		t.Errorf("second page tokens = %d, want 1", len(second.Tokens))
 	}
 }

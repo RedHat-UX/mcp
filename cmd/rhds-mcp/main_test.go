@@ -543,11 +543,62 @@ func TestPhaseBToolsAreRegistered(t *testing.T) {
 		"rhds_search",
 		"rhds_query_tokens",
 		"rhds_validate_markup",
+		"rhds_get_design_guidelines",
+		"rhds_get_usage_examples",
+		"rhds_get_migration_guide",
 	}
 	for _, name := range want {
 		if !slices.Contains(names, name) {
 			t.Errorf("tools/list is missing %q: %v", name, names)
 		}
+	}
+}
+
+func TestInstructionsDerivedFromSupportedVersions(t *testing.T) {
+	instructions := buildInstructions(
+		supportedProtocolVersions, tools.New(nil, data.ErrNoData))
+	if want := strings.Join(supportedProtocolVersions, ", "); !strings.Contains(instructions, want) {
+		t.Errorf("instructions do not contain the supported protocol list %q:\n%s", want, instructions)
+	}
+	for _, want := range []string{"offline", "lockfile", "search", "exact lookup", "bundled"} {
+		if !strings.Contains(strings.ToLower(instructions), want) {
+			t.Errorf("instructions missing %q:\n%s", want, instructions)
+		}
+	}
+}
+
+func TestPromptsAndResourcesAreRegisteredWithoutData(t *testing.T) {
+	clientSession := connectTestClient(t,
+		newServer(slog.New(slog.DiscardHandler), tools.New(nil, data.ErrNoData)))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	prompts, err := clientSession.ListPrompts(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListPrompts() error = %v", err)
+	}
+	promptNames := make(map[string]bool)
+	for _, prompt := range prompts.Prompts {
+		promptNames[prompt.Name] = true
+	}
+	for _, want := range []string{"rhds-lit-usage", "rhds-html-usage", "rhds-twig-slot-template"} {
+		if !promptNames[want] {
+			t.Errorf("prompts are missing %q", want)
+		}
+	}
+
+	resources, err := clientSession.ListResources(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListResources() error = %v", err)
+	}
+	foundMigration := false
+	for _, resource := range resources.Resources {
+		if resource.URI == "rhds://migrations/tokens" {
+			foundMigration = true
+		}
+	}
+	if !foundMigration {
+		t.Error("resources are missing rhds://migrations/tokens")
 	}
 }
 
@@ -602,6 +653,9 @@ func TestDataToolsReturnStructuredErrorWithoutData(t *testing.T) {
 		{"rhds_search", map[string]any{"query": "button"}},
 		{"rhds_validate_markup", map[string]any{"markup": "<rh-button></rh-button>"}},
 		{"rhds_query_tokens", map[string]any{"token": "color-brand"}},
+		{"rhds_get_design_guidelines", map[string]any{"topic": "button"}},
+		{"rhds_get_usage_examples", map[string]any{"tagName": "rh-button"}},
+		{"rhds_get_migration_guide", map[string]any{"fromVersion": "1.0.0"}},
 	}
 	for _, call := range calls {
 		t.Run(call.name, func(t *testing.T) {
@@ -636,5 +690,24 @@ func TestDataToolsReturnStructuredErrorWithoutData(t *testing.T) {
 				t.Errorf("structured error has no hint: %s", encoded)
 			}
 		})
+	}
+}
+
+func TestRealInstructionsWithBundledData(t *testing.T) {
+	service := loadService(slog.New(slog.DiscardHandler))
+	elements, tokens := service.SupportedVersions()
+	if len(elements) == 0 || len(tokens) == 0 {
+		t.Skip("generated data is absent; run make data")
+	}
+	instructions := buildInstructions(supportedProtocolVersions, service)
+	for _, want := range []string{
+		"44 versions",
+		"18 versions",
+		"1.0.0 through 5.0.0",
+		"1.0.0 through 3.2.0",
+	} {
+		if !strings.Contains(instructions, want) {
+			t.Errorf("instructions missing %q:\n%s", want, instructions)
+		}
 	}
 }

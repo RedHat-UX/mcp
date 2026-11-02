@@ -4,6 +4,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"io/fs"
 	"os"
@@ -11,7 +12,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/redhat-ux/mcp/internal/cem"
 	"github.com/redhat-ux/mcp/internal/data"
@@ -62,13 +66,67 @@ func TestRealEmbeddedData(t *testing.T) {
 	}
 	service := New(store, nil)
 
-	allComponents, total := allRealComponents(t, service, "5.0.0")
-	if total == 0 || len(allComponents) != total {
-		t.Fatalf("ListComponents() returned %d of %d components for 5.0.0", len(allComponents), total)
+	// 82 components overflow the 8 KB budget, so follow the cursor to see the
+	// whole listing instead of assuming one page contains every element.
+	firstPage := service.ListComponents(context.Background(), ListComponentsInput{
+		Version:           "5.0.0",
+		IncludeDeprecated: true,
+		PageSize:          100,
+	})
+	if firstPage.Error != nil {
+		t.Fatalf("ListComponents() error = %+v", firstPage.Error)
+	}
+	if firstPage.Total == 0 {
+		t.Fatal("ListComponents() returned no components for 5.0.0")
+	}
+	if firstPage.NextCursor == "" {
+		t.Fatal("ListComponents() did not paginate an 82-component listing")
+	}
+	total := firstPage.Total
+	all := append([]ComponentSummary(nil), firstPage.Components...)
+	cursor := firstPage.NextCursor
+	finished := false
+	cursorOnlyPages := 0
+	for page := 0; page < 100; page++ {
+		// Cursor pages omit both version and pageSize: the cursor carries the
+		// version and the default page size applies.
+		next := service.ListComponents(context.Background(), ListComponentsInput{
+			IncludeDeprecated: true,
+			Cursor:            cursor,
+		})
+		if next.Error != nil {
+			t.Fatalf("cursor page %d error = %+v", page+2, next.Error)
+		}
+		if next.Resolved.Source != "cursor" {
+			t.Errorf("cursor page %d source = %q, want cursor", page+2, next.Resolved.Source)
+		}
+		if got := wireResponseBytes(next); got > defaultResponseBudget {
+			t.Errorf("cursor page %d = %d bytes, over the %d byte default",
+				page+2, got, defaultResponseBudget)
+		}
+		cursorOnlyPages++
+		all = append(all, next.Components...)
+		if next.NextCursor == "" {
+			finished = true
+			break
+		}
+		if next.NextCursor == cursor {
+			t.Fatalf("cursor page %d returned a self-referential cursor", page+2)
+		}
+		cursor = next.NextCursor
+	}
+	if !finished {
+		t.Fatal("pagination hit the page cap before the cursor was empty")
+	}
+	if cursorOnlyPages == 0 {
+		t.Fatal("no page was fetched with only a cursor")
+	}
+	if len(all) != total {
+		t.Errorf("collected %d components, want %d", len(all), total)
 	}
 	withDocs := 0
 	withoutDocs := 0
-	for _, component := range allComponents {
+	for _, component := range all {
 		if component.DocsAvailable {
 			withDocs++
 		} else {
@@ -78,7 +136,7 @@ func TestRealEmbeddedData(t *testing.T) {
 	if withDocs == 0 || withoutDocs == 0 {
 		t.Fatalf("docsAvailable is not per component: %d with docs, %d without", withDocs, withoutDocs)
 	}
-	button, ok := findComponent(allComponents, "rh-button")
+	button, ok := findComponent(all, "rh-button")
 	if !ok {
 		t.Fatal("rh-button missing from the 5.0.0 listing")
 	}
@@ -103,6 +161,9 @@ func TestRealEmbeddedData(t *testing.T) {
 	}
 	if accent.ThemeValue != "#92c5f9" {
 		t.Errorf("dark theme value = %q", accent.ThemeValue)
+	}
+	if accent.Source != tokenSourceCSS {
+		t.Errorf("theme-only token source = %q, want %q", accent.Source, tokenSourceCSS)
 	}
 
 	subtle := service.QueryTokens(context.Background(), QueryTokensInput{
@@ -731,6 +792,225 @@ func findExample(examples []cem.Example, description string) (cem.Example, bool)
 	}
 	return cem.Example{}, false
 }
+
+// TestRealPhaseETools exercises the Phase E tools against `make data` output.
+func TestRealPhaseETools(t *testing.T) {
+	if _, err := os.Stat(filepath.Join("..", "data", "dist", data.IndexPath)); err != nil {
+		t.Skip("generated data is absent; run make data")
+	}
+	dist, err := fs.Sub(data.Embedded(), "dist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := data.Open(dist)
+	if err != nil {
+		t.Fatalf("data.Open() = %v", err)
+	}
+	service := New(store, nil)
+
+	guidelines := service.GetDesignGuidelines(context.Background(), DesignGuidelinesInput{
+		Element: "rh-button",
+		Version: "5.0.0",
+	})
+	if guidelines.Error != nil {
+		t.Fatalf("GetDesignGuidelines() error = %+v", guidelines.Error)
+	}
+	if len(guidelines.Chunks) == 0 {
+		t.Fatal("GetDesignGuidelines() returned no chunks for rh-button")
+	}
+	if guidelines.Chunks[0].ReleaseTag != "v5.0.0" {
+		t.Errorf("release tag = %q, want v5.0.0", guidelines.Chunks[0].ReleaseTag)
+	}
+
+	examples := service.GetUsageExamples(context.Background(), UsageExamplesInput{
+		TagName: "rh-button",
+		Version: "5.0.0",
+	})
+	if examples.Error != nil {
+		t.Fatalf("GetUsageExamples() error = %+v", examples.Error)
+	}
+	if examples.Total == 0 {
+		t.Fatal("GetUsageExamples() returned no examples for rh-button")
+	}
+
+	migration := service.GetMigrationGuide(context.Background(), MigrationGuideInput{
+		FromVersion: "4.0.0",
+		ToVersion:   "5.0.0",
+	})
+	if migration.Error != nil {
+		t.Fatalf("GetMigrationGuide() error = %+v", migration.Error)
+	}
+	if migration.ToVersion != "5.0.0" {
+		t.Errorf("to version = %q", migration.ToVersion)
+	}
+	if len(migration.Changes) == 0 || len(migration.ReleaseNotes) == 0 {
+		t.Errorf("GetMigrationGuide() = %d changes, %d release notes; want both categories",
+			len(migration.Changes), len(migration.ReleaseNotes))
+	}
+
+	tokens := service.GetMigrationGuide(context.Background(), MigrationGuideInput{
+		FromVersion: "1.0.0",
+		ToVersion:   "5.0.0",
+		Detail:      "full",
+		Sections:    []string{"tokens"},
+	})
+	if tokens.Error != nil {
+		t.Fatalf("GetMigrationGuide(1.0.0 -> 5.0.0) error = %+v", tokens.Error)
+	}
+	if len(tokens.TokenChanges) == 0 {
+		t.Error("GetMigrationGuide() returned no token changes for tokens major 1 -> 3")
+	}
+	if tokens.TotalTokenChanges < len(tokens.TokenChanges) {
+		t.Errorf("total token changes = %d, returned = %d",
+			tokens.TotalTokenChanges, len(tokens.TokenChanges))
+	}
+}
+
+// TestRealQueryTokensAllVersions checks exact lookup, theme reporting, and
+// source attribution across every bundled tokens release.
+func TestRealQueryTokensAllVersions(t *testing.T) {
+	if _, err := os.Stat(filepath.Join("..", "data", "dist", data.IndexPath)); err != nil {
+		t.Skip("generated data is absent; run make data")
+	}
+	dist, err := fs.Sub(data.Embedded(), "dist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := data.Open(dist)
+	if err != nil {
+		t.Fatalf("data.Open() = %v", err)
+	}
+	service := New(store, nil)
+	versions := store.Index().Versions(packageTokens, kindTokens)
+	if len(versions) != 18 {
+		t.Fatalf("bundled tokens versions = %d, want 18", len(versions))
+	}
+	for _, version := range versions {
+		t.Run(version, func(t *testing.T) {
+			out := service.QueryTokens(context.Background(), QueryTokensInput{
+				Token:   "color-red-50",
+				Version: version,
+				Theme:   "light",
+			})
+			if out.Error != nil {
+				t.Fatalf("QueryTokens() error = %+v", out.Error)
+			}
+			if len(out.Tokens) != 1 {
+				t.Fatalf("tokens = %+v", out.Tokens)
+			}
+			if out.Tokens[0].CSSVariable != "--rh-color-red-50" {
+				t.Errorf("css variable = %q", out.Tokens[0].CSSVariable)
+			}
+			if out.Tokens[0].Source != tokenSourceJSON {
+				t.Errorf("source = %q", out.Tokens[0].Source)
+			}
+		})
+	}
+}
+
+// TestRealThemeLookups checks light and dark lookups for the tokens majors
+// that publish a theme map.
+func TestRealThemeLookups(t *testing.T) {
+	if _, err := os.Stat(filepath.Join("..", "data", "dist", data.IndexPath)); err != nil {
+		t.Skip("generated data is absent; run make data")
+	}
+	dist, err := fs.Sub(data.Embedded(), "dist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := data.Open(dist)
+	if err != nil {
+		t.Fatalf("data.Open() = %v", err)
+	}
+	service := New(store, nil)
+
+	for _, version := range []string{"2.2.4", "3.0.0", "3.2.0"} {
+		t.Run(version, func(t *testing.T) {
+			light := service.QueryTokens(context.Background(), QueryTokensInput{
+				Token: "color-accent-base", Version: version, Theme: "light",
+			})
+			dark := service.QueryTokens(context.Background(), QueryTokensInput{
+				Token: "color-accent-base", Version: version, Theme: "dark",
+			})
+			if light.Error != nil || dark.Error != nil {
+				t.Fatalf("errors = %+v / %+v", light.Error, dark.Error)
+			}
+			if light.Tokens[0].ThemeValue == "" || dark.Tokens[0].ThemeValue == "" {
+				t.Fatalf("theme values missing: light=%+v dark=%+v",
+					light.Tokens[0], dark.Tokens[0])
+			}
+			if light.Tokens[0].ThemeValue == dark.Tokens[0].ThemeValue {
+				t.Errorf("light and dark values are identical: %q", light.Tokens[0].ThemeValue)
+			}
+		})
+	}
+}
+
+// TestRealResourcesRegister checks the MCP resource surface against the full
+// generated data tree.
+func TestRealResourcesRegister(t *testing.T) {
+	if _, err := os.Stat(filepath.Join("..", "data", "dist", data.IndexPath)); err != nil {
+		t.Skip("generated data is absent; run make data")
+	}
+	dist, err := fs.Sub(data.Embedded(), "dist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := data.Open(dist)
+	if err != nil {
+		t.Fatalf("data.Open() = %v", err)
+	}
+	client := connectToolClient(t, New(store, nil))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	uris := make(map[string]bool)
+	total := 0
+	cursor := ""
+	for {
+		list, err := client.ListResources(ctx, &mcp.ListResourcesParams{Cursor: cursor})
+		if err != nil {
+			t.Fatalf("ListResources() error = %v", err)
+		}
+		total += len(list.Resources)
+		for _, resource := range list.Resources {
+			uris[resource.URI] = true
+		}
+		if list.NextCursor == "" {
+			break
+		}
+		cursor = list.NextCursor
+	}
+	// Resources are registered one per artifact plus the curated token
+	// migration resource, so derive the expected count from the index instead
+	// of hardcoding today's data size.
+	expected := len(store.Index().Artifacts) + 1
+	if total != expected {
+		t.Errorf("resources = %d, want %d artifacts plus the migration resource", total, expected)
+	}
+	for _, want := range []string{
+		"rhds://elements/5.0.0/manifest",
+		"rhds://tokens/3.2.0/tokens",
+		"rhds://release-notes/5.0.0",
+		"rhds://migrations/tokens",
+		"rhds://docs/v5.0.0/elements/rh-button/docs/00-overview.md",
+	} {
+		if !uris[want] {
+			t.Errorf("resources are missing %q", want)
+		}
+	}
+
+	notes, err := client.ReadResource(ctx, &mcp.ReadResourceParams{URI: "rhds://release-notes/5.0.0"})
+	if err != nil {
+		t.Fatalf("ReadResource(release notes) error = %v", err)
+	}
+	if len(notes.Contents) != 1 || !bytes.Contains([]byte(notes.Contents[0].Text), []byte("## 5.0.0")) {
+		t.Errorf("release-note resource = %+v", notes.Contents)
+	}
+}
+
+// TestRealManifestNormalization exercises both CEM schema versions against the
+// generated data for the oldest and newest bundled majors.
 func TestRealManifestNormalization(t *testing.T) {
 	if _, err := os.Stat(filepath.Join("..", "data", "dist", data.IndexPath)); err != nil {
 		t.Skip("generated data is absent; run make data")

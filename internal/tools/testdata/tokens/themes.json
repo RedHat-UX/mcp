@@ -2,11 +2,13 @@
   "light": {
     "color-brand": "#ff0000",
     "color-interactive": "#ff0000",
+    "color-accent-base": "#0066cc",
     "space-md": "1rem"
   },
   "dark": {
     "color-brand": "#ff6666",
     "color-interactive": "#ff6666",
+    "color-accent-base": "#92c5f9",
     "space-md": "1rem"
   }
 }

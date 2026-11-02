@@ -36,12 +36,16 @@ const (
 	packageTokens   = "tokens"
 	packageDocs     = "docs"
 
-	kindManifest = "manifest"
-	kindTokens   = "tokens"
-	kindThemes   = "themes"
-	kindDocs     = "docs"
-	kindPatterns = "patterns"
+	kindManifest     = "manifest"
+	kindTokens       = "tokens"
+	kindThemes       = "themes"
+	kindDocs         = "docs"
+	kindPatterns     = "patterns"
+	kindReleaseNotes = "release-notes"
+	kindChangelog    = "changelog"
 )
+
+const packageReleaseNotes = "release-notes"
 
 // ToolError is a structured error returned inside a tool result.
 type ToolError struct {
@@ -97,8 +101,11 @@ type Service struct {
 	tokenParses    atomic.Int64
 	themeParses    atomic.Int64
 
-	models   sync.Map // elements version -> *cem.Model
-	docsTags sync.Map // docs tag -> map[tagName]bool
+	models       sync.Map // elements version -> *cem.Model
+	comparisons  sync.Map // "from\x00to" -> *breaking.Result
+	releaseNotes sync.Map // elements version -> []ReleaseNoteExample
+	tokenChanges sync.Map // tokens versions + detail -> []TokenChange
+	docsTags     sync.Map // docs tag -> map[tagName]bool
 
 	// maxResponseBytes is the NFR-03 hard cap. Tests set a smaller value to
 	// exercise the follow-up-call path.
@@ -231,6 +238,45 @@ func (s *Service) bundledTokens() []string {
 		return nil
 	}
 	return s.store.Index().Versions(packageTokens, kindTokens)
+}
+
+// SupportedVersions returns the bundled stable elements and tokens versions,
+// newest first. The server instructions derive their version statement from
+// this method rather than a second hard-coded list.
+func (s *Service) SupportedVersions() (elements, tokens []string) {
+	return s.bundledElements(), s.bundledTokens()
+}
+
+// docsVersionFor maps a resolved elements version to the newest bundled docs
+// snapshot for the same major. If that major has no snapshot, the newest
+// snapshot overall is used, matching the docs-only behavior in section 5.5.
+func (s *Service) docsVersionFor(elementsVersion string) string {
+	if s == nil || s.store == nil {
+		return ""
+	}
+	versions := s.store.Index().Versions(packageDocs, kindDocs)
+	if len(versions) == 0 {
+		return ""
+	}
+	target := semver.Canonical("v" + strings.TrimPrefix(elementsVersion, "v"))
+	if target == "" {
+		return versions[0]
+	}
+	targetMajor := semver.Major(target)
+	best := ""
+	for _, tag := range versions {
+		canonical := semver.Canonical("v" + strings.TrimPrefix(tag, "v"))
+		if canonical == "" || semver.Major(canonical) != targetMajor {
+			continue
+		}
+		if best == "" || semver.Compare(canonical, "v"+strings.TrimPrefix(best, "v")) > 0 {
+			best = tag
+		}
+	}
+	if best != "" {
+		return best
+	}
+	return versions[0]
 }
 
 // resolve runs the workspace cascade. Tests inject resolveWorkspace so they
@@ -474,39 +520,6 @@ func (s *Service) bundledVersion(pkg, kind, requested string) (string, bool) {
 	return "", false
 }
 
-// docsVersionFor maps a resolved elements version to the newest bundled docs
-// snapshot for the same major. If that major has no snapshot, the newest
-// snapshot overall is used, matching the docs-only behavior in PLAN section
-// 5.5.
-func (s *Service) docsVersionFor(elementsVersion string) string {
-	if s == nil || s.store == nil {
-		return ""
-	}
-	versions := s.store.Index().Versions(packageDocs, kindDocs)
-	if len(versions) == 0 {
-		return ""
-	}
-	target := semver.Canonical("v" + strings.TrimPrefix(elementsVersion, "v"))
-	if target == "" {
-		return versions[0]
-	}
-	targetMajor := semver.Major(target)
-	best := ""
-	for _, tag := range versions {
-		canonical := semver.Canonical("v" + strings.TrimPrefix(tag, "v"))
-		if canonical == "" || semver.Major(canonical) != targetMajor {
-			continue
-		}
-		if best == "" || semver.Compare(canonical, "v"+strings.TrimPrefix(best, "v")) > 0 {
-			best = tag
-		}
-	}
-	if best != "" {
-		return best
-	}
-	return versions[0]
-}
-
 func (s *Service) loadManifest(version string) (*manifest.Package, *ToolError) {
 	s.manifestMu.Lock()
 	defer s.manifestMu.Unlock()
@@ -586,33 +599,52 @@ func (s *Service) loadTokens(version string) ([]*token.Token, *token.Map, *ToolE
 }
 
 // addThemeTokens synthesizes tokens for theme-map entries that are not in the
-// DTCG document. The light value is the token's base value; the dark value is
-// reported through TokenResult.ThemeValue.
+// DTCG document. Entries from the light map carry the token's base value; the
+// dark value is reported through TokenResult.ThemeValue. Entries that appear
+// only in a non-light map have no base value, so they are marked with their
+// defining theme and omitted unless that theme is requested.
 func addThemeTokens(tokens []*token.Token, themes map[string]map[string]string) []*token.Token {
 	existing := make(map[string]bool, len(tokens))
 	for _, tok := range tokens {
 		existing[tok.Name] = true
 	}
-	result := tokens
-	for _, cssName := range sortedKeys(themes["light"]) {
-		name := strings.TrimPrefix(strings.TrimPrefix(cssName, "--rh-"), "--")
-		if name == "" || existing[name] {
-			continue
+	themeNames := make([]string, 0, len(themes))
+	if _, ok := themes["light"]; ok {
+		themeNames = append(themeNames, "light")
+	}
+	for _, themeName := range sortedKeys(themes) {
+		if themeName != "light" {
+			themeNames = append(themeNames, themeName)
 		}
-		value := themes["light"][cssName]
-		result = append(result, &token.Token{
-			Name:          name,
-			Value:         value,
-			RawValue:      value,
-			ResolvedValue: value,
-			IsResolved:    true,
-			Type:          token.TypeColor,
-			Prefix:        "rh",
-			Extensions: map[string]any{
-				"com.redhat.ux": map[string]any{"themeComposite": true},
-			},
-		})
-		existing[name] = true
+	}
+	result := tokens
+	for _, themeName := range themeNames {
+		for _, cssName := range sortedKeys(themes[themeName]) {
+			name := strings.TrimPrefix(strings.TrimPrefix(cssName, "--rh-"), "--")
+			if name == "" || existing[name] {
+				continue
+			}
+			value := themes[themeName][cssName]
+			extensions := map[string]any{"themeComposite": true}
+			// A token that appears only in a non-light theme has no base
+			// value. Mark it so queries can include it only for that theme.
+			if themeName != "light" {
+				extensions[themeOnlyExtension] = themeName
+			}
+			result = append(result, &token.Token{
+				Name:          name,
+				Value:         value,
+				RawValue:      value,
+				ResolvedValue: value,
+				IsResolved:    true,
+				Type:          token.TypeColor,
+				Prefix:        "rh",
+				Extensions: map[string]any{
+					"com.redhat.ux": extensions,
+				},
+			})
+			existing[name] = true
+		}
 	}
 	return result
 }
@@ -676,7 +708,7 @@ func Register(server *mcp.Server, svc *Service) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "rhds_list_components",
 		Title:       "List RHDS components",
-		Description: "Lists bundled RHDS custom elements with summaries, module paths, and deprecation state. Results are paginated with an opaque, version-bound cursor.",
+		Description: "Lists bundled RHDS custom elements with summaries, module paths, and deprecation state. Results are paginated with an opaque, version-bound cursor. Entries shortened by a fixed per-field cap carry truncated=true and a warning naming the field.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, request *mcp.CallToolRequest, input ListComponentsInput) (*mcp.CallToolResult, ListComponentsOutput, error) {
 		required, out := svc.listComponentsWithEnv(ctx, request, input)
@@ -748,12 +780,60 @@ func Register(server *mcp.Server, svc *Service) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "rhds_query_tokens",
 		Title:       "Query RHDS design tokens",
-		Description: "Looks up bundled RHDS design tokens by name or search query. Returns the CSS custom property, type, resolved value, alias chain, and theme value.",
+		Description: "Looks up bundled RHDS design tokens by exact name, dot path, CSS custom property, or substring query. Returns the CSS custom property, type, resolved value, alias chain, theme value, and whether the value comes from the token JSON or css/default-theme.css. Entries shortened by a fixed per-field cap, including the alias chain, carry truncated=true and a warning naming the field.",
 		Annotations: readOnly,
 	}, func(ctx context.Context, request *mcp.CallToolRequest, input QueryTokensInput) (*mcp.CallToolResult, QueryTokensOutput, error) {
 		required, out := svc.queryTokensWithEnv(ctx, request, input)
 		if required != nil {
 			return required, QueryTokensOutput{}, nil
+		}
+		if out.Error != nil {
+			return &mcp.CallToolResult{IsError: true}, out, nil
+		}
+		return nil, out, nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "rhds_get_design_guidelines",
+		Title:       "Get RHDS design guidelines",
+		Description: "Returns heading-delimited documentation chunks with the source path and release tag. Filter by topic or element; results respect the response budget and report truncation explicitly.",
+		Annotations: readOnly,
+	}, func(ctx context.Context, request *mcp.CallToolRequest, input DesignGuidelinesInput) (*mcp.CallToolResult, DesignGuidelinesOutput, error) {
+		required, out := svc.guidelinesWithEnv(ctx, request, input)
+		if required != nil {
+			return required, DesignGuidelinesOutput{}, nil
+		}
+		if out.Error != nil {
+			return &mcp.CallToolResult{IsError: true}, out, nil
+		}
+		return nil, out, nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "rhds_get_usage_examples",
+		Title:       "Get RHDS usage examples",
+		Description: "Returns CEM demos, documentation snippets, pattern HTML, and generic Twig slot markup for one custom element. The Twig output does not claim a Drupal library key.",
+		Annotations: readOnly,
+	}, func(ctx context.Context, request *mcp.CallToolRequest, input UsageExamplesInput) (*mcp.CallToolResult, UsageExamplesOutput, error) {
+		required, out := svc.usageExamplesWithEnv(ctx, request, input)
+		if required != nil {
+			return required, UsageExamplesOutput{}, nil
+		}
+		if out.Error != nil {
+			return &mcp.CallToolResult{IsError: true}, out, nil
+		}
+		return nil, out, nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "rhds_get_migration_guide",
+		Title:       "Get an RHDS migration guide",
+		Description: "Compares two bundled @rhds/elements versions with cem/breaking.Compare, adds Before/After release-note examples, and includes curated cross-major token renames, removals, and deprecations when the coupled tokens major changes.",
+		Annotations: readOnly,
+	}, func(ctx context.Context, request *mcp.CallToolRequest, input MigrationGuideInput) (*mcp.CallToolResult, MigrationGuideOutput, error) {
+		required, out := svc.migrationGuideWithEnv(ctx, request, input)
+		if required != nil {
+			return required, MigrationGuideOutput{}, nil
 		}
 		if out.Error != nil {
 			return &mcp.CallToolResult{IsError: true}, out, nil

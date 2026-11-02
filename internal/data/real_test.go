@@ -23,6 +23,8 @@ func TestRealGeneratedData(t *testing.T) {
 		t.Fatalf("Open() = %v", err)
 	}
 	index := store.Index()
+	// A lower bound keeps this meaningful without pinning a brittle exact
+	// count that every legitimate data addition would have to update.
 	if len(index.Artifacts) < 1000 {
 		t.Fatalf("index has %d artifacts, want at least 1000", len(index.Artifacts))
 	}
@@ -104,5 +106,13 @@ func TestRealGeneratedData(t *testing.T) {
 	}
 	if !bytes.Contains(changelog, []byte("Major Changes")) {
 		t.Error("changelog does not look like a changelog")
+	}
+
+	notes, err := store.Read("release-notes", "5.0.0", "release-notes")
+	if err != nil {
+		t.Fatalf("per-version release notes: %v", err)
+	}
+	if !bytes.Contains(notes, []byte("## 5.0.0")) || !bytes.Contains(notes, []byte("<!-- source:")) {
+		t.Errorf("release notes for 5.0.0 are not a tagged section:\n%s", notes)
 	}
 }

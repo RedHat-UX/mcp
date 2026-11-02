@@ -1,0 +1,441 @@
+{
+  "schemaVersion": 1,
+  "provenance": {
+    "tokensChangelog": "RedHat-UX/red-hat-design-tokens@v3.2.0 CHANGELOG.md",
+    "normalizedData": "@rhds/tokens json/rhds.tokens.json normalized to DTCG by tools/gen-data at each bundled stable version",
+    "method": "Curated from the tokens changelog major-change migration map, cross-checked against a name diff between the last bundled release of each major (1.1.2 -> 2.0.0 and 2.2.4 -> 3.0.0).",
+    "reviewed": "2026-10-27",
+    "notes": [
+      "The 2.0.0 changelog writes `--rh-color-red 60`; the actual published name is `--rh-color-red-60`.",
+      "The 2.0.0 changelog maps `--rh-color-black` to `--rh-color-gray-100`, but gray-100 was never published. --rh-color-black is still present in 2.x and 3.x and is recorded as a deprecation, not a rename.",
+      "The name diff between 1.1.2 and 2.0.0 reports 102 disappearing names; all of them are covered by the rename map and its -rgb/-hsl variants, so no additional removals are listed.",
+      "2.2.4 to 3.0.0 renamed and removed no published token names. 3.0.0 deprecated --rh-color-surface-dark-alt and the -rgb/-hsl variants."
+    ]
+  },
+  "migrations": [
+    {
+      "fromMajor": 1,
+      "toMajor": 2,
+      "fromVersion": "1.1.2",
+      "toVersion": "2.0.0",
+      "renames": [
+        {
+          "from": "--rh-color-blue-100",
+          "to": "--rh-color-blue-20",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-blue-200",
+          "to": "--rh-color-blue-30",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-blue-250",
+          "to": "--rh-color-blue-40",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-blue-400",
+          "to": "--rh-color-blue-50",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-blue-50",
+          "to": "--rh-color-blue-10",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-blue-500",
+          "to": "--rh-color-blue-60",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-blue-600",
+          "to": "--rh-color-blue-70",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-cyan-100",
+          "to": "--rh-color-teal-30",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-cyan-300",
+          "to": "--rh-color-teal-50",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-cyan-400",
+          "to": "--rh-color-teal-60",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-cyan-50",
+          "to": "--rh-color-teal-10",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-cyan-500",
+          "to": "--rh-color-teal-70",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-gold-400",
+          "to": "--rh-color-yellow-40",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-gold-50",
+          "to": "--rh-color-yellow-10",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-gold-600",
+          "to": "--rh-color-yellow-70",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-gray-05",
+          "to": "--rh-color-gray-10",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-gray-10",
+          "to": "--rh-color-gray-20",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-gray-20",
+          "to": "--rh-color-gray-30",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-gray-30",
+          "to": "--rh-color-gray-40",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-gray-40",
+          "to": "--rh-color-gray-50",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-gray-50",
+          "to": "--rh-color-gray-60",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-gray-60",
+          "to": "--rh-color-gray-70",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-gray-70",
+          "to": "--rh-color-gray-80",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-gray-80",
+          "to": "--rh-color-gray-90",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-gray-90",
+          "to": "--rh-color-gray-95",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-green-100",
+          "to": "--rh-color-green-20",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-green-50",
+          "to": "--rh-color-green-10",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-green-500",
+          "to": "--rh-color-green-60",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-green-600",
+          "to": "--rh-color-green-70",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-orange-100",
+          "to": "--rh-color-orange-30",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-orange-300",
+          "to": "--rh-color-orange-40",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-orange-50",
+          "to": "--rh-color-orange-10",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-orange-500",
+          "to": "--rh-color-orange-60",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-orange-700",
+          "to": "--rh-color-orange-70",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-purple-100",
+          "to": "--rh-color-purple-20",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-purple-300",
+          "to": "--rh-color-purple-40",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-purple-50",
+          "to": "--rh-color-purple-10",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-purple-500",
+          "to": "--rh-color-purple-60",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-purple-700",
+          "to": "--rh-color-purple-70",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-red-100",
+          "to": "--rh-color-red-20",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-red-200",
+          "to": "--rh-color-red-30",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-red-300",
+          "to": "--rh-color-red-40",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-red-400",
+          "to": "--rh-color-red-50",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-red-50",
+          "to": "--rh-color-red-10",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-red-500",
+          "to": "--rh-color-red-50",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-red-600",
+          "to": "--rh-color-red-60",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-red-700",
+          "to": "--rh-color-red-60",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        },
+        {
+          "from": "--rh-color-red-800",
+          "to": "--rh-color-red-70",
+          "variants": [
+            "-rgb",
+            "-hsl"
+          ]
+        }
+      ],
+      "removals": [],
+      "deprecations": [
+        {
+          "name": "--rh-color-black",
+          "note": "Still published in 2.x and 3.x. The 2.0.0 changelog suggested --rh-color-gray-100, but that token was never published. Avoid using it in new code."
+        }
+      ]
+    },
+    {
+      "fromMajor": 2,
+      "toMajor": 3,
+      "fromVersion": "2.2.4",
+      "toVersion": "3.0.0",
+      "renames": [],
+      "removals": [],
+      "deprecations": [
+        {
+          "name": "--rh-color-surface-dark-alt",
+          "replacement": "oklch(from var(--rh-color-surface-dark) calc(l * 0.82) c h)",
+          "note": "Deprecated in 3.0.0; the token still exists but now computes from --rh-color-surface-dark."
+        },
+        {
+          "suffix": "-rgb",
+          "replacement": "rgb(from var(--rh-color-...) r g b / <alpha>)",
+          "note": "Deprecated in 3.0.0; use CSS relative color syntax instead."
+        },
+        {
+          "suffix": "-hsl",
+          "replacement": "hsl(from var(--rh-color-...) h s l / <alpha>)",
+          "note": "Deprecated in 3.0.0; use CSS relative color syntax instead."
+        }
+      ]
+    }
+  ]
+}

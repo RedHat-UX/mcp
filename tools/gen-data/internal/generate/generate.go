@@ -27,6 +27,7 @@ import (
 	"golang.org/x/mod/semver"
 
 	"github.com/redhat-ux/mcp/internal/data"
+	"github.com/redhat-ux/mcp/internal/markdown"
 	"github.com/redhat-ux/mcp/tools/gen-data/internal/lock"
 	"github.com/redhat-ux/mcp/tools/gen-data/internal/normalize"
 )
@@ -38,12 +39,13 @@ const (
 	PackageDocs         = "docs"
 	PackageReleaseNotes = "release-notes"
 
-	KindManifest  = "manifest"
-	KindTokens    = "tokens"
-	KindThemes    = "themes"
-	KindDocs      = "docs"
-	KindPatterns  = "patterns"
-	KindChangelog = "changelog"
+	KindManifest     = "manifest"
+	KindTokens       = "tokens"
+	KindThemes       = "themes"
+	KindDocs         = "docs"
+	KindPatterns     = "patterns"
+	KindChangelog    = "changelog"
+	KindReleaseNotes = "release-notes"
 )
 
 // GeneratorVersion changes whenever generation or normalization changes in a
@@ -176,7 +178,7 @@ func writeOutputTree(inputs *Inputs, root *os.Root) (*data.Index, error) {
 	if err := generateTokens(inputs, tokensVersions, root, index); err != nil {
 		return nil, err
 	}
-	if err := generateDocs(inputs.Docs, root, index); err != nil {
+	if err := generateDocs(inputs, root, index); err != nil {
 		return nil, err
 	}
 
@@ -344,9 +346,12 @@ func checkProvenance(root *os.Root, entries []fs.DirEntry, absolute string) erro
 			absolute, data.IndexPath, strings.Join(entryNames(entries), ", "))
 	}
 	var index data.Index
+	// GeneratorVersion is omitempty: trees written before it was introduced
+	// carry 0 and are still gen-data output. The schema version and lock
+	// digest identify the tree; a stale generator version triggers regeneration
+	// after the directory is cleared.
 	if err := json.Unmarshal(encoded, &index); err != nil ||
 		index.SchemaVersion != data.SchemaVersion ||
-		index.GeneratorVersion <= 0 ||
 		!isLowerHexDigest(index.LockSHA256) {
 		return fmt.Errorf(
 			"generate: refusing to clear %q: not a gen-data output directory (invalid %s; found: %s)",
@@ -718,8 +723,8 @@ func generateTokens(inputs *Inputs, versions []string, root *os.Root, index *dat
 	return nil
 }
 
-func generateDocs(snapshots []DocsInput, root *os.Root, index *data.Index) error {
-	sorted := append([]DocsInput(nil), snapshots...)
+func generateDocs(inputs *Inputs, root *os.Root, index *data.Index) error {
+	sorted := append([]DocsInput(nil), inputs.Docs...)
 	sort.Slice(sorted, func(i, j int) bool {
 		return compareVersions(sorted[i].Tag, sorted[j].Tag) < 0
 	})
@@ -745,6 +750,27 @@ func generateDocs(snapshots []DocsInput, root *os.Root, index *data.Index) error
 			return err
 		}
 		index.Artifacts = append(index.Artifacts, artifact)
+
+		// One release-note artifact per bundled elements version. The
+		// combined changelog stays available as the raw source.
+		seen := make(map[string]bool)
+		for _, section := range markdown.Sections(processed.Content, 2) {
+			version := strings.TrimSpace(section.Heading)
+			if _, bundled := inputs.Elements[version]; !bundled || seen[version] {
+				continue
+			}
+			seen[version] = true
+			content := "<!-- source: " + source + " -->\n\n## " + version + "\n\n" + section.Body + "\n"
+			artifact, err := writeGzipArtifact(
+				root,
+				path.Join(PackageReleaseNotes, version, "CHANGELOG.md.gz"),
+				PackageReleaseNotes, version, KindReleaseNotes, []byte(content),
+			)
+			if err != nil {
+				return err
+			}
+			index.Artifacts = append(index.Artifacts, artifact)
+		}
 	}
 	return nil
 }
