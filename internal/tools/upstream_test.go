@@ -509,14 +509,22 @@ func TestMountUpstreamsMountsCEMWithoutManifest(t *testing.T) {
 		}
 	}
 
-	// The static resource reads from the empty registry; a specific element
-	// is absent, so its templated read fails. Asserting the error rather than
-	// its wording keeps the test from depending on cem's message text.
+	// The static resource must still read from the empty registry. This
+	// asserts survival, not content: an empty registry lists no elements.
 	readResourceText(t, session, "cem://elements")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	// A specific element is absent, so its templated read fails. Asserting
+	// the error rather than its wording keeps this check from depending on
+	// cem's message text.
+	if _, err := session.ReadResource(ctx, &mcp.ReadResourceParams{URI: "cem://element/fixture-element"}); err == nil {
+		t.Fatal("ReadResource(cem://element/fixture-element) error = nil, want an error on an empty registry")
+	}
+
+	// These responses are prose, not structured fields, so the assertions
+	// track cem v0.11.6's wording. Update them if cem renames the messages.
 	validated, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      "validate_html",
 		Arguments: map[string]any{"html": "<fixture-element></fixture-element>"},
@@ -537,10 +545,6 @@ func TestMountUpstreamsMountsCEMWithoutManifest(t *testing.T) {
 	}
 	if got := contentText(generated); !strings.Contains(got, "not found") {
 		t.Errorf("CallTool(generate_html) = %q, want the element reported missing", got)
-	}
-
-	if _, err := session.ReadResource(ctx, &mcp.ReadResourceParams{URI: "cem://element/fixture-element"}); err == nil {
-		t.Fatal("ReadResource(cem://element/fixture-element) error = nil, want an error on an empty registry")
 	}
 }
 
