@@ -265,6 +265,8 @@ func (f *asimonimForwarder) rootsFor(
 		if err != nil || result == nil {
 			// Match asimonim's cwd fallback but keep the failure visible on
 			// stderr; a silently wrong workspace is worse than a warning.
+			// Direct registration also records the failure in result _meta,
+			// but the proxy does not reach into asimonim's meta shape.
 			slog.Warn("asimonim proxy: roots/list failed; falling back to the server working directory",
 				"session", hostSession.ID(), "error", err)
 			return nil, false, false

@@ -358,15 +358,17 @@ func connectInternalClient(
 		return nil, nil, fmt.Errorf("connect internal upstream server: %w", err)
 	}
 
-	options := &mcp.ClientOptions{}
+	// The SDK treats nil Capabilities as "advertise roots with listChanged".
+	// An explicit empty set is required when the host client has no roots, so
+	// asimonim takes its cwd path without an extra roots round trip or a
+	// spurious "client advertised roots but returned an empty list" warning.
+	options := &mcp.ClientOptions{Capabilities: &mcp.ClientCapabilities{}}
 	if advertiseRoots {
-		options.Capabilities = &mcp.ClientCapabilities{
-			RootsV2: &mcp.RootCapabilities{}, //nolint:staticcheck // roots required by PLAN section 8.1
-		}
+		options.Capabilities.RootsV2 = &mcp.RootCapabilities{} //nolint:staticcheck // roots required by PLAN section 8.1
 	}
 	client := mcp.NewClient(&mcp.Implementation{Name: clientName, Version: "0.0.0"}, options)
 	if advertiseRoots {
-		client.AddRoots(roots...) //nolint:staticcheck // roots required by PLAN section 8.1
+		client.AddRoots(nonNilRoots(roots)...) //nolint:staticcheck // roots required by PLAN section 8.1
 	}
 	clientSession, err := client.Connect(ctx, clientTransport, &mcp.ClientSessionOptions{ProtocolVersion: protocol})
 	if err != nil {
@@ -374,4 +376,16 @@ func connectInternalClient(
 		return nil, nil, fmt.Errorf("connect internal upstream client: %w", err)
 	}
 	return clientSession, serverSession, nil
+}
+
+// nonNilRoots drops nil entries from a roots list. A non-SDK client can send
+// `roots: [null]`, and Client.AddRoots dereferences every entry.
+func nonNilRoots(roots []*mcp.Root) []*mcp.Root { //nolint:staticcheck // roots required by PLAN section 8.1
+	filtered := make([]*mcp.Root, 0, len(roots)) //nolint:staticcheck // roots required by PLAN section 8.1
+	for _, root := range roots {
+		if root != nil {
+			filtered = append(filtered, root)
+		}
+	}
+	return filtered
 }

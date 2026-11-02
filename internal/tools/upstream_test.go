@@ -84,11 +84,12 @@ func connectServerWithProtocol(t *testing.T, server *mcp.Server, protocol string
 	}
 	t.Cleanup(func() { _ = serverSession.Close() })
 
-	options := &mcp.ClientOptions{}
+	// The SDK treats nil capabilities as "advertise roots with listChanged".
+	// Set an explicit empty set so a client created without roots does not
+	// advertise them, matching a real roots-free host.
+	options := &mcp.ClientOptions{Capabilities: &mcp.ClientCapabilities{}}
 	if len(roots) > 0 {
-		options.Capabilities = &mcp.ClientCapabilities{ //nolint:staticcheck // roots are required by PLAN section 8.1
-			RootsV2: &mcp.RootCapabilities{}, //nolint:staticcheck // roots are required by PLAN section 8.1
-		}
+		options.Capabilities.RootsV2 = &mcp.RootCapabilities{} //nolint:staticcheck // roots are required by PLAN section 8.1
 	}
 	client := mcp.NewClient(&mcp.Implementation{Name: "upstream-test", Version: "0.0.0"}, options)
 	if len(roots) > 0 {

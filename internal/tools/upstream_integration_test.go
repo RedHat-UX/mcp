@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -519,4 +520,37 @@ func TestMountUpstreamsConcurrentFirstCallsShareSession(t *testing.T) {
 	}
 	waitFor(t, 5*time.Second, func() bool { return mount.activeSessions() == 0 },
 		"internal session was not cleaned up after the host session closed")
+}
+
+// TestProxiedAsimonimCwdMatchesDirectRegistrationWithoutRoots proves a host
+// client without the roots capability gets the same cwd workspace and _meta
+// as direct asimonim registration, with no spurious roots warning.
+func TestProxiedAsimonimCwdMatchesDirectRegistrationWithoutRoots(t *testing.T) {
+	t.Chdir(tokenProject(t, "alpha", "#ff0000"))
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+
+	direct := connectServer(t, directAsimonimServer(t, cwd))
+	proxied := connectServer(t, newMountedServer(t, MountOptions{}))
+
+	want := searchTokensResult(t, direct, "alpha")
+	got := searchTokensResult(t, proxied, "alpha")
+	if diff := jsonDiff(t, want, got); diff != "" {
+		t.Errorf("proxied no-roots result differs from direct registration:\n%s", diff)
+	}
+
+	for name, result := range map[string]*mcp.CallToolResult{"direct": want, "proxied": got} {
+		meta, ok := result.GetMeta()[workspaceMetaKey].(map[string]any)
+		if !ok {
+			t.Fatalf("%s result is missing %q: %#v", name, workspaceMetaKey, result.GetMeta())
+		}
+		if meta["source"] != "cwd" {
+			t.Errorf("%s workspace source = %v, want cwd", name, meta["source"])
+		}
+		if warning, ok := meta["warning"]; ok {
+			t.Errorf("%s workspace has warning %v, want none", name, warning)
+		}
+	}
 }

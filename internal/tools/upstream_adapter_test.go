@@ -887,3 +887,22 @@ func TestMountCloseWithActiveSession(t *testing.T) {
 	waitFor(t, 5*time.Second, func() bool { return mount.activeSessions() == 0 },
 		"internal session was not cleaned up after close")
 }
+
+func TestNonNilRoots(t *testing.T) {
+	roots := []*mcp.Root{ //nolint:staticcheck // roots required by PLAN section 8.1
+		nil,
+		{URI: "file:///a"},
+		nil,
+		{URI: "file:///b"},
+	}
+	got := nonNilRoots(roots)
+	if len(got) != 2 {
+		t.Fatalf("nonNilRoots() returned %d roots, want 2", len(got))
+	}
+	if got[0].URI != "file:///a" || got[1].URI != "file:///b" {
+		t.Errorf("nonNilRoots() = %#v, want the non-nil roots in order", got)
+	}
+	if got := nonNilRoots(nil); len(got) != 0 {
+		t.Errorf("nonNilRoots(nil) = %d roots, want 0", len(got))
+	}
+}
