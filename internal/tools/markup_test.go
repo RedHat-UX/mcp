@@ -244,6 +244,37 @@ func TestValidateMarkupAcceptsSingleQuotedEnumValues(t *testing.T) {
 	if issue.Message != want {
 		t.Errorf("message = %q, want %q", issue.Message, want)
 	}
+
+	// A TypeScript string literal denotes its decoded value. The source form,
+	// quote characters included, is a different HTML attribute value.
+	quoted := svc.ValidateMarkup(context.Background(), ValidateMarkupInput{
+		Markup: `<rh-button variant="'primary'"></rh-button>`,
+	})
+	if _, ok := findIssue(quoted.Issues, "invalid-attribute-value"); !ok {
+		t.Errorf("quoted source form not flagged: %+v", quoted.Issues)
+	}
+}
+
+func TestValidateMarkupMixedNumericAndQuotedNumeralUnion(t *testing.T) {
+	svc := memoryService(t, manifestForAttributeType(t, "my-el", "count", "1 | '2'"), "5.0.0")
+
+	for _, value := range []string{"1", "2"} {
+		out := svc.ValidateMarkup(context.Background(), ValidateMarkupInput{
+			Markup: `<my-el count="` + value + `"></my-el>`,
+		})
+		if issue, ok := findIssue(out.Issues, "invalid-attribute-value"); ok {
+			t.Errorf("valid value %q flagged invalid: %+v", value, issue)
+		}
+	}
+
+	for _, value := range []string{"3", "'1'", "'2'"} {
+		out := svc.ValidateMarkup(context.Background(), ValidateMarkupInput{
+			Markup: `<my-el count="` + value + `"></my-el>`,
+		})
+		if _, ok := findIssue(out.Issues, "invalid-attribute-value"); !ok {
+			t.Errorf("invalid value %q not flagged: %+v", value, out.Issues)
+		}
+	}
 }
 
 // manifestForAttributeType builds a minimal custom-elements manifest with one
