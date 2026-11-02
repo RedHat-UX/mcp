@@ -12,8 +12,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
-	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -229,9 +229,8 @@ func registerArtifactResourceTemplates(server *mcp.Server, service *Service) {
 				"Add ?version= to pin a version.",
 		},
 		{
-			uri:      docsQueryResourceTemplate,
-			name:     "data-docs-query",
-			mimeType: "application/json",
+			uri:  docsQueryResourceTemplate,
+			name: "data-docs-query",
 			description: "Bundled docs data with an explicit ?version= query. An empty path or " +
 				"docs.json reads the docs index, patterns.json reads patterns, and any other " +
 				"path reads that Markdown page.",
@@ -278,7 +277,10 @@ func artifactResourceHandler(service *Service) mcp.ResourceHandler {
 			// not-found so unexpected query keys and fragments are diagnosable.
 			return nil, err
 		}
-		version, failure := service.resourceTargetVersion(ctx, request, target)
+		version, required, failure := service.resourceTargetVersion(ctx, request, target)
+		if required != nil {
+			return required, nil
+		}
 		if failure != nil {
 			if failure.Code == "artifact_not_found" && target.VersionExplicit {
 				return nil, mcp.ResourceNotFoundError(uri)
@@ -299,20 +301,23 @@ func artifactResourceHandler(service *Service) mcp.ResourceHandler {
 // resourceTargetVersion picks the version for one read. An explicit
 // ?version= uses the same validation as the tools, so tokens/themes rejects a
 // version that has no theme map. An omitted version uses the resource
-// resolution path, which never elicits.
+// resolution path, which may return an input-required result for roots but
+// never elicits.
 func (s *Service) resourceTargetVersion(
 	ctx context.Context,
 	request *mcp.ReadResourceRequest,
 	target artifactResourceTarget,
-) (string, *ToolError) {
+) (string, *mcp.ReadResourceResult, *ToolError) {
 	if target.VersionExplicit {
-		return s.resolveVersion(target.Package, target.Kind, target.Version)
+		version, failure := s.resolveVersion(target.Package, target.Kind, target.Version)
+		return version, nil, failure
 	}
-	resolved, failure := s.resourceResolution(ctx, request)
-	if failure != nil {
-		return "", failure
+	resolved, required, failure := s.resourceResolution(ctx, request)
+	if required != nil || failure != nil {
+		return "", required, failure
 	}
-	return s.resourceResolutionVersion(target, resolved)
+	version, failure := s.resourceResolutionVersion(target, resolved)
+	return version, nil, failure
 }
 
 // resourceResolutionVersion maps a workspace resolution to the package
@@ -379,19 +384,22 @@ func releaseNotesFailure(kind string) *ToolError {
 
 // resourceResolution runs the workspace cascade for a resource read. It
 // mirrors the tools without elicitation: ambiguity becomes a resource error
-// that names the bundled versions the client can pin with ?version=.
+// that names the bundled versions the client can pin with ?version=. On
+// protocol 2026-07-28 and later it may return an input-required result for
+// roots.
 func (s *Service) resourceResolution(
 	ctx context.Context,
 	request *mcp.ReadResourceRequest,
-) (resolution, *ToolError) {
+) (resolution, *mcp.ReadResourceResult, *ToolError) {
 	if failure := s.dataFailure(); failure != nil {
-		return resolution{}, failure
+		return resolution{}, nil, failure
 	}
-	root, warnings, failure := resourceWorkspaceRoot(ctx, request)
-	if failure != nil {
-		return resolution{}, failure
+	root, warnings, required, failure := resourceWorkspaceRoot(ctx, request)
+	if required != nil || failure != nil {
+		return resolution{}, required, failure
 	}
-	return s.resourceResolutionAtRoot(root, warnings)
+	resolved, failure := s.resourceResolutionAtRoot(root, warnings)
+	return resolved, nil, failure
 }
 
 func (s *Service) resolutionFromCascade(
@@ -458,53 +466,117 @@ func resourceAmbiguityFailure(ambiguity *resolve.Ambiguity, bundled []string) *T
 }
 
 // resourceCascade acquires a workspace root and runs the version cascade. It
-// never elicits and never calls prepareResolution.
+// never elicits and never calls prepareResolution. On protocol 2026-07-28 and
+// later it may return an input-required result for roots.
 func (s *Service) resourceCascade(
 	ctx context.Context,
 	request *mcp.ReadResourceRequest,
-) (resolve.Result, []string, *ToolError) {
+) (resolve.Result, []string, *mcp.ReadResourceResult, *ToolError) {
 	if failure := s.dataFailure(); failure != nil {
-		return resolve.Result{}, nil, failure
+		return resolve.Result{}, nil, nil, failure
 	}
-	root, warnings, failure := resourceWorkspaceRoot(ctx, request)
-	if failure != nil {
-		return resolve.Result{}, nil, failure
+	root, warnings, required, failure := resourceWorkspaceRoot(ctx, request)
+	if required != nil || failure != nil {
+		return resolve.Result{}, nil, required, failure
 	}
 	result, failure := s.resourceCascadeAtRoot(root)
 	if failure != nil {
-		return resolve.Result{}, nil, failure
+		return resolve.Result{}, nil, nil, failure
 	}
-	return result, warnings, nil
+	return result, warnings, nil, nil
 }
 
-// resourceWorkspaceRoot returns the root for a resource read: cwd unless the
-// client advertises roots and negotiated a pre-2026-07-28 protocol. There is no
-// multi-round-trip roots flow here because resources cannot elicit.
+// resourceWorkspaceRoot returns the root for a resource read. Clients without
+// the roots capability use cwd. Legacy protocol revisions use a direct
+// roots/list request. On 2026-07-28 and later the handler returns an
+// input-required result and resolves the root from the retry's input
+// responses. A malformed retry falls back to cwd with a warning and never asks
+// again, so it cannot loop.
 func resourceWorkspaceRoot(
 	ctx context.Context,
 	request *mcp.ReadResourceRequest,
-) (string, []string, *ToolError) {
+) (string, []string, *mcp.ReadResourceResult, *ToolError) {
 	env := newResourceEnv(request)
-	if env == nil || !env.rootsCapability || env.session == nil || env.supportsMRTR() {
+	if env == nil || !env.rootsCapability || env.session == nil {
 		root, warning, _, failure := currentWorkingDirectory()
-		return root, warningList(warning), failure
+		return root, warningList(warning), nil, failure
 	}
+	if env.supportsMRTR() {
+		state, _ := decodeRequestState(env.requestState)
+		if resourceMRTRNeedsInput(state, env.inputResponses) {
+			state.Stage = "roots"
+			return "", nil, inputRequiredResourceResult(state), nil
+		}
+		root, warnings, failure := resourceRootFromInputResponses(env.inputResponses)
+		return root, warnings, nil, failure
+	}
+
 	result, err := env.session.ListRoots(ctx, &mcp.ListRootsParams{}) //nolint:staticcheck // roots required by PLAN
 	if err != nil {
 		root, warning, _, failure := currentWorkingDirectory()
 		if failure != nil {
+			return "", nil, nil, failure
+		}
+		return root, warningList(warning + "; the roots request failed: " + err.Error()), nil, nil
+	}
+	if root, ok := firstFileRoot(result); ok {
+		return root, nil, nil, nil
+	}
+	root, warning, _, failure := currentWorkingDirectory()
+	if failure != nil {
+		return "", nil, nil, failure
+	}
+	return root, warningList(warning + "; the client returned no file roots"), nil, nil
+}
+
+// resourceMRTRNeedsInput reports whether a 2026-07-28 resource read must first
+// ask for roots. Empty responses count as absent. An echoed request state or a
+// response map marks a retry, including a malformed one that must not re-ask.
+func resourceMRTRNeedsInput(state requestState, responses mcp.InputResponseMap) bool {
+	if state.Stage == "roots" {
+		return false
+	}
+	return len(responses) == 0
+}
+
+// resourceRootFromInputResponses resolves the first file root from a
+// multi-round-trip retry. Any malformed response falls back to cwd with a
+// warning instead of asking the client again.
+func resourceRootFromInputResponses(
+	responses mcp.InputResponseMap,
+) (string, []string, *ToolError) {
+	fallback := func(reason string) (string, []string, *ToolError) {
+		root, warning, _, failure := currentWorkingDirectory()
+		if failure != nil {
 			return "", nil, failure
 		}
-		return root, warningList(warning + "; the roots request failed: " + err.Error()), nil
+		return root, warningList(warning + "; " + reason), nil
+	}
+	if responses == nil {
+		return fallback("the roots retry carried no input responses")
+	}
+	response, ok := responses[inputRootsID]
+	if !ok || response == nil {
+		return fallback("the roots retry did not include the roots input response")
+	}
+	result, ok := response.(*mcp.ListRootsResult) //nolint:staticcheck // roots required by PLAN
+	if !ok || result == nil {
+		return fallback(fmt.Sprintf("unexpected roots input response type %T", response))
 	}
 	if root, ok := firstFileRoot(result); ok {
 		return root, nil, nil
 	}
-	root, warning, _, failure := currentWorkingDirectory()
-	if failure != nil {
-		return "", nil, failure
+	return fallback("the client returned no file roots")
+}
+
+func inputRequiredResourceResult(state requestState) *mcp.ReadResourceResult {
+	state.Stage = "roots"
+	return &mcp.ReadResourceResult{
+		InputRequests: mcp.InputRequestMap{
+			inputRootsID: &mcp.ListRootsParams{}, //nolint:staticcheck // roots required by PLAN
+		},
+		RequestState: encodeRequestState(state),
 	}
-	return root, warningList(warning + "; the client returned no file roots"), nil
 }
 
 func newResourceEnv(request *mcp.ReadResourceRequest) *callEnv {
@@ -542,12 +614,13 @@ var resourceLockfileNames = []string{
 	"bun.lock",
 }
 
+// resourceResolutionKey is the workspace fingerprint for the single-entry
+// cache. cacheable is false without a lockfile: package.json alone is not
+// enough evidence to cache a resolution.
 type resourceResolutionKey struct {
-	root      string
-	lockfile  string
-	modTime   time.Time
-	size      int64
-	cacheable bool
+	root        string
+	fingerprint string
+	cacheable   bool
 }
 
 type resourceResolutionEntry struct {
@@ -556,26 +629,62 @@ type resourceResolutionEntry struct {
 }
 
 func resourceResolutionKeyFor(root string) resourceResolutionKey {
+	var parts []string
+	lockfiles := 0
 	for _, name := range resourceLockfileNames {
-		path := filepath.Join(root, name)
-		info, err := os.Stat(path)
-		if err != nil || !info.Mode().IsRegular() {
+		info, ok := statRegularFile(filepath.Join(root, name))
+		if !ok {
 			continue
 		}
-		return resourceResolutionKey{
-			root:      root,
-			lockfile:  path,
-			modTime:   info.ModTime(),
-			size:      info.Size(),
-			cacheable: true,
-		}
+		lockfiles++
+		parts = append(parts,
+			name,
+			strconv.FormatInt(info.ModTime().UnixNano(), 10),
+			strconv.FormatInt(info.Size(), 10))
 	}
-	return resourceResolutionKey{root: root}
+	if lockfiles == 0 {
+		return resourceResolutionKey{root: root}
+	}
+	if info, ok := statRegularFile(filepath.Join(root, "package.json")); ok {
+		parts = append(parts,
+			"package.json",
+			strconv.FormatInt(info.ModTime().UnixNano(), 10),
+			strconv.FormatInt(info.Size(), 10))
+	}
+	return resourceResolutionKey{
+		root:        root,
+		fingerprint: strings.Join(parts, "\x00"),
+		cacheable:   true,
+	}
 }
 
-// resourceCascadeAtRoot runs the cascade and caches the raw result when a
-// lockfile anchors the key. Invalidation is implicit: a changed path, mtime,
-// or size misses the single cached entry.
+func statRegularFile(path string) (os.FileInfo, bool) {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, false
+	}
+	return info, true
+}
+
+// lockfileSourced reports whether the winning candidate came from a lockfile.
+// Other evidence levels bypass the cache so a package.json, installed package,
+// or template scan is re-run on every read.
+func lockfileSourced(result resolve.Result) bool {
+	if result.Ambiguity != nil || result.Source == "" {
+		return false
+	}
+	for _, candidate := range result.Candidates {
+		if candidate.Source == result.Source {
+			return candidate.Level == resolve.LevelLockfile
+		}
+	}
+	return false
+}
+
+// resourceCascadeAtRoot runs the cascade and caches the raw result only when a
+// lockfile anchors the key and supplies the winning candidate. The key covers
+// every existing lockfile plus the root package.json. Invalidation is implicit:
+// a changed path, mtime, or size misses the single cached entry.
 func (s *Service) resourceCascadeAtRoot(root string) (resolve.Result, *ToolError) {
 	key := resourceResolutionKeyFor(root)
 	if key.cacheable {
@@ -608,7 +717,7 @@ func (s *Service) resourceCascadeAtRoot(root string) (resolve.Result, *ToolError
 		}
 	}
 
-	if key.cacheable {
+	if key.cacheable && lockfileSourced(result) {
 		s.resourceCacheMu.Lock()
 		s.resourceCache = &resourceResolutionEntry{key: key, result: result}
 		s.resourceCacheMu.Unlock()

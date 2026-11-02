@@ -192,14 +192,91 @@ func TestPackagesResourceReportsAmbiguity(t *testing.T) {
 	}
 }
 
-func TestPackagesResourceStaysWithinBudget(t *testing.T) {
+func TestPackagesResourceUnbundledElementsFallsBack(t *testing.T) {
 	svc := fixtureService(t)
-	svc.maxResponseBytes = 400
+	svc.resolveWorkspace = func(resolve.Options) (resolve.Result, error) {
+		return resolve.Result{
+			Elements: "9.9.9",
+			Source:   "package-lock.json",
+			Candidates: []resolve.Candidate{{
+				Version: "9.9.9", Source: "package-lock.json",
+				Precedence: resolve.PrecedenceLockfile, Level: resolve.LevelLockfile,
+			}},
+		}, nil
+	}
+	session := connectServer(t, newResourceOnlyServer(t, svc))
+	payload := readPackagesResource(t, session)
+	summaries := packageSummaries(payload)
+
+	elements := summaries[packageElements]
+	if elements.Resolved != "5.0.0" || elements.Level != "bundled" {
+		t.Errorf("elements summary = %+v, want latest bundled fallback", elements)
+	}
+	if !strings.Contains(elements.Reason, "9.9.9") ||
+		!strings.Contains(elements.Reason, "not bundled") {
+		t.Errorf("elements reason = %q, want the unbundled workspace version", elements.Reason)
+	}
+
+	docs := summaries[packageDocs]
+	if docs.Resolved != "v5.0.0" || docs.Level != "fallback" {
+		t.Errorf("docs summary = %+v, want newest snapshot fallback", docs)
+	}
+	if !strings.Contains(docs.Reason, "9.9.9") {
+		t.Errorf("docs reason = %q, want the unbundled workspace version", docs.Reason)
+	}
+}
+
+func TestPackagesResourceDocsMajorWithoutSnapshot(t *testing.T) {
+	svc := fixtureService(t)
+	svc.resolveWorkspace = func(resolve.Options) (resolve.Result, error) {
+		return resolve.Result{
+			Elements: "1.0.0",
+			Source:   "package-lock.json",
+			Candidates: []resolve.Candidate{{
+				Version: "1.0.0", Source: "package-lock.json",
+				Precedence: resolve.PrecedenceLockfile, Level: resolve.LevelLockfile,
+			}},
+		}, nil
+	}
+	session := connectServer(t, newResourceOnlyServer(t, svc))
+	payload := readPackagesResource(t, session)
+	summaries := packageSummaries(payload)
+
+	elements := summaries[packageElements]
+	if elements.Resolved != "1.0.0" || elements.Level != "lockfile" {
+		t.Errorf("elements summary = %+v, want the workspace version with lockfile evidence", elements)
+	}
+	docs := summaries[packageDocs]
+	if docs.Resolved != "v5.0.0" {
+		t.Errorf("docs resolved = %q, want v5.0.0", docs.Resolved)
+	}
+	if docs.Level != "fallback" {
+		t.Errorf("docs level = %q, want fallback because major 1 has no snapshot", docs.Level)
+	}
+	if !strings.Contains(docs.Reason, "elements@1.0.0") ||
+		!strings.Contains(docs.Reason, "no bundled docs snapshot") {
+		t.Errorf("docs reason = %q, want the missing-major explanation", docs.Reason)
+	}
+}
+
+func TestPackagesResourceStaysWithinBudget(t *testing.T) {
+	const budget = 1000
+	svc := fixtureService(t)
+	svc.maxResponseBytes = budget
 	session := connectServer(t, newResourceOnlyServer(t, svc))
 
 	payload := readPackagesResource(t, session)
 	if !payload.Truncated {
-		t.Errorf("truncated = false, want true for a 400 byte budget: %+v", payload)
+		t.Errorf("truncated = false, want true for a %d byte budget: %+v", budget, payload)
+	}
+	if got := estimatedResponseBytes(payload); got > budget {
+		t.Errorf("final payload is %d bytes, want at most %d", got, budget)
+	}
+	if payload.Error != nil {
+		if payload.Error.Code != "response_too_large" {
+			t.Errorf("error code = %q, want response_too_large", payload.Error.Code)
+		}
+		return
 	}
 	if len(payload.Packages) != 4 {
 		t.Errorf("packages = %d, want all 4 summaries after budget trimming", len(payload.Packages))
@@ -208,5 +285,42 @@ func TestPackagesResourceStaysWithinBudget(t *testing.T) {
 		if summary.Package == "" || summary.Count == 0 {
 			t.Errorf("summary lost required fields: %+v", summary)
 		}
+	}
+}
+
+func TestPackagesResourceMRTRRequestsRoots(t *testing.T) {
+	server := newResourceOnlyServer(t, fixtureService(t))
+	session := connectResourceMRTRDisabled(t, server, elementsLockWorkspace(t, "4.0.0"))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	first, err := session.ReadResource(ctx, &mcp.ReadResourceParams{URI: packagesResourceURI})
+	if err != nil {
+		t.Fatalf("first ReadResource() error = %v", err)
+	}
+	if !first.NeedsInput() {
+		t.Fatal("packages read did not request roots on 2026-07-28")
+	}
+
+	retry, err := session.ReadResource(ctx, &mcp.ReadResourceParams{
+		URI:            packagesResourceURI,
+		InputResponses: mcp.InputResponseMap{},
+		RequestState:   first.RequestState,
+	})
+	if err != nil {
+		t.Fatalf("retry ReadResource() error = %v", err)
+	}
+	if retry.NeedsInput() {
+		t.Fatal("malformed packages retry asked for roots again")
+	}
+	if len(retry.Contents) != 1 {
+		t.Fatalf("contents = %d, want 1", len(retry.Contents))
+	}
+	var payload PackagesResourcePayload
+	if err := json.Unmarshal([]byte(retry.Contents[0].Text), &payload); err != nil {
+		t.Fatalf("packages payload is not JSON: %v", err)
+	}
+	if len(payload.Packages) != 4 {
+		t.Errorf("packages = %d, want 4", len(payload.Packages))
 	}
 }

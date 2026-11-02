@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"golang.org/x/mod/semver"
 
 	"github.com/redhat-ux/mcp/internal/data"
 	"github.com/redhat-ux/mcp/internal/resolve"
@@ -58,7 +59,10 @@ func registerPackagesResource(server *mcp.Server, service *Service) {
 
 func packagesResourceHandler(service *Service) mcp.ResourceHandler {
 	return func(ctx context.Context, request *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
-		payload := buildPackagesResource(ctx, request, service)
+		payload, required := buildPackagesResource(ctx, request, service)
+		if required != nil {
+			return required, nil
+		}
 		trimPackagesResource(service, &payload)
 		encoded, err := json.Marshal(payload)
 		if err != nil {
@@ -72,18 +76,21 @@ func buildPackagesResource(
 	ctx context.Context,
 	request *mcp.ReadResourceRequest,
 	service *Service,
-) PackagesResourcePayload {
+) (PackagesResourcePayload, *mcp.ReadResourceResult) {
 	payload := PackagesResourcePayload{Packages: []PackageSummary{}}
 	if service == nil {
 		payload.Error = toolErrorFrom(data.ErrNoData)
-		return payload
+		return payload, nil
 	}
 	if failure := service.dataFailure(); failure != nil {
 		payload.Error = failure
-		return payload
+		return payload, nil
 	}
 
-	result, rootWarnings, failure := service.resourceCascade(ctx, request)
+	result, rootWarnings, required, failure := service.resourceCascade(ctx, request)
+	if required != nil {
+		return payload, required
+	}
 	if failure != nil {
 		payload.Error = boundedToolError(failure)
 		payload.Warnings = append(payload.Warnings, failure.Message)
@@ -109,7 +116,7 @@ func buildPackagesResource(
 
 	payload.Packages = service.packageSummaries(payload.Resolved, result)
 	payload.Warnings = sanitizeWarnings(payload.Warnings)
-	return payload
+	return payload, nil
 }
 
 // boundedAmbiguity caps and shortens the candidate evidence so a hostile
@@ -205,38 +212,50 @@ func (s *Service) packageKinds(pkg string) []string {
 }
 
 // packageResolution picks the package version and records why, mirroring the
-// resource read semantics.
+// resource read semantics. Workspace evidence is attributed to a package only
+// when the version served actually matches that evidence; otherwise the reason
+// names the fallback and any unbundled workspace version.
 func (s *Service) packageResolution(
 	pkg, latest string,
 	resolved ResolvedVersion,
 	result resolve.Result,
 ) (version, reason, level, source string) {
 	version = latest
+	workspaceElements := resolvedWorkspaceElements(resolved, result)
 	switch pkg {
 	case packageElements:
-		if resolved.Elements != "" && s.store.Has(packageElements, resolved.Elements, kindManifest) {
-			version = resolved.Elements
-		}
-		// On a successful cascade result.Source is the evidence source (for
-		// example "package-lock.json"); on an ambiguous one it is the winning
-		// level. Match on source first, then fall back to the ambiguity level.
-		for _, candidate := range result.Candidates {
-			if candidate.Source == result.Source {
-				level = candidate.Level
-				source = candidate.Source
-				break
+		if workspaceElements != "" && s.store.Has(packageElements, workspaceElements, kindManifest) {
+			version = workspaceElements
+			// On a successful cascade result.Source is the evidence source
+			// (for example "package-lock.json"); on an ambiguous one it is the
+			// winning level. Match on source first, then the ambiguity level.
+			for _, candidate := range result.Candidates {
+				if candidate.Source == result.Source {
+					level = candidate.Level
+					source = candidate.Source
+					break
+				}
 			}
+			if level == "" && result.Ambiguity != nil {
+				level = result.Ambiguity.Level
+			}
+			if source == "" && result.Ambiguity == nil {
+				source = result.Source
+			}
+			if level != "" && source != "" {
+				reason = fmt.Sprintf("%s evidence from %s", level, source)
+			} else if level != "" {
+				reason = level + " evidence"
+			} else {
+				reason = "latest bundled version"
+			}
+			break
 		}
-		if level == "" && result.Ambiguity != nil {
-			level = result.Ambiguity.Level
-		}
-		if source == "" && result.Ambiguity == nil {
-			source = result.Source
-		}
-		if level != "" && source != "" {
-			reason = fmt.Sprintf("%s evidence from %s", level, source)
-		} else if level != "" {
-			reason = level + " evidence"
+		level = "bundled"
+		if workspaceElements != "" {
+			reason = fmt.Sprintf(
+				"workspace resolves elements@%s, which is not bundled; using latest bundled elements@%s",
+				workspaceElements, latest)
 		} else {
 			reason = "latest bundled version"
 		}
@@ -244,22 +263,22 @@ func (s *Service) packageResolution(
 		if resolved.Tokens != "" && s.store.Has(packageTokens, resolved.Tokens, kindTokens) {
 			version = resolved.Tokens
 		}
-		if coupled, ok := s.store.Index().TokensForElements(resolved.Elements); ok {
+		if coupled, ok := s.store.Index().TokensForElements(workspaceElements); ok {
 			if coupled == version {
-				reason = fmt.Sprintf("tokens@%s is coupled to elements@%s", coupled, resolved.Elements)
+				reason = fmt.Sprintf("tokens@%s is coupled to elements@%s", coupled, workspaceElements)
 			} else {
 				reason = fmt.Sprintf(
 					"elements@%s couples tokens@%s, which is not bundled; using tokens@%s",
-					resolved.Elements, coupled, version)
+					workspaceElements, coupled, version)
 			}
 			level = "coupling"
-			source = "elements@" + resolved.Elements
+			source = "elements@" + workspaceElements
 		} else {
 			reason = "latest bundled tokens version"
-			if resolved.Elements != "" {
+			if workspaceElements != "" {
 				reason = fmt.Sprintf(
 					"latest bundled tokens version; elements@%s has no recorded coupling",
-					resolved.Elements)
+					workspaceElements)
 			}
 			level = "bundled"
 		}
@@ -267,29 +286,62 @@ func (s *Service) packageResolution(
 		if resolved.Docs != "" && s.store.Has(packageDocs, resolved.Docs, kindDocs) {
 			version = resolved.Docs
 		}
-		if resolved.Elements != "" {
+		if workspaceElements != "" && sameMajor(version, workspaceElements) {
 			reason = fmt.Sprintf(
 				"newest bundled docs snapshot matching the elements@%s major",
-				resolved.Elements)
+				workspaceElements)
 			level = "major-match"
-			source = "elements@" + resolved.Elements
-		} else {
-			reason = "latest bundled docs snapshot"
-			level = "bundled"
+			source = "elements@" + workspaceElements
+			break
+		}
+		level = "fallback"
+		reason = "latest bundled docs snapshot"
+		if workspaceElements != "" {
+			reason = fmt.Sprintf(
+				"no bundled docs snapshot for the elements@%s major; using newest bundled docs@%s",
+				workspaceElements, version)
+			source = "elements@" + workspaceElements
 		}
 	case packageReleaseNotes:
-		if resolved.Elements != "" && s.store.Has(packageReleaseNotes, resolved.Elements, kindReleaseNotes) {
-			version = resolved.Elements
+		if workspaceElements != "" && s.store.Has(packageReleaseNotes, workspaceElements, kindReleaseNotes) {
+			version = workspaceElements
 			reason = fmt.Sprintf(
-				"release notes match the resolved elements@%s version", resolved.Elements)
+				"release notes match the resolved elements@%s version", workspaceElements)
 			level = "match"
-			source = "elements@" + resolved.Elements
+			source = "elements@" + workspaceElements
 		} else {
 			reason = "latest bundled release notes; the resolved elements version has no release notes"
+			if workspaceElements != "" {
+				reason = fmt.Sprintf(
+					"elements@%s has no bundled release notes; using latest bundled release notes@%s",
+					workspaceElements, version)
+			}
 			level = "fallback"
 		}
 	}
 	return version, reason, level, source
+}
+
+// resolvedWorkspaceElements returns the workspace elements version even when
+// resolutionFrom rejected it because the binary does not bundle that version.
+// An ambiguous result has no workspace version.
+func resolvedWorkspaceElements(resolved ResolvedVersion, result resolve.Result) string {
+	if resolved.Elements != "" {
+		return resolved.Elements
+	}
+	if result.Ambiguity == nil {
+		return result.Elements
+	}
+	return ""
+}
+
+// sameMajor compares the major of two version strings, accepting an optional
+// v prefix on either side.
+func sameMajor(left, right string) bool {
+	leftCanonical := semver.Canonical("v" + strings.TrimPrefix(left, "v"))
+	rightCanonical := semver.Canonical("v" + strings.TrimPrefix(right, "v"))
+	return leftCanonical != "" && rightCanonical != "" &&
+		semver.Major(leftCanonical) == semver.Major(rightCanonical)
 }
 
 // trimPackagesResource enforces the summary budget without ever failing the
@@ -335,4 +387,17 @@ func trimPackagesResource(service *Service, payload *PackagesResourcePayload) {
 	}
 	payload.Ambiguity = nil
 	payload.Truncated = true
+	if estimatedResponseBytes(*payload) <= budget {
+		return
+	}
+	// Even the minimal four-summary shape can exceed a very small test budget.
+	// Return a bounded error instead of an oversized payload.
+	*payload = PackagesResourcePayload{
+		Packages:  []PackageSummary{},
+		Truncated: true,
+		Error: &ToolError{
+			Code:    "response_too_large",
+			Message: "the package index exceeds the response budget",
+		},
+	}
 }

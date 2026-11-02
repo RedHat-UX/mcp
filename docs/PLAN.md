@@ -760,7 +760,13 @@ larger than the summary budget stays reachable.
   `rhds://data/docs{/path*}`, and `rhds://data/release-notes{/path*}` (plus the
   same templates followed by `?{+query}`). Per-component API sections at
   `rhds://elements/{version}/components/{tag}/{section}` for `attributes`,
-  `properties`, `events`, `slots`, `cssParts`, `cssProperties`, and `examples`
+  `properties`, `events`, `slots`, `cssParts`, `cssProperties`, and `examples`.
+  Template reads resolve the workspace per session through MCP roots
+  (multi-round-trip requests on `2026-07-28` and later, direct roots requests
+  earlier, and `cwd` without the roots capability). A workspace resolution is
+  cached only when a lockfile supplies the winning candidate; the key covers
+  every existing lockfile plus the root `package.json` path, mtime, and size,
+  and a workspace with no lockfile is rescanned on every read.
 - Prompts: Lit usage, HTML usage, Twig slot template
 - Server `instructions`: supported versions, offline behavior, resolution precedence,
   search versus exact lookup
