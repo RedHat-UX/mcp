@@ -138,10 +138,11 @@ func nonEmpty(names []string) []string {
 // and node_modules, in that order, so a missing root custom-elements.json is
 // not a reason to skip: a consumer may get every manifest from its
 // dependencies. A workspace with no manifests at all still registers with an
-// empty registry: its tools answer with empty results and its element
-// resources report not found, rather than the surface disappearing. A manifest
-// that exists but fails to decode is likewise left to cem's handlers, which
-// report per-request errors.
+// empty registry: validate_html flags custom elements as unknown, generate_html
+// reports them not found, and element resources report not found, rather than
+// the surface disappearing. A manifest that exists but fails to decode does not
+// fail mounting: cem's non-strict loader drops it or falls back to in-memory
+// generation, so its elements are absent from the registry.
 func mountCEM(server *mcp.Server, cwd string, opts MountOptions) error {
 	workspace, err := cemworkspace.NewFileSystemWorkspaceContext(cwd)
 	if err != nil {

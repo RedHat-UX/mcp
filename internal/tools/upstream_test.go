@@ -475,14 +475,20 @@ func TestMountUpstreamsMountsCEMWithRootManifest(t *testing.T) {
 			t.Errorf("tools/list is missing cem tool %q with a root manifest: %v", name, names)
 		}
 	}
+
+	if got := readResourceText(t, session, "cem://element/rh-accordion"); !strings.Contains(got, "rh-accordion") {
+		t.Errorf("ReadResource(cem://element/rh-accordion) = %q, want the root manifest element", got)
+	}
 }
 
 // TestMountUpstreamsMountsCEMWithoutManifest pins the chosen behavior for a
 // workspace with no package.json and no manifest. Constructing the workspace
-// and registering cem both succeed, so cem mounts with an empty registry: its
-// tools are listed, and reading an element resource reports not found rather
-// than removing the surface. This is intentional; the mount condition is
-// workspace constructibility, not the presence of a manifest.
+// and registering cem both succeed, so cem mounts with an empty registry: the
+// tools are listed, validate_html flags custom elements as unknown, and element
+// lookups (both the generate_html tool and the element resources) report the
+// element as missing, rather than the surface disappearing. This is
+// intentional; the mount condition is workspace constructibility, not the
+// presence of a manifest.
 func TestMountUpstreamsMountsCEMWithoutManifest(t *testing.T) {
 	t.Chdir(t.TempDir())
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.0.0"}, nil)
@@ -503,12 +509,38 @@ func TestMountUpstreamsMountsCEMWithoutManifest(t *testing.T) {
 		}
 	}
 
+	// The static resource reads from the empty registry; a specific element
+	// is absent, so its templated read fails. Asserting the error rather than
+	// its wording keeps the test from depending on cem's message text.
+	readResourceText(t, session, "cem://elements")
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	validated, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "validate_html",
+		Arguments: map[string]any{"html": "<fixture-element></fixture-element>"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool(validate_html) error = %v", err)
+	}
+	if got := contentText(validated); !strings.Contains(got, "Unknown Element") {
+		t.Errorf("CallTool(validate_html) = %q, want the element flagged as unknown", got)
+	}
+
+	generated, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "generate_html",
+		Arguments: map[string]any{"tagName": "fixture-element"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool(generate_html) error = %v", err)
+	}
+	if got := contentText(generated); !strings.Contains(got, "not found") {
+		t.Errorf("CallTool(generate_html) = %q, want the element reported missing", got)
+	}
+
 	if _, err := session.ReadResource(ctx, &mcp.ReadResourceParams{URI: "cem://element/fixture-element"}); err == nil {
-		t.Fatal("ReadResource(cem://element/fixture-element) error = nil, want a not-found error on an empty workspace")
-	} else if !strings.Contains(err.Error(), "not found") {
-		t.Errorf("ReadResource(cem://element/fixture-element) error = %v, want a not-found error", err)
+		t.Fatal("ReadResource(cem://element/fixture-element) error = nil, want an error on an empty registry")
 	}
 }
 
@@ -533,6 +565,41 @@ func TestMountUpstreamsWarnsWhenCEMWorkspaceIsUnavailable(t *testing.T) {
 	for _, name := range cemToolNames {
 		if slices.Contains(names, name) {
 			t.Errorf("tools/list contains cem tool %q when the workspace is unavailable", name)
+		}
+	}
+	for _, name := range asimonimToolNames {
+		if !slices.Contains(names, name) {
+			t.Errorf("tools/list is missing asimonim tool %q after the cem warning: %v", name, names)
+		}
+	}
+}
+
+// TestMountUpstreamsWarnsWhenCEMWorkspaceIsInvalid exercises mountCEM's
+// workspace-construction failure directly, rather than the getwd failure in
+// TestMountUpstreamsWarnsWhenCEMWorkspaceIsUnavailable. An unreadable
+// package.json makes NewFileSystemWorkspaceContext fail, so cem is skipped with
+// the advisory warning and asimonim still mounts.
+func TestMountUpstreamsWarnsWhenCEMWorkspaceIsInvalid(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte("{"), 0o644); err != nil {
+		t.Fatalf("writing invalid package.json: %v", err)
+	}
+	t.Chdir(dir)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.0.0"}, nil)
+	err := MountUpstreams(server, MountOptions{})
+	var warning *MountWarning
+	if !errors.As(err, &warning) {
+		t.Fatalf("MountUpstreams() error = %v, want a *MountWarning", err)
+	}
+	if warning.Package != "cem" {
+		t.Errorf("warning package = %q, want cem", warning.Package)
+	}
+
+	names := listToolNames(t, connectServer(t, server))
+	for _, name := range cemToolNames {
+		if slices.Contains(names, name) {
+			t.Errorf("tools/list contains cem tool %q for an invalid workspace", name)
 		}
 	}
 	for _, name := range asimonimToolNames {
