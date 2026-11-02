@@ -291,24 +291,32 @@ failing startup. A collision with an existing host entry is resolved by
 `MountOptions.ConflictPolicy`. The default `newest` replaces an older bundled entry,
 keeps a newer one and warns that the bundled version is shadowed, keeps an equal
 version without a warning, and replaces an entry with no provenance while warning with
-the unknown version. `replace`, `skip`, and `error` override this behavior. Each
-decision logs one WARN to stderr with the source, name or URI, bundled version, and
-existing version. Per-mount disable lists remove exact tool names, resource URIs, or
-URI templates through each upstream's `Selection` before the internal registration.
+the unknown version. Provenance from a different upstream is not semver-comparable
+and takes the unknown-version path. `replace`, `skip`, and `error` override this
+behavior; `error` fails only when a collision exists. Each replacement or shadowing
+logs one WARN to stderr with the source, name or URI, bundled version, existing
+version, and existing source. Per-mount disable lists remove exact tool names,
+resource URIs, or URI templates through each upstream's `Selection` before the
+internal registration.
 
 asimonim keeps one internal asimonim server and one internal client per host session,
 created lazily. The proxy resolves the host session's roots, directly through
 `ServerSession.ListRoots` on `2025-06-18` and `2025-11-25`, and through a
 multi-round-trip input request on `2026-07-28` and later, then connects the internal
-client to the shared internal server with those roots. asimonim caches its workspace
-per internal server session, so clients with different workspaces get different tokens
-through the proxy. Internal clients and server sessions close when the host session
-closes; `Mount.Close` releases the cem client and any remaining sessions. Every
-completed tool and resource result still reports workspace provenance in `_meta` under
-`asimonim/workspace` (`root` and `source`) with the same values direct registration
-produced, including `source: roots` for client roots. The host-surface probe used for
-conflict resolution stays pinned to `2025-11-25`: it only lists features, so it does
-not need the `2026-07-28` stateless discovery path.
+client to the shared internal server with those roots. A host client without the
+roots capability gets an internal client with an explicit empty capability set, so
+asimonim takes its cwd path without an extra round trip or a spurious warning. asimonim
+caches its workspace per internal server session, so clients with different workspaces
+get different tokens through the proxy. Internal clients and server sessions close
+when the host session closes; `Mount.Close` releases the cem client and any remaining
+sessions. Every completed tool and resource result still reports workspace provenance
+in `_meta` under `asimonim/workspace` (`root` and `source`) with the same values
+direct registration produced, including `source: roots` for client roots and
+`source: cwd` without them. If a roots-capable client's `roots/list` fails, the proxy
+logs the failure and uses cwd; the `warning` field direct registration would add to
+`_meta` is not reproduced. The host-surface probe used for conflict resolution stays
+pinned to `2025-11-25`: it only lists features, so it does not need the `2026-07-28`
+stateless discovery path.
 
 Where tree-sitter is used (checked against cem `13100d50`):
 
