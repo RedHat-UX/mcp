@@ -253,7 +253,9 @@ func TestUpstreamVersionFromBuildInfoFallbacks(t *testing.T) {
 		{Path: "example.com/devel", Version: "(devel)"},
 		{Path: "example.com/empty", Version: ""},
 		{Path: "example.com/valid", Version: "v1.2.3"},
-		{Path: "example.com/replaced", Version: "v0.1.0", Replace: &debug.Module{Path: "../local"}},
+		{Path: "example.com/replaced-local", Version: "v0.1.0", Replace: &debug.Module{Path: "../local"}},
+		{Path: "example.com/replaced-versioned", Version: "v0.1.0", Replace: &debug.Module{Path: "example.com/fork", Version: "v0.2.0"}},
+		{Path: "example.com/replaced-devel", Version: "v0.1.0", Replace: &debug.Module{Path: "example.com/fork", Version: "(devel)"}},
 	}}
 
 	tests := []struct {
@@ -267,7 +269,9 @@ func TestUpstreamVersionFromBuildInfoFallbacks(t *testing.T) {
 		{name: "missing falls back", info: info, module: "example.com/missing", want: unknownUpstreamVersion},
 		{name: "nil build info falls back", info: nil, module: "example.com/valid", want: unknownUpstreamVersion},
 		{name: "real version is reported", info: info, module: "example.com/valid", want: "v1.2.3"},
-		{name: "replaced module reports its version", info: info, module: "example.com/replaced", want: "v0.1.0"},
+		{name: "local replacement reports unknown", info: info, module: "example.com/replaced-local", want: unknownUpstreamVersion},
+		{name: "versioned replacement reports the replacement version", info: info, module: "example.com/replaced-versioned", want: "v0.2.0"},
+		{name: "devel replacement reports unknown", info: info, module: "example.com/replaced-devel", want: unknownUpstreamVersion},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -283,7 +287,9 @@ func TestMountSourcesConflictMatrix(t *testing.T) {
 
 	tests := []struct {
 		name                string
+		bundledVersion      string
 		existingVersion     string
+		existingSource      string
 		policy              ConflictPolicy
 		wantReplaced        bool
 		wantWarnings        int
@@ -293,7 +299,12 @@ func TestMountSourcesConflictMatrix(t *testing.T) {
 		{name: "newest replaces older", existingVersion: "v0.11.5", policy: ConflictNewest, wantReplaced: true, wantWarnings: 3, wantReason: "older"},
 		{name: "newest keeps newer", existingVersion: "v0.11.7", policy: ConflictNewest, wantReplaced: false, wantWarnings: 3, wantReason: "shadowed"},
 		{name: "newest keeps equal", existingVersion: bundled, policy: ConflictNewest, wantReplaced: false, wantWarnings: 0},
+		{name: "newest keeps versioned entry when bundled version is unknown", bundledVersion: unknownUpstreamVersion, existingVersion: "v0.11.5", policy: ConflictNewest, wantReplaced: false, wantWarnings: 3, wantReason: "bundled version is unknown"},
+		{name: "newest keeps versioned entry when bundled version is devel", bundledVersion: "(devel)", existingVersion: "v0.11.5", policy: ConflictNewest, wantReplaced: false, wantWarnings: 3, wantReason: "bundled version is unknown"},
+		{name: "newest keeps versioned entry when bundled version is malformed", bundledVersion: "banana", existingVersion: "v0.11.5", policy: ConflictNewest, wantReplaced: false, wantWarnings: 3, wantReason: "bundled version is unknown"},
 		{name: "newest replaces unknown provenance", existingVersion: "", policy: ConflictNewest, wantReplaced: true, wantWarnings: 3, wantReason: "unknown"},
+		{name: "newest replaces unknown provenance when bundled version is unknown", bundledVersion: unknownUpstreamVersion, existingVersion: "", policy: ConflictNewest, wantReplaced: true, wantWarnings: 3, wantReason: "unknown"},
+		{name: "newest replaces different upstream when bundled version is unknown", bundledVersion: unknownUpstreamVersion, existingVersion: "v0.11.5", existingSource: "other", policy: ConflictNewest, wantReplaced: true, wantWarnings: 3, wantReason: "different upstream"},
 		{name: "newest replaces malformed provenance", existingVersion: "banana", policy: ConflictNewest, wantReplaced: true, wantWarnings: 3, wantReason: "unknown", wantExistingVersion: unknownUpstreamVersion},
 		{name: "newest replaces devel provenance", existingVersion: "(devel)", policy: ConflictNewest, wantReplaced: true, wantWarnings: 3, wantReason: "unknown", wantExistingVersion: unknownUpstreamVersion},
 		{name: "replace replaces older", existingVersion: "v0.11.5", policy: ConflictReplace, wantReplaced: true, wantWarnings: 3, wantReason: "policy"},
@@ -307,10 +318,17 @@ func TestMountSourcesConflictMatrix(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			bundledVersion := test.bundledVersion
+			if bundledVersion == "" {
+				bundledVersion = bundled
+			}
 			host := hostWithConflicts(t, test.existingVersion)
+			if test.existingSource != "" {
+				host = hostWithConflictsSource(t, test.existingVersion, test.existingSource)
+			}
 			logger, records := newRecordingLogger()
 
-			err := mountSources(host, []upstreamSource{probeSource(bundled)}, test.policy, logger)
+			err := mountSources(host, []upstreamSource{probeSource(bundledVersion)}, test.policy, logger)
 			if err != nil {
 				t.Fatalf("mountSources() error = %v", err)
 			}
@@ -341,8 +359,8 @@ func TestMountSourcesConflictMatrix(t *testing.T) {
 				if got := warning.Attrs["source"]; got != "probe" {
 					t.Errorf("warning source = %v, want probe", got)
 				}
-				if got := warning.Attrs["bundledVersion"]; got != bundled {
-					t.Errorf("warning bundledVersion = %v, want %q", got, bundled)
+				if got := warning.Attrs["bundledVersion"]; got != bundledVersion {
+					t.Errorf("warning bundledVersion = %v, want %q", got, bundledVersion)
 				}
 				if _, ok := warning.Attrs["name"]; !ok {
 					t.Errorf("warning has no name: %#v", warning.Attrs)
@@ -378,8 +396,8 @@ func TestMountSourcesConflictMatrix(t *testing.T) {
 				if got := meta["source"]; got != "probe" {
 					t.Errorf("provenance source = %v, want probe", got)
 				}
-				if got := meta["version"]; got != bundled {
-					t.Errorf("provenance version = %v, want %q", got, bundled)
+				if got := meta["version"]; got != bundledVersion {
+					t.Errorf("provenance version = %v, want %q", got, bundledVersion)
 				}
 			}
 		})
@@ -886,6 +904,443 @@ func TestMountCloseWithActiveSession(t *testing.T) {
 	}
 	waitFor(t, 5*time.Second, func() bool { return mount.activeSessions() == 0 },
 		"internal session was not cleaned up after close")
+}
+
+func TestForwardedToolParamsPreserveCallerFields(t *testing.T) {
+	request := &mcp.CallToolRequest{Params: &mcp.CallToolParamsRaw{
+		Meta:      mcp.Meta{"progressToken": "token-1", "caller/trace": "trace-1"},
+		Name:      "probe_tool",
+		Arguments: json.RawMessage(`{"x":1}`),
+		InputResponses: mcp.InputResponseMap{
+			"elicit-1": &mcp.ElicitResult{Action: "accept", Content: map[string]any{"ok": true}},
+		},
+		RequestState: "state-1",
+	}}
+
+	got := forwardedToolParams(request)
+	if got.Name != "probe_tool" {
+		t.Errorf("Name = %q, want probe_tool", got.Name)
+	}
+	if diff := jsonDiff(t, request.Params.GetMeta(), got.GetMeta()); diff != "" {
+		t.Errorf("forwarded Meta differs:\n%s", diff)
+	}
+	if diff := jsonDiff(t, request.Params.InputResponses, got.InputResponses); diff != "" {
+		t.Errorf("forwarded InputResponses differ:\n%s", diff)
+	}
+	if got.RequestState != "state-1" {
+		t.Errorf("RequestState = %q, want state-1", got.RequestState)
+	}
+	if diff := jsonDiff(t, request.Params.Arguments, got.Arguments); diff != "" {
+		t.Errorf("forwarded Arguments differ:\n%s", diff)
+	}
+	if token := got.GetProgressToken(); token != "token-1" {
+		t.Errorf("progress token = %v, want token-1", token)
+	}
+	got.Meta["probe"] = true
+	if _, ok := request.Params.GetMeta()["probe"]; ok {
+		t.Error("forwarded params share the caller's _meta map; mutating it changed the request")
+	}
+}
+
+func TestForwardedInputState(t *testing.T) {
+	rootsAndElicit := mcp.InputResponseMap{
+		rootsInputRequestKey: &mcp.ListRootsResult{}, //nolint:staticcheck // roots required by PLAN section 8.1
+		"elicit-1":           &mcp.ElicitResult{Action: "accept"},
+	}
+	rootsOnly := mcp.InputResponseMap{
+		rootsInputRequestKey: &mcp.ListRootsResult{}, //nolint:staticcheck // roots required by PLAN section 8.1
+	}
+	elicitOnly := mcp.InputResponseMap{
+		"elicit-1": &mcp.ElicitResult{Action: "accept"},
+	}
+
+	tests := []struct {
+		name      string
+		fresh     bool
+		responses mcp.InputResponseMap
+		state     string
+		want      mcp.InputResponseMap
+		wantState string
+	}{
+		{
+			name:      "fresh call drops all caller input state",
+			fresh:     true,
+			responses: rootsAndElicit,
+			state:     rootsRequestState,
+		},
+		{
+			name:      "established call strips the proxy roots response",
+			responses: rootsAndElicit,
+			state:     rootsRequestState,
+			want:      elicitOnly,
+		},
+		{
+			name:      "established call strips the roots response and keeps unrelated state",
+			responses: rootsOnly,
+			state:     "upstream-state",
+			wantState: "upstream-state",
+		},
+		{
+			name:      "established call preserves unrelated input state",
+			responses: elicitOnly,
+			state:     "upstream-state",
+			want:      elicitOnly,
+			wantState: "upstream-state",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, gotState := forwardedInputState(test.fresh, test.responses, test.state)
+			if diff := jsonDiff(t, test.want, got); diff != "" {
+				t.Errorf("forwardedInputState() responses differ:\n%s", diff)
+			}
+			if gotState != test.wantState {
+				t.Errorf("forwardedInputState() state = %q, want %q", gotState, test.wantState)
+			}
+		})
+	}
+}
+
+func TestProgressRelayScopesTokensBySession(t *testing.T) {
+	relay := newProgressRelay()
+	sessionA := new(mcp.ServerSession)
+	sessionB := new(mcp.ServerSession)
+
+	relay.register("shared", sessionA)
+	if got := relay.target("shared"); got != sessionA {
+		t.Fatalf("target = %v, want session A", got)
+	}
+
+	relay.register("shared", sessionB)
+	if got := relay.target("shared"); got != nil {
+		t.Errorf("target = %v for a token shared by two sessions, want nil", got)
+	}
+
+	// Releasing one call must not remove the other session's registration.
+	relay.release(context.Background(), "shared", sessionA)
+	if got := relay.target("shared"); got != sessionB {
+		t.Errorf("target = %v after session A released, want session B", got)
+	}
+	relay.release(context.Background(), "shared", sessionB)
+	if got := relay.target("shared"); got != nil {
+		t.Errorf("target = %v after both sessions released, want nil", got)
+	}
+	if got := relay.activeTokens(); got != 0 {
+		t.Errorf("activeTokens() = %d, want 0", got)
+	}
+}
+
+func TestProgressRelayDuplicateRegistrationIsRefcounted(t *testing.T) {
+	relay := newProgressRelay()
+	session := new(mcp.ServerSession)
+
+	relay.register("dup", session)
+	relay.register("dup", session)
+	relay.release(context.Background(), "dup", session)
+	if got := relay.target("dup"); got != session {
+		t.Fatalf("target = %v after one of two registrations released, want the session", got)
+	}
+	relay.release(context.Background(), "dup", session)
+	if got := relay.target("dup"); got != nil {
+		t.Errorf("target = %v after both registrations released, want nil", got)
+	}
+	if got := relay.activeTokens(); got != 0 {
+		t.Errorf("activeTokens() = %d, want 0", got)
+	}
+}
+
+func TestProgressRelayBarrierIsMembershipBased(t *testing.T) {
+	relay := newProgressRelay()
+	for _, token := range []any{
+		progressBarrierTokenBase + "caller-chosen",
+		"ordinary-token",
+	} {
+		if _, ok := relay.takeBarrier(token); ok {
+			t.Errorf("takeBarrier(%v) = true for a token that was never registered", token)
+		}
+	}
+}
+
+func TestBuildCEMSourceWiresProgressRelay(t *testing.T) {
+	t.Chdir(projectWithManifest(t))
+	mount := &Mount{state: newMountState()}
+	t.Cleanup(func() { _ = mount.Close() })
+
+	source, err := buildCEMSource(".", MountOptions{}, mount)
+	if err != nil {
+		t.Fatalf("buildCEMSource() error = %v", err)
+	}
+	if source == nil {
+		t.Fatal("buildCEMSource() = nil, want a cem source")
+	}
+	forwarder, ok := source.forward.(*clientForwarder)
+	if !ok {
+		t.Fatalf("forwarder = %T, want *clientForwarder", source.forward)
+	}
+	if forwarder.relay == nil {
+		t.Fatal("cem forwarder has no progress relay; cem progress notifications would be dropped")
+	}
+	if forwarder.relay.server == nil {
+		t.Error("cem progress relay has no internal server session, so its drain cannot run")
+	}
+}
+
+func TestForwardedResourceParamsPreserveCallerFields(t *testing.T) {
+	request := &mcp.ReadResourceRequest{Params: &mcp.ReadResourceParams{
+		Meta: mcp.Meta{"progressToken": "token-2", "caller/trace": "trace-2"},
+		URI:  "probe://resource",
+		InputResponses: mcp.InputResponseMap{
+			"elicit-2": &mcp.ElicitResult{Action: "accept", Content: map[string]any{"ok": true}},
+		},
+		RequestState: "state-2",
+	}}
+
+	got := forwardedResourceParams(request)
+	if got.URI != "probe://resource" {
+		t.Errorf("URI = %q, want probe://resource", got.URI)
+	}
+	if diff := jsonDiff(t, request.Params.GetMeta(), got.GetMeta()); diff != "" {
+		t.Errorf("forwarded Meta differs:\n%s", diff)
+	}
+	if diff := jsonDiff(t, request.Params.InputResponses, got.InputResponses); diff != "" {
+		t.Errorf("forwarded InputResponses differ:\n%s", diff)
+	}
+	if got.RequestState != "state-2" {
+		t.Errorf("RequestState = %q, want state-2", got.RequestState)
+	}
+	if token := got.GetProgressToken(); token != "token-2" {
+		t.Errorf("progress token = %v, want token-2", token)
+	}
+}
+
+// TestProxyForwardsToolRequestFields proves the internal upstream handler
+// receives the same _meta, input responses, request state, and arguments a
+// directly registered handler would receive.
+func TestProxyForwardsToolRequestFields(t *testing.T) {
+	captured := make(chan *mcp.CallToolParamsRaw, 1)
+	definition := &mcp.Tool{Name: "echo_params", Description: "echo", InputSchema: map[string]any{"type": "object"}}
+	internal := mcp.NewServer(&mcp.Implementation{Name: "upstream", Version: "0.0.0"}, nil)
+	internal.AddTool(definition, func(_ context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		captured <- request.Params
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}, nil
+	})
+
+	internalSession, closeInternal := connectInMemory(t, internal, "2025-11-25")
+	defer closeInternal()
+
+	host := mcp.NewServer(&mcp.Implementation{Name: "host", Version: "0.0.0"}, nil)
+	logger, _ := newRecordingLogger()
+	if err := mountSources(host, []upstreamSource{{
+		name:        "probe",
+		version:     "v1.0.0",
+		definitions: upstreamDefinitions{tools: []*mcp.Tool{definition}},
+		forward:     &clientForwarder{client: internalSession},
+	}}, ConflictNewest, logger); err != nil {
+		t.Fatalf("mountSources() error = %v", err)
+	}
+
+	session := connectServer(t, host)
+	meta := mcp.Meta{"progressToken": "token-1", "caller/trace": "trace-1"}
+	responses := mcp.InputResponseMap{
+		"elicit-1": &mcp.ElicitResult{Action: "accept", Content: map[string]any{"ok": true}},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:           "echo_params",
+		Arguments:      map[string]any{"x": 1},
+		Meta:           meta,
+		InputResponses: responses,
+		RequestState:   "state-1",
+	}); err != nil {
+		t.Fatalf("CallTool() error = %v", err)
+	}
+
+	select {
+	case got := <-captured:
+		if diff := jsonDiff(t, meta, got.GetMeta()); diff != "" {
+			t.Errorf("upstream handler Meta differs:\n%s", diff)
+		}
+		if diff := jsonDiff(t, responses, got.InputResponses); diff != "" {
+			t.Errorf("upstream handler InputResponses differ:\n%s", diff)
+		}
+		if got.RequestState != "state-1" {
+			t.Errorf("upstream handler RequestState = %q, want state-1", got.RequestState)
+		}
+		if diff := jsonDiff(t, json.RawMessage(`{"x":1}`), got.Arguments); diff != "" {
+			t.Errorf("upstream handler Arguments differ:\n%s", diff)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("upstream handler was never called")
+	}
+}
+
+// TestProxyForwardsResourceRequestFields is the resources/read counterpart of
+// TestProxyForwardsToolRequestFields.
+func TestProxyForwardsResourceRequestFields(t *testing.T) {
+	captured := make(chan *mcp.ReadResourceParams, 1)
+	internal := mcp.NewServer(&mcp.Implementation{Name: "upstream", Version: "0.0.0"}, nil)
+	definition := &mcp.Resource{URI: "probe://resource", Name: "probe", Description: "echo"}
+	internal.AddResource(definition, func(_ context.Context, request *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		captured <- request.Params
+		return &mcp.ReadResourceResult{
+			Contents: []*mcp.ResourceContents{{URI: request.Params.URI, Text: "ok"}},
+		}, nil
+	})
+
+	internalSession, closeInternal := connectInMemory(t, internal, "2025-11-25")
+	defer closeInternal()
+
+	host := mcp.NewServer(&mcp.Implementation{Name: "host", Version: "0.0.0"}, nil)
+	logger, _ := newRecordingLogger()
+	if err := mountSources(host, []upstreamSource{{
+		name:        "probe",
+		version:     "v1.0.0",
+		definitions: upstreamDefinitions{resources: []*mcp.Resource{definition}},
+		forward:     &clientForwarder{client: internalSession},
+	}}, ConflictNewest, logger); err != nil {
+		t.Fatalf("mountSources() error = %v", err)
+	}
+
+	session := connectServer(t, host)
+	meta := mcp.Meta{"progressToken": "token-2", "caller/trace": "trace-2"}
+	responses := mcp.InputResponseMap{
+		"elicit-2": &mcp.ElicitResult{Action: "accept", Content: map[string]any{"ok": true}},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := session.ReadResource(ctx, &mcp.ReadResourceParams{
+		URI:            "probe://resource",
+		Meta:           meta,
+		InputResponses: responses,
+		RequestState:   "state-2",
+	}); err != nil {
+		t.Fatalf("ReadResource() error = %v", err)
+	}
+
+	select {
+	case got := <-captured:
+		if diff := jsonDiff(t, meta, got.GetMeta()); diff != "" {
+			t.Errorf("upstream handler Meta differs:\n%s", diff)
+		}
+		if diff := jsonDiff(t, responses, got.InputResponses); diff != "" {
+			t.Errorf("upstream handler InputResponses differ:\n%s", diff)
+		}
+		if got.RequestState != "state-2" {
+			t.Errorf("upstream handler RequestState = %q, want state-2", got.RequestState)
+		}
+		if got.URI != "probe://resource" {
+			t.Errorf("upstream handler URI = %q, want probe://resource", got.URI)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("upstream resource handler was never called")
+	}
+}
+
+// TestProxyRelaysProgressNotifications proves a progress notification emitted
+// by the internal upstream reaches the host client, and that the token map is
+// empty once the forwarded call returns.
+func TestProxyRelaysProgressNotifications(t *testing.T) {
+	const token = "progress-token-1"
+	internal := mcp.NewServer(&mcp.Implementation{Name: "upstream", Version: "0.0.0"}, nil)
+	definition := &mcp.Tool{Name: "progress_tool", Description: "reports progress", InputSchema: map[string]any{"type": "object"}}
+	internal.AddTool(definition, func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if err := request.Session.NotifyProgress(ctx, &mcp.ProgressNotificationParams{
+			ProgressToken: request.Params.GetProgressToken(),
+			Message:       "halfway",
+			Progress:      1,
+			Total:         2,
+		}); err != nil {
+			return nil, err
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "done"}}}, nil
+	})
+
+	relay := newProgressRelay()
+	internalSession, serverSession, err := connectInternalClient(
+		context.Background(), internal, "rhds-mcp-progress-test", "2025-11-25", nil, false, relay,
+	)
+	if err != nil {
+		t.Fatalf("connectInternalClient() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = internalSession.Close()
+		_ = serverSession.Close()
+	})
+
+	host := mcp.NewServer(&mcp.Implementation{Name: "host", Version: "0.0.0"}, nil)
+	logger, _ := newRecordingLogger()
+	if err := mountSources(host, []upstreamSource{{
+		name:        "probe",
+		version:     "v1.0.0",
+		definitions: upstreamDefinitions{tools: []*mcp.Tool{definition}},
+		forward:     &clientForwarder{client: internalSession, relay: relay},
+	}}, ConflictNewest, logger); err != nil {
+		t.Fatalf("mountSources() error = %v", err)
+	}
+
+	progress := make(chan *mcp.ProgressNotificationParams, 1)
+	session := connectServerWithClientOptions(t, host, "2025-11-25", &mcp.ClientOptions{
+		Capabilities: &mcp.ClientCapabilities{},
+		ProgressNotificationHandler: func(_ context.Context, request *mcp.ProgressNotificationClientRequest) {
+			if request != nil && request.Params != nil {
+				progress <- request.Params
+			}
+		},
+	})
+
+	params := new(mcp.CallToolParams)
+	params.Name = "progress_tool"
+	params.SetProgressToken(token)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := session.CallTool(ctx, params); err != nil {
+		t.Fatalf("CallTool() error = %v", err)
+	}
+
+	select {
+	case got := <-progress:
+		if got.ProgressToken != token {
+			t.Errorf("progress token = %v, want %q", got.ProgressToken, token)
+		}
+		if got.Message != "halfway" || got.Progress != 1 || got.Total != 2 {
+			t.Errorf("progress = %#v, want the upstream notification unchanged", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("host client did not receive the relayed progress notification")
+	}
+
+	if got := relay.activeTokens(); got != 0 {
+		t.Errorf("progress relay retained %d token(s) after the call returned, want 0", got)
+	}
+}
+
+// connectServerWithClientOptions connects a host client with caller-supplied
+// options, so tests can observe notifications such as progress.
+func connectServerWithClientOptions(
+	t *testing.T,
+	server *mcp.Server,
+	protocol string,
+	options *mcp.ClientOptions,
+) *mcp.ClientSession {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	serverSession, err := server.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatalf("connecting server: %v", err)
+	}
+	t.Cleanup(func() { _ = serverSession.Close() })
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "upstream-test", Version: "0.0.0"}, options)
+	clientSession, err := client.Connect(ctx, clientTransport, &mcp.ClientSessionOptions{ProtocolVersion: protocol})
+	if err != nil {
+		t.Fatalf("connecting client: %v", err)
+	}
+	t.Cleanup(func() { _ = clientSession.Close() })
+	return clientSession
 }
 
 func TestNonNilRoots(t *testing.T) {

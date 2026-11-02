@@ -29,7 +29,9 @@ func bundledUpstreamVersion(modulePath string) string {
 	return upstreamVersionFrom(info, modulePath)
 }
 
-// upstreamVersionFrom derives a dependency version from build info. A missing
+// upstreamVersionFrom derives a dependency version from build info. When the
+// dependency is replaced, the replacement is what the binary actually bundled,
+// so its version is reported instead of the original requirement's. A missing
 // module, an empty version, and the "(devel)" placeholder all fall back to
 // [unknownUpstreamVersion]; the version is never invented.
 func upstreamVersionFrom(info *debug.BuildInfo, modulePath string) string {
@@ -40,11 +42,25 @@ func upstreamVersionFrom(info *debug.BuildInfo, modulePath string) string {
 		if dependency == nil || dependency.Path != modulePath {
 			continue
 		}
-		version := strings.TrimSpace(dependency.Version)
-		if version == "" || version == "(devel)" {
-			return unknownUpstreamVersion
+		if dependency.Replace != nil {
+			return usableModuleVersion(dependency.Replace)
 		}
-		return version
+		return usableModuleVersion(dependency)
 	}
 	return unknownUpstreamVersion
+}
+
+// usableModuleVersion returns module's version, or [unknownUpstreamVersion]
+// when the build info has no usable version for it. A local replacement has no
+// version at all, so it is unprovable rather than the original requirement's
+// version.
+func usableModuleVersion(module *debug.Module) string {
+	if module == nil {
+		return unknownUpstreamVersion
+	}
+	version := strings.TrimSpace(module.Version)
+	if version == "" || version == "(devel)" {
+		return unknownUpstreamVersion
+	}
+	return version
 }

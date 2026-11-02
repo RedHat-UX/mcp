@@ -286,7 +286,8 @@ func buildCEMSource(cwd string, opts MountOptions, mount *Mount) (*upstreamSourc
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	client, serverSession, err := connectInternalClient(ctx, internal, "rhds-mcp-cem-proxy", "2025-11-25", nil, false)
+	relay := newProgressRelay()
+	client, serverSession, err := connectInternalClient(ctx, internal, "rhds-mcp-cem-proxy", "2025-11-25", nil, false, relay)
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +303,7 @@ func buildCEMSource(cwd string, opts MountOptions, mount *Mount) (*upstreamSourc
 		name:        "cem",
 		version:     version,
 		definitions: definitions,
-		forward:     &clientForwarder{client: client},
+		forward:     &clientForwarder{client: client, relay: relay},
 	}, nil
 }
 
@@ -318,7 +319,7 @@ func buildAsimonimSource(cwd string, opts MountOptions, mount *Mount) (*upstream
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	client, serverSession, err := connectInternalClient(ctx, internal, "rhds-mcp-asimonim-capture", "2025-11-25", nil, false)
+	client, serverSession, err := connectInternalClient(ctx, internal, "rhds-mcp-asimonim-capture", "2025-11-25", nil, false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -351,7 +352,11 @@ func connectInternalClient(
 	protocol string,
 	roots []*mcp.Root, //nolint:staticcheck // roots required by PLAN section 8.1
 	advertiseRoots bool,
+	relay *progressRelay,
 ) (*mcp.ClientSession, *mcp.ServerSession, error) {
+	if relay == nil {
+		relay = newProgressRelay()
+	}
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	serverSession, err := server.Connect(ctx, serverTransport, nil)
 	if err != nil {
@@ -362,7 +367,10 @@ func connectInternalClient(
 	// An explicit empty set is required when the host client has no roots, so
 	// asimonim takes its cwd path without an extra roots round trip or a
 	// spurious "client advertised roots but returned an empty list" warning.
-	options := &mcp.ClientOptions{Capabilities: &mcp.ClientCapabilities{}}
+	options := &mcp.ClientOptions{
+		Capabilities:                &mcp.ClientCapabilities{},
+		ProgressNotificationHandler: relay.notify,
+	}
 	if advertiseRoots {
 		options.Capabilities.RootsV2 = &mcp.RootCapabilities{} //nolint:staticcheck // roots required by PLAN section 8.1
 	}
@@ -375,6 +383,7 @@ func connectInternalClient(
 		_ = serverSession.Close()
 		return nil, nil, fmt.Errorf("connect internal upstream client: %w", err)
 	}
+	relay.setServer(serverSession)
 	return clientSession, serverSession, nil
 }
 

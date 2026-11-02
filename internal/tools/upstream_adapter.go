@@ -59,8 +59,12 @@ type ConflictPolicy string
 const (
 	// ConflictNewest replaces an entry only when the bundled version is newer.
 	// Entries with equal versions are kept without a warning, newer host
-	// entries are kept, and entries without usable provenance are replaced.
-	// This is the default.
+	// entries are kept, and existing entries without usable provenance are
+	// replaced. A bundled version that cannot be compared with an existing
+	// version keeps the existing entry with a warning, because no ordering can
+	// be established. Entries from a different upstream are not comparable and
+	// are replaced, even when the bundled version is unknown. This is the
+	// default.
 	ConflictNewest ConflictPolicy = "newest"
 	// ConflictReplace always replaces an existing entry.
 	ConflictReplace ConflictPolicy = "replace"
@@ -131,13 +135,14 @@ const (
 type conflictReason string
 
 const (
-	reasonOlder         conflictReason = "older"
-	reasonShadowed      conflictReason = "shadowed"
-	reasonEqual         conflictReason = "equal"
-	reasonUnknown       conflictReason = "unknown"
-	reasonIncomparable  conflictReason = "different-upstream"
-	reasonPolicyReplace conflictReason = "policy-replace"
-	reasonPolicyKeep    conflictReason = "policy-keep"
+	reasonOlder          conflictReason = "older"
+	reasonShadowed       conflictReason = "shadowed"
+	reasonEqual          conflictReason = "equal"
+	reasonUnknown        conflictReason = "unknown"
+	reasonBundledUnknown conflictReason = "bundled-unknown"
+	reasonIncomparable   conflictReason = "different-upstream"
+	reasonPolicyReplace  conflictReason = "policy-replace"
+	reasonPolicyKeep     conflictReason = "policy-keep"
 )
 
 type conflictDecision struct {
@@ -178,7 +183,11 @@ func decideConflict(policy ConflictPolicy, source, bundledVersion string, exists
 
 	bundledCanonical := canonicalVersion(bundledVersion)
 	if bundledCanonical == "" {
-		return conflictDecision{action: actionReplace, reason: reasonUnknown, existingVersion: existingVersion}
+		// The bundled version cannot be proven newer (or older) than the
+		// existing one, so ordering is unprovable. Replacing here would let a
+		// local or devel build silently downgrade a versioned host entry; keep
+		// it and warn with both versions instead.
+		return conflictDecision{action: actionKeep, reason: reasonBundledUnknown, existingVersion: existingVersion}
 	}
 
 	switch semver.Compare(bundledCanonical, canonicalVersion(existing.version)) {
@@ -576,6 +585,8 @@ func logConflictDecision(
 		message = "upstream conflict: bundled " + kind + " shadowed by newer existing entry"
 	case reasonUnknown:
 		message = "upstream conflict: " + action + " " + kind + " with unknown version"
+	case reasonBundledUnknown:
+		message = "upstream conflict: keeping " + kind + " because the bundled version is unknown"
 	case reasonIncomparable:
 		message = "upstream conflict: " + action + " " + kind + " from a different upstream"
 	case reasonPolicyReplace:

@@ -279,11 +279,37 @@ registers each upstream on an internal `mcp.Server`, connects an in-memory clien
 enumerates its tools, resources, and resource templates (following pagination), and
 re-registers them on the host with `_meta` provenance under `rhds-mcp/upstream`
 (`{"source": "cem", "version": "<build version>"}`). Versions come from
-`runtime/debug.ReadBuildInfo`; a `(devel)` or missing dependency reports `unknown`,
-never a hardcoded version. Proxied handlers forward `tools/call`, `resources/read`,
+`runtime/debug.ReadBuildInfo`; a `(devel)`, missing, or locally replaced dependency
+reports `unknown`, a versioned replacement reports the replacement's version, and the
+version is never hardcoded. Proxied handlers forward `tools/call`, `resources/read`,
 and template reads to the internal client, preserving content, structured content,
 `_meta`, `isError`, error text, and cancellation. Each forwarded call costs one
-in-process round trip.
+in-process round trip; a call that carries a progress token also pays a progress
+notification relay and an internal drain barrier. Measured on 2026-11-02 with
+`go test ./internal/tools -run '^$' -bench 'Benchmark(ToolCall|ResourceRead)(Direct|Proxied)(WithProgress)?$' -benchmem -count=5`
+(median of five runs, Go 1.27.3, linux/amd64, AMD Ryzen Threadripper 9960X, 48
+logical CPUs):
+
+| Benchmark                        | ns/op  | B/op     | allocs/op |
+|----------------------------------|--------|----------|-----------|
+| ToolCallDirect                   | 175272 | 301372   | 116       |
+| ToolCallProxied                  | 348519 | 602653   | 231       |
+| ToolCallDirectWithProgress       | 285196 | 445923   | 188       |
+| ToolCallProxiedWithProgress      | 693041 | 1026992  | 441       |
+| ResourceReadDirect               | 177186 | 301004   | 108       |
+| ResourceReadProxied              | 352819 | 601879   | 215       |
+| ResourceReadDirectWithProgress   | 286399 | 445556   | 180       |
+| ResourceReadProxiedWithProgress  | 682365 | 1026133  | 424       |
+
+The token-less proxied path adds one in-process round trip: about 173 us and
+301 KB per tool call and 176 us and 301 KB per resource read on this host. A
+progress-bearing call adds the notification relay and drain barrier, bringing the
+proxy delta to about 408 us and 581 KB per tool call and 396 us and 581 KB per
+resource read. The drain is an in-process handshake; if it is never observed the
+wait is bounded by a one second timeout, so a wedged internal client can add up
+to that tail latency to a token-bearing call. Token-less calls do not pay it.
+The absolute numbers are dominated by the SDK's in-memory transport and JSON
+encoding; the delta is the cost of the extra hop.
 
 The RHDS tool set remains the primary surface. cem mounts only when the process working
 directory has a custom elements manifest; a missing workspace skips cem without
@@ -291,8 +317,11 @@ failing startup. A collision with an existing host entry is resolved by
 `MountOptions.ConflictPolicy`. The default `newest` replaces an older bundled entry,
 keeps a newer one and warns that the bundled version is shadowed, keeps an equal
 version without a warning, and replaces an entry with no provenance while warning with
-the unknown version. Provenance from a different upstream is not semver-comparable
-and takes the unknown-version path. `replace`, `skip`, and `error` override this
+the unknown version. A bundled entry whose own version is `unknown` cannot be shown to
+be newer, so an existing entry with a valid version is kept with a warning naming both
+versions. Provenance from a different upstream is not semver-comparable, so `newest`
+replaces it and warns; that replacement also applies when the bundled version is
+unknown. `replace`, `skip`, and `error` override this
 behavior; `error` fails only when a collision exists. Each replacement or shadowing
 logs one WARN to stderr with the source, name or URI, bundled version, existing
 version, and existing source. Per-mount disable lists remove exact tool names,
