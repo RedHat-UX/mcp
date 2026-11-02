@@ -101,6 +101,9 @@ type Service struct {
 	tokenParses    atomic.Int64
 	themeParses    atomic.Int64
 
+	resourceCacheMu sync.Mutex
+	resourceCache   *resourceResolutionEntry
+
 	models       sync.Map // elements version -> *cem.Model
 	comparisons  sync.Map // "from\x00to" -> *breaking.Result
 	releaseNotes sync.Map // elements version -> []ReleaseNoteExample

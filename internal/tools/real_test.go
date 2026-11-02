@@ -981,26 +981,23 @@ func TestRealResourcesRegister(t *testing.T) {
 		}
 		cursor = list.NextCursor
 	}
-	// Resources are registered one per artifact plus the curated token
-	// migration resource, so derive the expected count from the index instead
-	// of hardcoding today's data size.
-	expected := len(store.Index().Artifacts) + 1
-	if total != expected {
-		t.Errorf("resources = %d, want %d artifacts plus the migration resource", total, expected)
+	// Progressive disclosure keeps resources/list to the two static
+	// resources; artifact data is read through the rhds://data templates.
+	if total != 2 {
+		t.Errorf("resources = %d, want 2 static resources", total)
 	}
 	for _, want := range []string{
-		"rhds://elements/5.0.0/manifest",
-		"rhds://tokens/3.2.0/tokens",
-		"rhds://release-notes/5.0.0",
-		"rhds://migrations/tokens",
-		"rhds://docs/v5.0.0/elements/rh-button/docs/00-overview.md",
+		migrationsResourceURI,
+		packagesResourceURI,
 	} {
 		if !uris[want] {
 			t.Errorf("resources are missing %q", want)
 		}
 	}
 
-	notes, err := client.ReadResource(ctx, &mcp.ReadResourceParams{URI: "rhds://release-notes/5.0.0"})
+	notes, err := client.ReadResource(ctx, &mcp.ReadResourceParams{
+		URI: "rhds://data/release-notes?version=5.0.0",
+	})
 	if err != nil {
 		t.Fatalf("ReadResource(release notes) error = %v", err)
 	}

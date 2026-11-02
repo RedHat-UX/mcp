@@ -752,10 +752,21 @@ larger than the summary budget stays reachable.
 
 - Tools: typed structs, `AddTool` for inferred 2020-12 schemas, `outputSchema`,
   `readOnlyHint` annotations, human `title`
-- Resources: manifests, token files, docs pages, release notes, one per versioned
-  artifact; per-component API sections at
+- Resources: progressive disclosure. Two static resources: `rhds://packages/`
+  (bundled versions, kinds, counts, and the resolved workspace version) and
+  `rhds://migrations/tokens`. Artifact data is read through four template
+  families, each with a no-query form for workspace resolution and a query form
+  for a pinned version: `rhds://data/elements{/path*}`, `rhds://data/tokens{/path*}`,
+  `rhds://data/docs{/path*}`, and `rhds://data/release-notes{/path*}` (plus the
+  same templates followed by `?{+query}`). Per-component API sections at
   `rhds://elements/{version}/components/{tag}/{section}` for `attributes`,
-  `properties`, `events`, `slots`, `cssParts`, `cssProperties`, and `examples`
+  `properties`, `events`, `slots`, `cssParts`, `cssProperties`, and `examples`.
+  Template reads resolve the workspace per session through MCP roots
+  (multi-round-trip requests on `2026-07-28` and later, direct roots requests
+  earlier, and `cwd` without the roots capability). A workspace resolution is
+  cached only when a lockfile supplies the winning candidate; the key covers
+  every existing lockfile plus the root `package.json` path, mtime, and size,
+  and a workspace with no lockfile is rescanned on every read.
 - Prompts: Lit usage, HTML usage, Twig slot template
 - Server `instructions`: supported versions, offline behavior, resolution precedence,
   search versus exact lookup

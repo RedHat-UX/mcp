@@ -565,6 +565,20 @@ func TestInstructionsDerivedFromSupportedVersions(t *testing.T) {
 			t.Errorf("instructions missing %q:\n%s", want, instructions)
 		}
 	}
+	for _, want := range []string{
+		"rhds://packages/",
+		"rhds://data/elements{/path*}",
+		"rhds://data/tokens{/path*}",
+		"rhds://data/docs{/path*}",
+		"rhds://data/release-notes{/path*}",
+		"?version=",
+		"empty path",
+		"rhds://elements/{version}/components/{tag}/{section}",
+	} {
+		if !strings.Contains(instructions, want) {
+			t.Errorf("instructions missing resource guidance %q:\n%s", want, instructions)
+		}
+	}
 }
 
 func TestPromptsAndResourcesAreRegisteredWithoutData(t *testing.T) {
@@ -592,13 +606,20 @@ func TestPromptsAndResourcesAreRegisteredWithoutData(t *testing.T) {
 		t.Fatalf("ListResources() error = %v", err)
 	}
 	foundMigration := false
+	foundPackages := false
 	for _, resource := range resources.Resources {
-		if resource.URI == "rhds://migrations/tokens" {
+		switch resource.URI {
+		case "rhds://migrations/tokens":
 			foundMigration = true
+		case "rhds://packages/":
+			foundPackages = true
 		}
 	}
 	if !foundMigration {
 		t.Error("resources are missing rhds://migrations/tokens")
+	}
+	if !foundPackages {
+		t.Error("resources are missing rhds://packages/")
 	}
 }
 
@@ -633,6 +654,20 @@ func TestServerMountsUpstreamAndComponentResources(t *testing.T) {
 	}
 	if !slices.Contains(uris, "rhds://elements/{version}/components/{tag}/attributes") {
 		t.Errorf("resource templates are missing the rhds component section template: %v", uris)
+	}
+	for _, want := range []string{
+		"rhds://data/elements{/path*}",
+		"rhds://data/tokens{/path*}",
+		"rhds://data/docs{/path*}",
+		"rhds://data/release-notes{/path*}",
+		"rhds://data/elements{/path*}?{+query}",
+		"rhds://data/tokens{/path*}?{+query}",
+		"rhds://data/docs{/path*}?{+query}",
+		"rhds://data/release-notes{/path*}?{+query}",
+	} {
+		if !slices.Contains(uris, want) {
+			t.Errorf("resource templates are missing %q: %v", want, uris)
+		}
 	}
 }
 
