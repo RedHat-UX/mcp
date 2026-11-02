@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -65,13 +66,12 @@ func largeManifest(t *testing.T, count int) []byte {
 	for i := range count {
 		modules = append(modules, map[string]any{
 			"kind": "javascript-module",
-			"path": fmt.Sprintf("./rh-test-%03d.js", i),
+			"path": fmt.Sprintf("./t%03d.js", i),
 			"declarations": []any{map[string]any{
 				"kind":          "class",
 				"customElement": true,
-				"name":          fmt.Sprintf("RhTest%03d", i),
-				"tagName":       fmt.Sprintf("rh-test-%03d", i),
-				"summary":       "Test component.",
+				"name":          fmt.Sprintf("T%03d", i),
+				"tagName":       fmt.Sprintf("t-%03d", i),
 			}},
 		})
 	}
@@ -135,6 +135,13 @@ func TestListComponentsDefaultPage(t *testing.T) {
 	}
 	if button.Deprecated {
 		t.Error("rh-button should not be deprecated")
+	}
+	card, ok := findComponent(out.Components, "rh-card")
+	if !ok {
+		t.Fatal("rh-card missing from results")
+	}
+	if card.DocsAvailable {
+		t.Error("rh-card should not report docs; only rh-button has a docs page in the fixture")
 	}
 }
 
@@ -261,6 +268,53 @@ func findComponent(components []ComponentSummary, tagName string) (ComponentSumm
 	return ComponentSummary{}, false
 }
 
+func TestListComponentsExplicitOlderVersion(t *testing.T) {
+	out := fixtureService(t).ListComponents(context.Background(), ListComponentsInput{
+		Version: "4.0.0",
+	})
+	if out.Error != nil {
+		t.Fatalf("ListComponents() error = %+v", out.Error)
+	}
+	if out.Resolved.Elements != "4.0.0" {
+		t.Errorf("elements = %q", out.Resolved.Elements)
+	}
+	if out.Resolved.Docs != "v4.2.2" {
+		t.Errorf("docs = %q, want v4.2.2", out.Resolved.Docs)
+	}
+	if out.Total != 1 || len(out.Components) != 1 || out.Components[0].TagName != "rh-card" {
+		t.Errorf("components = %+v, want only rh-card", out.Components)
+	}
+}
+
+func TestListComponentsRejectsChangedIncludeDeprecated(t *testing.T) {
+	out := fixtureService(t).ListComponents(context.Background(), ListComponentsInput{
+		Cursor:            encodeCursor("5.0.0", 0, false),
+		IncludeDeprecated: true,
+	})
+	if out.Error == nil {
+		t.Fatal("error = nil, want cursor_options_mismatch")
+	}
+	if out.Error.Code != "cursor_options_mismatch" {
+		t.Errorf("error code = %q, want cursor_options_mismatch", out.Error.Code)
+	}
+}
+
+func TestListComponentsCursorSkipsResolution(t *testing.T) {
+	out := fixtureService(t).ListComponents(context.Background(), ListComponentsInput{
+		Cursor:   encodeCursor("4.0.0", 0, false),
+		PageSize: 2,
+	})
+	if out.Error != nil {
+		t.Fatalf("ListComponents() error = %+v", out.Error)
+	}
+	if out.Resolved.Elements != "4.0.0" {
+		t.Errorf("elements = %q, want the cursor-bound 4.0.0", out.Resolved.Elements)
+	}
+	if out.Resolved.Source != "cursor" {
+		t.Errorf("source = %q, want cursor", out.Resolved.Source)
+	}
+}
+
 func TestCursorRoundTrip(t *testing.T) {
 	cursor := encodeCursor("5.0.0", 25, true)
 	payload, toolErr := decodeCursor(cursor)
@@ -269,29 +323,6 @@ func TestCursorRoundTrip(t *testing.T) {
 	}
 	if payload.Version != "5.0.0" || payload.Offset != 25 || !payload.IncludeDeprecated {
 		t.Errorf("payload = %+v, want version 5.0.0 offset 25 includeDeprecated true", payload)
-	}
-}
-
-func TestListComponentsRejectsCursorFilterMismatch(t *testing.T) {
-	svc := fixtureService(t)
-	first := svc.ListComponents(context.Background(), ListComponentsInput{PageSize: 2})
-	if first.Error != nil {
-		t.Fatalf("first page error = %+v", first.Error)
-	}
-	if first.NextCursor == "" {
-		t.Fatal("first page has no cursor")
-	}
-
-	out := svc.ListComponents(context.Background(), ListComponentsInput{
-		Cursor:            first.NextCursor,
-		PageSize:          2,
-		IncludeDeprecated: true,
-	})
-	if out.Error == nil {
-		t.Fatal("error = nil, want cursor_filter_mismatch")
-	}
-	if out.Error.Code != "cursor_filter_mismatch" {
-		t.Errorf("error code = %q, want cursor_filter_mismatch", out.Error.Code)
 	}
 }
 
@@ -314,15 +345,27 @@ func TestListComponentsDefaultPageSize(t *testing.T) {
 
 func TestListComponentsMaxPageSize(t *testing.T) {
 	svc := memoryService(t, largeManifest(t, 130), "5.0.0")
-	out := svc.ListComponents(context.Background(), ListComponentsInput{PageSize: 1000})
+	resolved, failure := svc.bundledResolution("5.0.0", "")
+	if failure != nil {
+		t.Fatalf("bundledResolution() error = %+v", failure)
+	}
+	// Use a budget large enough that the page-size cap, not response trimming,
+	// determines the output length.
+	out := svc.listComponentsWithBudget(resolved, ListComponentsInput{PageSize: 1000}, 1<<20)
 	if out.Error != nil {
-		t.Fatalf("ListComponents() error = %+v", out.Error)
+		t.Fatalf("listComponentsWithBudget() error = %+v", out.Error)
 	}
-	if len(out.Components) != maxPageSize {
-		t.Errorf("components = %d, want maximum %d", len(out.Components), maxPageSize)
+	if out.Total != 130 || len(out.Components) != maxPageSize {
+		t.Errorf("components = %d of %d, want %d of 130",
+			len(out.Components), out.Total, maxPageSize)
 	}
-	if len(out.Resolved.Warnings) == 0 {
-		t.Error("expected a pageSize cap warning")
+	if out.NextCursor == "" {
+		t.Error("expected a next cursor for the remaining 30 components")
+	}
+	if !slices.ContainsFunc(out.Resolved.Warnings, func(warning string) bool {
+		return strings.Contains(warning, fmt.Sprintf("pageSize was capped at %d", maxPageSize))
+	}) {
+		t.Errorf("warnings = %v, want the pageSize cap", out.Resolved.Warnings)
 	}
 }
 
@@ -347,7 +390,7 @@ func TestListComponentsReportsDocsForMajorSnapshot(t *testing.T) {
 		t.Fatalf("reading fixture manifest: %v", err)
 	}
 	manifestSum := sha256.Sum256(manifestJSON)
-	docsJSON := []byte(`{"records":[]}`)
+	docsJSON := []byte(`[{"path":"elements/rh-button/docs/00-overview.md","kind":"docs","artifact":"docs/v4.2.2/elements/rh-button/docs/00-overview.md.gz"}]`)
 	docsSum := sha256.Sum256(docsJSON)
 	index := data.Index{
 		SchemaVersion: data.SchemaVersion,
@@ -392,10 +435,43 @@ func TestListComponentsReportsDocsForMajorSnapshot(t *testing.T) {
 	if len(out.Components) == 0 {
 		t.Fatal("components = 0, want components")
 	}
-	for _, component := range out.Components {
-		if !component.DocsAvailable {
-			t.Errorf("%s docsAvailable = false, want true for the v4.2.2 snapshot",
-				component.TagName)
-		}
+	button, ok := findComponent(out.Components, "rh-button")
+	if !ok {
+		t.Fatal("rh-button not listed")
+	}
+	if !button.DocsAvailable {
+		t.Error("rh-button docsAvailable = false, want true for the v4.2.2 snapshot")
+	}
+	card, ok := findComponent(out.Components, "rh-card")
+	if !ok {
+		t.Fatal("rh-card not listed")
+	}
+	if card.DocsAvailable {
+		t.Error("rh-card docsAvailable = true, want false: the snapshot has no rh-card page")
+	}
+}
+
+func TestListComponentsCursorAcceptsEquivalentVersionSpelling(t *testing.T) {
+	svc := fixtureService(t)
+	_, first := svc.listComponentsWithEnv(context.Background(), nil, ListComponentsInput{
+		Version:  "v5.0.0",
+		PageSize: 2,
+	})
+	if first.Error != nil {
+		t.Fatalf("first page error = %+v", first.Error)
+	}
+	if first.NextCursor == "" {
+		t.Fatal("first page has no cursor")
+	}
+	_, second := svc.listComponentsWithEnv(context.Background(), nil, ListComponentsInput{
+		Version:  "v5.0.0",
+		PageSize: 2,
+		Cursor:   first.NextCursor,
+	})
+	if second.Error != nil {
+		t.Fatalf("second page error = %+v", second.Error)
+	}
+	if len(second.Components) == 0 {
+		t.Error("second page has no components")
 	}
 }

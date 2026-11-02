@@ -525,6 +525,10 @@ func TestPhaseBToolsAreRegistered(t *testing.T) {
 	var names []string
 	for _, tool := range result.Tools {
 		names = append(names, tool.Name)
+		if !strings.HasPrefix(tool.Name, "rhds_") {
+			// Upstream tools define their own annotations.
+			continue
+		}
 		if tool.OutputSchema == nil {
 			t.Errorf("tool %q has no output schema", tool.Name)
 		}
@@ -532,11 +536,52 @@ func TestPhaseBToolsAreRegistered(t *testing.T) {
 			t.Errorf("tool %q is not marked read-only", tool.Name)
 		}
 	}
-	want := []string{"rhds_list_components", "rhds_query_tokens", "rhds_validate_markup"}
+	want := []string{
+		"rhds_resolve_version",
+		"rhds_list_components",
+		"rhds_get_component_api",
+		"rhds_search",
+		"rhds_query_tokens",
+		"rhds_validate_markup",
+	}
 	for _, name := range want {
 		if !slices.Contains(names, name) {
 			t.Errorf("tools/list is missing %q: %v", name, names)
 		}
+	}
+}
+
+func TestServerMountsUpstreamAndComponentResources(t *testing.T) {
+	clientSession := connectTestClient(t,
+		newServer(slog.New(slog.DiscardHandler), tools.New(nil, data.ErrNoData)))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	toolsResult, err := clientSession.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	var names []string
+	for _, tool := range toolsResult.Tools {
+		names = append(names, tool.Name)
+	}
+	for _, name := range []string{"validate_tokens", "search_tokens", "convert_tokens"} {
+		if !slices.Contains(names, name) {
+			t.Errorf("tools/list is missing the asimonim tool %q: %v", name, names)
+		}
+	}
+
+	templates, err := clientSession.ListResourceTemplates(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListResourceTemplates() error = %v", err)
+	}
+	var uris []string
+	for _, template := range templates.ResourceTemplates {
+		uris = append(uris, template.URITemplate)
+	}
+	if !slices.Contains(uris, "rhds://elements/{version}/components/{tag}/attributes") {
+		t.Errorf("resource templates are missing the rhds component section template: %v", uris)
 	}
 }
 
@@ -551,7 +596,10 @@ func TestDataToolsReturnStructuredErrorWithoutData(t *testing.T) {
 		name string
 		args map[string]any
 	}{
+		{"rhds_resolve_version", map[string]any{}},
 		{"rhds_list_components", map[string]any{}},
+		{"rhds_get_component_api", map[string]any{"tagName": "rh-button"}},
+		{"rhds_search", map[string]any{"query": "button"}},
 		{"rhds_validate_markup", map[string]any{"markup": "<rh-button></rh-button>"}},
 		{"rhds_query_tokens", map[string]any{"token": "color-brand"}},
 	}

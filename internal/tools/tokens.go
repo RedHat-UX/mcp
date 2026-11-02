@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"bennypowers.dev/asimonim/token"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 const maxTokenResults = 100
@@ -43,15 +44,17 @@ type TokenResult struct {
 
 // QueryTokensOutput is the output for rhds_query_tokens.
 type QueryTokensOutput struct {
-	Resolved ResolvedVersion `json:"resolved"`
-	Tokens   []TokenResult   `json:"tokens"`
-	Total    int             `json:"total"`
-	Error    *ToolError      `json:"error,omitempty"`
+	Resolved  ResolvedVersion `json:"resolved"`
+	Tokens    []TokenResult   `json:"tokens"`
+	Total     int             `json:"total"`
+	Truncated bool            `json:"truncated,omitempty"`
+	Error     *ToolError      `json:"error,omitempty"`
 }
 
 // QueryTokens implements rhds_query_tokens.
-func (s *Service) QueryTokens(_ context.Context, input QueryTokensInput) QueryTokensOutput {
-	out := QueryTokensOutput{Tokens: []TokenResult{}}
+func (s *Service) QueryTokens(_ context.Context, input QueryTokensInput) (out QueryTokensOutput) {
+	defer func() { out = fitQueryTokens(out, defaultResponseBudget) }()
+	out = QueryTokensOutput{Tokens: []TokenResult{}}
 	if failure := s.dataFailure(); failure != nil {
 		out.Error = failure
 		return out
@@ -176,6 +179,32 @@ func (s *Service) QueryTokens(_ context.Context, input QueryTokensInput) QueryTo
 		out.Tokens = append(out.Tokens, result)
 	}
 	return out
+}
+
+// queryTokensWithEnv implements rhds_query_tokens for an MCP call. It resolves
+// the workspace elements version so tokens follow the elements-to-tokens
+// coupling instead of always using the latest bundled tokens.
+func (s *Service) queryTokensWithEnv(
+	ctx context.Context,
+	request *mcp.CallToolRequest,
+	input QueryTokensInput,
+) (*mcp.CallToolResult, QueryTokensOutput) {
+	resolved, required, failure := s.prepareResolution(
+		ctx, newCallEnv(request), "", input.Version, true)
+	if required != nil {
+		return required, QueryTokensOutput{}
+	}
+	if failure != nil {
+		out := QueryTokensOutput{Tokens: []TokenResult{}, Error: failure}
+		return nil, fitQueryTokens(out, defaultResponseBudget)
+	}
+	if resolved.Resolved.Tokens == "" {
+		return nil, s.QueryTokens(ctx, input)
+	}
+	input.Version = resolved.Resolved.Tokens
+	out := s.QueryTokens(ctx, input)
+	mergeResolution(&out.Resolved, resolved.Resolved)
+	return nil, out
 }
 
 func tokenMatches(tok *token.Token, needle string) bool {

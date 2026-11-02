@@ -1,0 +1,12 @@
+[
+  {
+    "path": "patterns/button/patterns/button.html",
+    "source": "RedHat-UX/red-hat-design-system@v5.0.0 patterns/button/patterns/button.html",
+    "html": "<rh-button variant=\"primary\">Save changes</rh-button>"
+  },
+  {
+    "path": "patterns/card/patterns/card.html",
+    "source": "RedHat-UX/red-hat-design-system@v5.0.0 patterns/card/patterns/card.html",
+    "html": "<rh-card><h2 slot=\"header\">Title</h2><p>Body</p></rh-card>"
+  }
+]

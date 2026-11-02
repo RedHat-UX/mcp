@@ -257,9 +257,13 @@ Upstream packages imported by the server binary:
 - `bennypowers.dev/cem/manifest`
 - `bennypowers.dev/cem/breaking`
 - `bennypowers.dev/cem/validate/markup` (after P0 export; name to be settled in #458)
+- `bennypowers.dev/cem/mcp` and `bennypowers.dev/cem/workspace` for the composed cem
+  tools and resources (section 8)
 - `bennypowers.dev/asimonim/parser`
 - `bennypowers.dev/asimonim/resolver`
 - `bennypowers.dev/asimonim/token`
+- `bennypowers.dev/asimonim/mcp` and `bennypowers.dev/asimonim/fs` for the composed
+  asimonim tools and resources (section 8)
 
 Imported only by `tools/gen-data` (not shipped):
 
@@ -269,8 +273,24 @@ Imported only by `tools/gen-data` (not shipped):
   emits. `rhds_query_tokens` `format: css` is a `--rh-*` name and a value, so it needs
   no converter.
 
-The upstream MCP layers are not imported. Their constructors build private servers and
-are workspace-analysis oriented. RHDS exposes its own focused tool set.
+The upstream MCP layers are mounted on the RHDS server rather than served by separate
+processes: `cem/mcp.Register` and `asimonim/mcp.Register` add their tools, resources,
+and resource templates to the same `mcp.Server`. The RHDS tool set remains the primary
+surface. cem mounts only when the process working directory has a custom elements
+manifest; a missing workspace skips cem without failing startup. asimonim mounts with a
+nil config so each session resolves its own config from MCP roots. Per-mount disable
+lists remove exact tool names, resource URIs, or URI templates after registration.
+
+asimonim resolves per-session config from MCP roots: directly through
+`ServerSession.ListRoots` on `2025-06-18` and `2025-11-25`, and through
+multi-round-trip input requests on `2026-07-28` and later. Each session caches its own
+roots and config, so clients with different workspaces can share one server. Every
+completed tool and resource result reports workspace provenance in `_meta` under
+`asimonim/workspace` (`root`, `source`, and the `warning` when roots cannot be read and
+the result falls back to `cwd`). A host that already knows the workspace can pass
+`WithWorkspace` to asimonim's `Register`, which takes precedence over session roots.
+asimonim's conflict probe stays pinned to `2025-11-25`: it only lists features, so it
+does not need the `2026-07-28` stateless discovery path.
 
 Where tree-sitter is used (checked against cem `13100d50`):
 
@@ -629,8 +649,12 @@ structured error.
 
 Input: `tagName`, `version?`, `sections?` (`attributes`, `properties`, `events`, `slots`,
 `cssParts`, `cssProperties`, `examples`), `detail` (`summary` or `full`).
-Output: normalized API. Summary by default. Section filters and follow-up calls instead
-of silent truncation.
+Output: normalized API. Summary by default. Section filters replace silent truncation:
+a section that does not fit is omitted from `structuredContent`, named in a warning, and
+returned as an MCP `resource_link` item pointing at
+`rhds://elements/{version}/components/{tag}/{section}`. If the response still exceeds the
+budget after optional sections are removed it returns `response_too_large` with the
+section resource URIs in its hint.
 
 ### `rhds_search`
 
@@ -703,7 +727,9 @@ slot markup. Do not claim a Drupal library key.
 - Tools: typed structs, `AddTool` for inferred 2020-12 schemas, `outputSchema`,
   `readOnlyHint` annotations, human `title`
 - Resources: manifests, token files, docs pages, release notes, one per versioned
-  artifact
+  artifact; per-component API sections at
+  `rhds://elements/{version}/components/{tag}/{section}` for `attributes`,
+  `properties`, `events`, `slots`, `cssParts`, `cssProperties`, and `examples`
 - Prompts: Lit usage, HTML usage, Twig slot template
 - Server `instructions`: supported versions, offline behavior, resolution precedence,
   search versus exact lookup
@@ -778,8 +804,13 @@ Wrapper behavior:
 | Reproducibility       | Pin Go toolchain, dependency versions, and cgo toolchain                                                |
 | Release workflow      | Use `go-release-workflows` `fix/license-compliance`, merged and tagged; do not float on `@main`          |
 
-Run a dependency license check in CI with an allowlist for GPL-3.0, MIT, Apache-2.0, and
-BSD. Anything else fails the build.
+Run a dependency license check in CI with an allowlist for GPL-3.0, MIT, Apache-2.0,
+BSD, and MPL-2.0. Anything else fails the build.
+
+MPL-2.0 is allowed for `github.com/gosimple/slug`, which `bennypowers.dev/cem/mcp`
+pulls in through `cem/generate/demodiscovery`. MPL-2.0 is compatible with
+`GPL-3.0-or-later`, so the combined binary keeps one license. Its copyright line and
+license are recorded in `NOTICE`.
 
 Embedded data licenses (checked 2026-10-26). All are MIT, which can be combined with
 GPL. Reproduce each copyright line and the MIT text in NOTICE:

@@ -9,8 +9,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
-	"bennypowers.dev/cem/manifest"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/redhat-ux/mcp/internal/cem"
+	"github.com/redhat-ux/mcp/internal/resolve"
 )
 
 const (
@@ -20,7 +24,7 @@ const (
 
 // ListComponentsInput is the input for rhds_list_components.
 type ListComponentsInput struct {
-	Version           string `json:"version,omitempty" jsonschema:"RHDS elements version; defaults to the latest bundled version"`
+	Version           string `json:"version,omitempty" jsonschema:"RHDS elements version; defaults to the workspace resolution, then the latest bundled version"`
 	IncludeDeprecated bool   `json:"includeDeprecated,omitempty" jsonschema:"Include deprecated custom elements"`
 	Cursor            string `json:"cursor,omitempty" jsonschema:"Opaque cursor from a previous rhds_list_components call"`
 	PageSize          int    `json:"pageSize,omitempty" jsonschema:"Maximum components per page; default 25, maximum 100"`
@@ -34,6 +38,10 @@ type ComponentSummary struct {
 	PackageSubpath string `json:"packageSubpath,omitempty"`
 	Deprecated     bool   `json:"deprecated"`
 	DocsAvailable  bool   `json:"docsAvailable"`
+	// Truncated reports that the budget layer shortened at least one field in
+	// this row. The corresponding warning names each truncated field and its
+	// original rune length.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // ListComponentsOutput is the output for rhds_list_components.
@@ -42,6 +50,7 @@ type ListComponentsOutput struct {
 	Components []ComponentSummary `json:"components"`
 	Total      int                `json:"total"`
 	NextCursor string             `json:"nextCursor,omitempty"`
+	Truncated  bool               `json:"truncated"`
 	Error      *ToolError         `json:"error,omitempty"`
 }
 
@@ -91,34 +100,143 @@ type componentEntry struct {
 	deprecated     bool
 }
 
-// ListComponents implements rhds_list_components.
+// ListComponents implements rhds_list_components for direct service calls.
 func (s *Service) ListComponents(_ context.Context, input ListComponentsInput) ListComponentsOutput {
-	out := ListComponentsOutput{Components: []ComponentSummary{}}
-	if failure := s.dataFailure(); failure != nil {
-		out.Error = failure
+	resolved, failure := s.resolutionForListInput(input)
+	if failure != nil {
+		out := ListComponentsOutput{Components: []ComponentSummary{}, Error: failure}
+		fitListComponents(&out, 0, input.IncludeDeprecated, defaultResponseBudget)
 		return out
+	}
+	return s.listComponents(resolved, input)
+}
+
+// listComponentsWithEnv implements rhds_list_components for an MCP call.
+// A cursor is decoded before resolution so page two uses the cursor-bound
+// version and never re-runs the cascade or prompts again.
+func (s *Service) listComponentsWithEnv(
+	ctx context.Context,
+	request *mcp.CallToolRequest,
+	input ListComponentsInput,
+) (*mcp.CallToolResult, ListComponentsOutput) {
+	fail := func(failure *ToolError) (*mcp.CallToolResult, ListComponentsOutput) {
+		out := ListComponentsOutput{Components: []ComponentSummary{}, Error: failure}
+		fitListComponents(&out, 0, input.IncludeDeprecated, defaultResponseBudget)
+		return nil, out
+	}
+	if input.Cursor != "" {
+		payload, cursorErr := decodeCursor(input.Cursor)
+		if cursorErr != nil {
+			return fail(cursorErr)
+		}
+		if payload.IncludeDeprecated != input.IncludeDeprecated {
+			return fail(cursorOptionsMismatch())
+		}
+		if input.Version != "" {
+			requested, failure := s.bundledResolution(input.Version, "")
+			if failure != nil {
+				return fail(failure)
+			}
+			if requested.Resolved.Elements != payload.Version {
+				return fail(cursorVersionMismatch(payload.Version, input.Version))
+			}
+		}
+		resolved, failure := s.resolutionForBundledVersion(payload.Version)
+		if failure != nil {
+			return fail(failure)
+		}
+		return nil, s.listComponents(resolved, input)
+	}
+
+	resolved, required, failure := s.prepareResolution(
+		ctx, newCallEnv(request), input.Version, "", true)
+	if required != nil {
+		return required, ListComponentsOutput{}
+	}
+	if failure != nil {
+		return fail(failure)
+	}
+	return nil, s.listComponents(resolved, input)
+}
+
+// resolutionForListInput uses a cursor-bound version when present. Direct
+// service calls have no protocol session, so they do not run the workspace
+// cascade.
+func (s *Service) resolutionForListInput(input ListComponentsInput) (resolution, *ToolError) {
+	if input.Cursor != "" && input.Version == "" {
+		payload, cursorErr := decodeCursor(input.Cursor)
+		if cursorErr != nil {
+			return resolution{}, cursorErr
+		}
+		return s.resolutionForBundledVersion(payload.Version)
+	}
+	return s.bundledResolution(input.Version, "")
+}
+
+func (s *Service) resolutionForBundledVersion(version string) (resolution, *ToolError) {
+	result := resolve.Result{
+		Elements: version,
+		Source:   "cursor",
+		Candidates: []resolve.Candidate{{
+			Version:    version,
+			Source:     "cursor",
+			Precedence: resolve.PrecedenceBundled,
+			Level:      resolve.LevelBundled,
+		}},
+	}
+	return s.resolutionFrom(result, "", true)
+}
+
+func cursorOptionsMismatch() *ToolError {
+	return &ToolError{
+		Code:    "cursor_options_mismatch",
+		Message: "includeDeprecated changed between pages",
+		Hint:    "use the same includeDeprecated value for every page of one listing",
+	}
+}
+
+func cursorVersionMismatch(cursorVersion, requestedVersion string) *ToolError {
+	return &ToolError{
+		Code: "cursor_version_mismatch",
+		Message: fmt.Sprintf(
+			"cursor resolves elements@%s but the call requested elements@%s",
+			truncateResponseText(cursorVersion, maxCandidateRunes),
+			truncateResponseText(requestedVersion, maxCandidateRunes)),
+		Hint: "restart pagination without a cursor or use the same version",
+	}
+}
+
+func (s *Service) listComponents(resolved resolution, input ListComponentsInput) ListComponentsOutput {
+	return s.listComponentsWithBudget(resolved, input, defaultResponseBudget)
+}
+
+func (s *Service) listComponentsWithBudget(
+	resolved resolution,
+	input ListComponentsInput,
+	budget int,
+) (out ListComponentsOutput) {
+	startOffset := 0
+	defer func() {
+		fitListComponents(&out, startOffset, input.IncludeDeprecated, budget)
+	}()
+	out = ListComponentsOutput{
+		Resolved:   resolved.Resolved,
+		Components: []ComponentSummary{},
 	}
 	if input.PageSize < 0 {
 		out.Error = invalidArgument("pageSize must be zero or positive")
 		return out
 	}
 
-	version, failure := s.resolveVersion(packageElements, kindManifest, input.Version)
-	if failure != nil {
-		out.Error = failure
-		return out
-	}
-	out.Resolved = ResolvedVersion{Elements: version, Source: "bundled"}
-
-	pkg, failure := s.loadManifest(version)
+	version := resolved.Resolved.Elements
+	model, failure := s.loadModel(version)
 	if failure != nil {
 		out.Error = failure
 		return out
 	}
 
-	entries := collectComponents(pkg, input.IncludeDeprecated)
-	docsVersion := s.docsVersionFor(version)
-	docsAvailable := docsVersion != "" && s.store.Has(packageDocs, docsVersion, kindDocs)
+	entries := collectComponents(model, input.IncludeDeprecated)
+	docsTags := s.docsTagsFor(resolved.Resolved.Docs)
 
 	pageSize := input.PageSize
 	if pageSize == 0 {
@@ -138,23 +256,11 @@ func (s *Service) ListComponents(_ context.Context, input ListComponentsInput) L
 			return out
 		}
 		if payload.Version != version {
-			out.Error = &ToolError{
-				Code: "cursor_version_mismatch",
-				Message: fmt.Sprintf(
-					"cursor resolves elements@%s but this call resolves elements@%s",
-					payload.Version, version),
-				Hint: "restart pagination without a cursor or use the same version",
-			}
+			out.Error = cursorVersionMismatch(payload.Version, version)
 			return out
 		}
 		if payload.IncludeDeprecated != input.IncludeDeprecated {
-			out.Error = &ToolError{
-				Code: "cursor_filter_mismatch",
-				Message: fmt.Sprintf(
-					"cursor was created with includeDeprecated=%t but this call uses includeDeprecated=%t",
-					payload.IncludeDeprecated, input.IncludeDeprecated),
-				Hint: "restart pagination without a cursor or keep the same filter",
-			}
+			out.Error = cursorOptionsMismatch()
 			return out
 		}
 		if payload.Offset > len(entries) {
@@ -163,6 +269,7 @@ func (s *Service) ListComponents(_ context.Context, input ListComponentsInput) L
 		}
 		offset = payload.Offset
 	}
+	startOffset = offset
 
 	end := min(offset+pageSize, len(entries))
 	for _, entry := range entries[offset:end] {
@@ -172,7 +279,7 @@ func (s *Service) ListComponents(_ context.Context, input ListComponentsInput) L
 			ModulePath:     entry.modulePath,
 			PackageSubpath: entry.packageSubpath,
 			Deprecated:     entry.deprecated,
-			DocsAvailable:  docsAvailable,
+			DocsAvailable:  docsTags[entry.tagName],
 		})
 	}
 	out.Total = len(entries)
@@ -182,26 +289,52 @@ func (s *Service) ListComponents(_ context.Context, input ListComponentsInput) L
 	return out
 }
 
-func collectComponents(pkg *manifest.Package, includeDeprecated bool) []componentEntry {
-	entries := make([]componentEntry, 0)
-	for _, module := range pkg.Modules {
-		for _, declaration := range module.Declarations {
-			element, ok := declaration.(*manifest.CustomElementDeclaration)
-			if !ok || element.TagName == "" {
-				continue
-			}
-			isDeprecated := element.IsDeprecated()
-			if isDeprecated && !includeDeprecated {
-				continue
-			}
-			entries = append(entries, componentEntry{
-				tagName:        element.TagName,
-				summary:        element.Summary,
-				modulePath:     module.Path,
-				packageSubpath: trimPackagePath(module.Path),
-				deprecated:     isDeprecated,
-			})
+// docsTagsFor returns the element tags that have a page in a docs snapshot.
+// Real docs paths are elements/<tag>/docs/*.md.
+func (s *Service) docsTagsFor(version string) map[string]bool {
+	if version == "" || !s.store.Has(packageDocs, version, kindDocs) {
+		return nil
+	}
+	if cached, ok := s.docsTags.Load(version); ok {
+		return cached.(map[string]bool)
+	}
+	records, failure := s.docsRecords(version)
+	if failure != nil {
+		return nil
+	}
+	tags := make(map[string]bool)
+	for _, record := range records {
+		const prefix = "elements/"
+		if !strings.HasPrefix(record.Path, prefix) {
+			continue
 		}
+		rest := strings.TrimPrefix(record.Path, prefix)
+		tag, _, found := strings.Cut(rest, "/")
+		if found && tag != "" {
+			tags[tag] = true
+		}
+	}
+	actual, _ := s.docsTags.LoadOrStore(version, tags)
+	return actual.(map[string]bool)
+}
+
+func collectComponents(model *cem.Model, includeDeprecated bool) []componentEntry {
+	if model == nil {
+		return nil
+	}
+	entries := make([]componentEntry, 0)
+	for _, component := range model.Components {
+		isDeprecated := component.Deprecated != nil
+		if isDeprecated && !includeDeprecated {
+			continue
+		}
+		entries = append(entries, componentEntry{
+			tagName:        component.TagName,
+			summary:        component.Summary,
+			modulePath:     component.ModulePath,
+			packageSubpath: component.PackageSubpath,
+			deprecated:     isDeprecated,
+		})
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].tagName < entries[j].tagName

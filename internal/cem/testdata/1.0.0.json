@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "1.0.0",
+  "modules": [
+    {
+      "kind": "javascript-module",
+      "path": "./rh-card/rh-card.js",
+      "declarations": [
+        {
+          "kind": "class",
+          "customElement": true,
+          "name": "RhCard",
+          "tagName": "rh-card",
+          "summary": "Groups related content.",
+          "attributes": [
+            { "name": "header", "type": { "text": "string" } }
+          ],
+          "members": [
+            {
+              "kind": "field",
+              "name": "header",
+              "type": { "text": "string" },
+              "attribute": "header"
+            }
+          ],
+          "slots": [
+            { "name": "", "description": "Card body." },
+            { "name": "header", "description": "Card header." }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "schemaVersion": "2.1.0",
+  "modules": [
+    {
+      "kind": "javascript-module",
+      "path": "./mixins/fancy.js",
+      "declarations": [
+        {
+          "kind": "mixin",
+          "customElement": true,
+          "name": "FancyMixin",
+          "description": "Adds inherited API.",
+          "attributes": [
+            {
+              "name": "fancy",
+              "type": { "text": "boolean" },
+              "description": "Inherited attribute."
+            }
+          ],
+          "events": [
+            {
+              "name": "fancy-change",
+              "type": { "text": "CustomEvent" },
+              "description": "Inherited event."
+            }
+          ],
+          "slots": [
+            {
+              "name": "fancy-slot",
+              "description": "Inherited slot."
+            }
+          ],
+          "cssParts": [
+            {
+              "name": "fancy-part",
+              "description": "Inherited part."
+            }
+          ],
+          "cssProperties": [
+            {
+              "name": "--fancy-color",
+              "description": "Inherited property."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "javascript-module",
+      "path": "./rh-fancy/rh-fancy.js",
+      "declarations": [
+        {
+          "kind": "class",
+          "customElement": true,
+          "name": "RhFancy",
+          "tagName": "rh-fancy",
+          "summary": "Uses a mixin.",
+          "mixins": [
+            { "name": "FancyMixin", "module": "./mixins/fancy.js" }
+          ],
+          "attributes": [
+            {
+              "name": "own",
+              "type": { "text": "string" },
+              "description": "Own attribute."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

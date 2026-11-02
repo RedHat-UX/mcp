@@ -14,6 +14,7 @@ import (
 	"bennypowers.dev/cem/lsp/document"
 	cemtypes "bennypowers.dev/cem/lsp/types"
 	"bennypowers.dev/cem/manifest"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.lsp.dev/protocol"
 	"golang.org/x/net/html"
 )
@@ -35,14 +36,18 @@ type MarkupIssue struct {
 	Attribute  string `json:"attribute,omitempty"`
 	Line       int    `json:"line"`
 	Column     int    `json:"column"`
+	// Truncated reports that Message was shortened by a fixed cap. A warning
+	// names the field and its true original length.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // ValidateMarkupOutput is the output for rhds_validate_markup.
 type ValidateMarkupOutput struct {
-	Resolved ResolvedVersion `json:"resolved"`
-	Issues   []MarkupIssue   `json:"issues"`
-	Warnings []string        `json:"warnings,omitempty"`
-	Error    *ToolError      `json:"error,omitempty"`
+	Resolved  ResolvedVersion `json:"resolved"`
+	Issues    []MarkupIssue   `json:"issues"`
+	Warnings  []string        `json:"warnings,omitempty"`
+	Truncated bool            `json:"truncated"`
+	Error     *ToolError      `json:"error,omitempty"`
 }
 
 // globalAttributes may appear on any HTML element and are not declared in CEM.
@@ -380,14 +385,20 @@ func (s *Service) documentManager() (cemtypes.Manager, error) {
 }
 
 // ValidateMarkup implements rhds_validate_markup using the interim
-// bennypowers.dev/cem/lsp/document entry point. Phase D replaces this with the
-// exported cem/validate/markup API (cem#458).
+// bennypowers.dev/cem/lsp/document entry point.
+//
+// GATE (cem#458): this stays on lsp/document until bennypowers/cem#458 is
+// merged and released in a cem tag. Do not add a replace directive, fork, or
+// vendored copy to move it earlier. When the gate opens, replace the
+// DocumentManager path below with the exported cem/validate/markup API and
+// move the HTML and Twig fixtures with it.
 //
 // Slot-name and content-model rules are intentionally deferred: CEM does not
 // encode required slots or cardinality, and the #458 API will expose the
 // structure-aware findings this spike cannot make through DocumentManager.
-func (s *Service) ValidateMarkup(_ context.Context, input ValidateMarkupInput) ValidateMarkupOutput {
-	out := ValidateMarkupOutput{Issues: []MarkupIssue{}}
+func (s *Service) ValidateMarkup(_ context.Context, input ValidateMarkupInput) (out ValidateMarkupOutput) {
+	defer func() { out = fitValidateMarkup(out, defaultResponseBudget) }()
+	out = ValidateMarkupOutput{Issues: []MarkupIssue{}}
 	if failure := s.dataFailure(); failure != nil {
 		out.Error = failure
 		return out
@@ -623,6 +634,32 @@ func unquoteTypeLiteral(part string) string {
 		}
 	}
 	return part
+}
+
+// validateMarkupWithEnv implements rhds_validate_markup for an MCP call. It
+// resolves the workspace elements version instead of always validating
+// against the latest bundled version.
+func (s *Service) validateMarkupWithEnv(
+	ctx context.Context,
+	request *mcp.CallToolRequest,
+	input ValidateMarkupInput,
+) (*mcp.CallToolResult, ValidateMarkupOutput) {
+	resolved, required, failure := s.prepareResolution(
+		ctx, newCallEnv(request), input.Version, "", true)
+	if required != nil {
+		return required, ValidateMarkupOutput{}
+	}
+	if failure != nil {
+		out := ValidateMarkupOutput{Issues: []MarkupIssue{}, Error: failure}
+		return nil, fitValidateMarkup(out, defaultResponseBudget)
+	}
+	if resolved.Resolved.Elements == "" {
+		return nil, s.ValidateMarkup(ctx, input)
+	}
+	input.Version = resolved.Resolved.Elements
+	out := s.ValidateMarkup(ctx, input)
+	mergeResolution(&out.Resolved, resolved.Resolved)
+	return nil, out
 }
 
 func declarationsByTag(pkg *manifest.Package) map[string]*manifest.CustomElementDeclaration {
