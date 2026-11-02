@@ -56,9 +56,11 @@ func newMountedServer(t *testing.T, opts MountOptions) *mcp.Server {
 	t.Helper()
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.0.0"}, nil)
 	Register(server, New(nil, data.ErrNoData))
-	if err := MountUpstreams(server, opts); err != nil {
+	mount, err := MountUpstreams(server, opts)
+	if err != nil {
 		t.Fatalf("MountUpstreams() error = %v", err)
 	}
+	t.Cleanup(func() { _ = mount.Close() })
 	return server
 }
 
@@ -241,10 +243,11 @@ func TestMountUpstreamsDisableListDoesNotRemoveHostTools(t *testing.T) {
 		}, nil
 	})
 
-	err := MountUpstreams(server, MountOptions{DisableTools: []string{"validate_html"}})
+	mount, err := MountUpstreams(server, MountOptions{DisableTools: []string{"validate_html"}})
 	if err != nil {
 		t.Fatalf("MountUpstreams() error = %v, want nil", err)
 	}
+	t.Cleanup(func() { _ = mount.Close() })
 
 	session := connectServer(t, server)
 	names := listToolNames(t, session)
@@ -343,9 +346,11 @@ func TestMountUpstreamsReplacesConflictingToolsByDefault(t *testing.T) {
 		}, nil
 	})
 
-	if err := MountUpstreams(server, MountOptions{}); err != nil {
+	mount, err := MountUpstreams(server, MountOptions{})
+	if err != nil {
 		t.Fatalf("MountUpstreams() error = %v", err)
 	}
+	t.Cleanup(func() { _ = mount.Close() })
 
 	session := connectServer(t, server)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -376,9 +381,11 @@ func TestMountUpstreamsReplacesConflictingToolsByDefault(t *testing.T) {
 func TestMountUpstreamsSkipsCEMWithoutManifest(t *testing.T) {
 	t.Chdir(t.TempDir())
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.0.0"}, nil)
-	if err := MountUpstreams(server, MountOptions{}); err != nil {
+	mount, err := MountUpstreams(server, MountOptions{})
+	if err != nil {
 		t.Fatalf("MountUpstreams() error = %v, want nil when cem is skipped", err)
 	}
+	t.Cleanup(func() { _ = mount.Close() })
 
 	names := listToolNames(t, connectServer(t, server))
 	for _, name := range cemToolNames {
@@ -401,7 +408,10 @@ func TestMountUpstreamsWarnsWhenCEMWorkspaceIsUnavailable(t *testing.T) {
 	}
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.0.0"}, nil)
-	err := MountUpstreams(server, MountOptions{})
+	mount, err := MountUpstreams(server, MountOptions{})
+	if mount != nil {
+		t.Cleanup(func() { _ = mount.Close() })
+	}
 	var warning *MountWarning
 	if !errors.As(err, &warning) {
 		t.Fatalf("MountUpstreams() error = %v, want a *MountWarning", err)

@@ -273,24 +273,42 @@ Imported only by `tools/gen-data` (not shipped):
   emits. `rhds_query_tokens` `format: css` is a `--rh-*` name and a value, so it needs
   no converter.
 
-The upstream MCP layers are mounted on the RHDS server rather than served by separate
-processes: `cem/mcp.Register` and `asimonim/mcp.Register` add their tools, resources,
-and resource templates to the same `mcp.Server`. The RHDS tool set remains the primary
-surface. cem mounts only when the process working directory has a custom elements
-manifest; a missing workspace skips cem without failing startup. asimonim mounts with a
-nil config so each session resolves its own config from MCP roots. Per-mount disable
-lists remove exact tool names, resource URIs, or URI templates after registration.
+The upstream MCP layers are mounted on the RHDS server through an in-process proxy
+rather than served by separate processes or registered directly. `MountUpstreams`
+registers each upstream on an internal `mcp.Server`, connects an in-memory client,
+enumerates its tools, resources, and resource templates (following pagination), and
+re-registers them on the host with `_meta` provenance under `rhds-mcp/upstream`
+(`{"source": "cem", "version": "<build version>"}`). Versions come from
+`runtime/debug.ReadBuildInfo`; a `(devel)` or missing dependency reports `unknown`,
+never a hardcoded version. Proxied handlers forward `tools/call`, `resources/read`,
+and template reads to the internal client, preserving content, structured content,
+`_meta`, `isError`, error text, and cancellation. Each forwarded call costs one
+in-process round trip.
 
-asimonim resolves per-session config from MCP roots: directly through
-`ServerSession.ListRoots` on `2025-06-18` and `2025-11-25`, and through
-multi-round-trip input requests on `2026-07-28` and later. Each session caches its own
-roots and config, so clients with different workspaces can share one server. Every
-completed tool and resource result reports workspace provenance in `_meta` under
-`asimonim/workspace` (`root`, `source`, and the `warning` when roots cannot be read and
-the result falls back to `cwd`). A host that already knows the workspace can pass
-`WithWorkspace` to asimonim's `Register`, which takes precedence over session roots.
-asimonim's conflict probe stays pinned to `2025-11-25`: it only lists features, so it
-does not need the `2026-07-28` stateless discovery path.
+The RHDS tool set remains the primary surface. cem mounts only when the process working
+directory has a custom elements manifest; a missing workspace skips cem without
+failing startup. A collision with an existing host entry is resolved by
+`MountOptions.ConflictPolicy`. The default `newest` replaces an older bundled entry,
+keeps a newer one and warns that the bundled version is shadowed, keeps an equal
+version without a warning, and replaces an entry with no provenance while warning with
+the unknown version. `replace`, `skip`, and `error` override this behavior. Each
+decision logs one WARN to stderr with the source, name or URI, bundled version, and
+existing version. Per-mount disable lists remove exact tool names, resource URIs, or
+URI templates through each upstream's `Selection` before the internal registration.
+
+asimonim keeps one internal asimonim server and one internal client per host session,
+created lazily. The proxy resolves the host session's roots, directly through
+`ServerSession.ListRoots` on `2025-06-18` and `2025-11-25`, and through a
+multi-round-trip input request on `2026-07-28` and later, then connects the internal
+client to the shared internal server with those roots. asimonim caches its workspace
+per internal server session, so clients with different workspaces get different tokens
+through the proxy. Internal clients and server sessions close when the host session
+closes; `Mount.Close` releases the cem client and any remaining sessions. Every
+completed tool and resource result still reports workspace provenance in `_meta` under
+`asimonim/workspace` (`root` and `source`) with the same values direct registration
+produced, including `source: roots` for client roots. The host-surface probe used for
+conflict resolution stays pinned to `2025-11-25`: it only lists features, so it does
+not need the `2026-07-28` stateless discovery path.
 
 Where tree-sitter is used (checked against cem `13100d50`):
 

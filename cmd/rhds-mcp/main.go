@@ -66,7 +66,16 @@ func serverInstructions() string {
 	return buildInstructions(supportedProtocolVersions, nil)
 }
 
+// newServer returns only the server. Tests use it; the process entry point
+// uses newServerWithMount so it can Close the upstream mount.
 func newServer(logger *slog.Logger, service *tools.Service) *mcp.Server {
+	server, _ := newServerWithMount(logger, service)
+	return server
+}
+
+// newServerWithMount builds the server and returns the upstream mount handle.
+// The caller must Close the mount when the server stops.
+func newServerWithMount(logger *slog.Logger, service *tools.Service) (*mcp.Server, *tools.Mount) {
 	server := mcp.NewServer(
 		&mcp.Implementation{Name: serverName, Version: serverVersion},
 		&mcp.ServerOptions{
@@ -76,16 +85,19 @@ func newServer(logger *slog.Logger, service *tools.Service) *mcp.Server {
 		},
 	)
 	tools.Register(server, service)
-	// Mount upstream surfaces first so the RHDS host registrations below win
-	// any name or URI collision under the SDK's default conflict policy.
-	if err := tools.MountUpstreams(server, tools.MountOptions{}); err != nil {
+	// Mount upstream surfaces before the host resources and prompts below, so
+	// those registrations win any remaining URI collision. Tool collisions
+	// that already exist are resolved by the adapter's newest policy.
+	mount, err := tools.MountUpstreams(server, tools.MountOptions{})
+	if err != nil {
 		// A skipped upstream surface is advisory: the RHDS tools still serve.
+		// A conflict-policy error is fatal only when the caller selects it.
 		logger.Warn("upstream surface not mounted", "error", err)
 	}
 	tools.RegisterPrompts(server, service)
 	tools.RegisterResources(server, service)
 	tools.RegisterComponentResources(server, service)
-	return server
+	return server, mount
 }
 
 // loadService opens the embedded data index. Reading the index is the only
@@ -109,7 +121,11 @@ func loadService(logger *slog.Logger) *tools.Service {
 
 func run(ctx context.Context, logger *slog.Logger, service *tools.Service) error {
 	logger.Info("starting server", "name", serverName, "version", serverVersion)
-	return newServer(logger, service).Run(ctx, &mcp.StdioTransport{})
+	server, mount := newServerWithMount(logger, service)
+	if mount != nil {
+		defer func() { _ = mount.Close() }()
+	}
+	return server.Run(ctx, &mcp.StdioTransport{})
 }
 
 // exitCode maps an error returned by run to a process exit code. A canceled
