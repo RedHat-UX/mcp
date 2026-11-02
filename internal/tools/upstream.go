@@ -141,8 +141,9 @@ func nonEmpty(names []string) []string {
 // empty registry: validate_html flags custom elements as unknown, generate_html
 // reports them not found, and element resources report not found, rather than
 // the surface disappearing. A manifest that exists but fails to decode does not
-// fail mounting: cem's non-strict loader drops it or falls back to in-memory
-// generation, so its elements are absent from the registry.
+// fail mounting: cem's non-strict loader logs the decode error and falls back
+// to in-memory generation. Generated elements are registered when generation
+// succeeds; when it also fails, the workspace contributes no elements.
 func mountCEM(server *mcp.Server, cwd string, opts MountOptions) error {
 	workspace, err := cemworkspace.NewFileSystemWorkspaceContext(cwd)
 	if err != nil {
