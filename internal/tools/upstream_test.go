@@ -51,6 +51,76 @@ func projectWithManifest(t *testing.T) string {
 	return root
 }
 
+// consumerPackageManifest is a minimal manifest with one custom element. It is
+// installed under node_modules to model a design-system consumer.
+const consumerPackageManifest = `{
+  "schemaVersion": "2.1.1",
+  "modules": [
+    {
+      "kind": "javascript-module",
+      "path": "fixture-element.js",
+      "declarations": [
+        {
+          "kind": "class",
+          "name": "FixtureElement",
+          "tagName": "fixture-element",
+          "customElement": true,
+          "description": "An element shipped by a dependency."
+        }
+      ],
+      "exports": [
+        {
+          "kind": "custom-element-definition",
+          "name": "fixture-element",
+          "declaration": { "name": "FixtureElement", "module": "fixture-element.js" }
+        }
+      ]
+    }
+  ]
+}`
+
+// consumerProjectWithDependency creates a consumer workspace whose only custom
+// elements manifest belongs to a package under node_modules. It deliberately
+// has no root custom-elements.json, matching a project that depends on a
+// design system rather than authoring one.
+func consumerProjectWithDependency(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	rootPackage := `{"name":"consumer","version":"1.0.0","dependencies":{"fixture-elements":"^1.0.0"}}`
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(rootPackage), 0o644); err != nil {
+		t.Fatalf("writing consumer package.json: %v", err)
+	}
+
+	pkgDir := filepath.Join(root, "node_modules", "fixture-elements")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatalf("creating dependency directory: %v", err)
+	}
+	dependencyPackage := `{"name":"fixture-elements","version":"1.0.0","customElements":"custom-elements.json"}`
+	if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(dependencyPackage), 0o644); err != nil {
+		t.Fatalf("writing dependency package.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "custom-elements.json"), []byte(consumerPackageManifest), 0o644); err != nil {
+		t.Fatalf("writing dependency manifest: %v", err)
+	}
+	return root
+}
+
+// readResourceText reads uri and concatenates its text contents.
+func readResourceText(t *testing.T, session *mcp.ClientSession, uri string) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	result, err := session.ReadResource(ctx, &mcp.ReadResourceParams{URI: uri})
+	if err != nil {
+		t.Fatalf("ReadResource(%q) error = %v", uri, err)
+	}
+	var builder strings.Builder
+	for _, content := range result.Contents {
+		builder.WriteString(content.Text)
+	}
+	return builder.String()
+}
+
 // newMountedServer registers the RHDS tools and mounts the upstream surfaces.
 func newMountedServer(t *testing.T, opts MountOptions) *mcp.Server {
 	t.Helper()
@@ -226,8 +296,8 @@ func TestMountUpstreamsDisablesResourcesAndTemplates(t *testing.T) {
 // share a name with an upstream tool, or that merely appears in a stale deny
 // list, must survive mounting.
 func TestMountUpstreamsDisableListDoesNotRemoveHostTools(t *testing.T) {
-	// No manifest, so cem is skipped and its surface cannot be the reason a
-	// host tool with the same name exists.
+	// An empty workspace: cem mounts, but its validate_html is disabled below,
+	// so its surface cannot explain why a host tool with the same name exists.
 	t.Chdir(t.TempDir())
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.0.0"}, nil)
@@ -373,23 +443,72 @@ func TestMountUpstreamsReplacesConflictingToolsByDefault(t *testing.T) {
 	}
 }
 
-func TestMountUpstreamsSkipsCEMWithoutManifest(t *testing.T) {
+// TestMountUpstreamsMountsCEMForConsumerDependencies covers the design-system
+// consumer case: the manifest belongs to a dependency under node_modules, and
+// the consumer root has no custom-elements.json. cem discovers dependency
+// manifests itself, so the host must mount it anyway.
+func TestMountUpstreamsMountsCEMForConsumerDependencies(t *testing.T) {
+	t.Chdir(consumerProjectWithDependency(t))
+	session := connectServer(t, newMountedServer(t, MountOptions{}))
+
+	names := listToolNames(t, session)
+	for _, name := range cemToolNames {
+		if !slices.Contains(names, name) {
+			t.Errorf("tools/list is missing cem tool %q for a consumer dependency: %v", name, names)
+		}
+	}
+
+	if got := readResourceText(t, session, "cem://element/fixture-element"); !strings.Contains(got, "fixture-element") {
+		t.Errorf("ReadResource(cem://element/fixture-element) = %q, want the dependency element", got)
+	}
+}
+
+// TestMountUpstreamsMountsCEMWithRootManifest pins the original behavior: a
+// workspace that owns a root custom-elements.json still mounts cem.
+func TestMountUpstreamsMountsCEMWithRootManifest(t *testing.T) {
+	t.Chdir(projectWithManifest(t))
+	session := connectServer(t, newMountedServer(t, MountOptions{}))
+
+	names := listToolNames(t, session)
+	for _, name := range cemToolNames {
+		if !slices.Contains(names, name) {
+			t.Errorf("tools/list is missing cem tool %q with a root manifest: %v", name, names)
+		}
+	}
+}
+
+// TestMountUpstreamsMountsCEMWithoutManifest pins the chosen behavior for a
+// workspace with no package.json and no manifest. Constructing the workspace
+// and registering cem both succeed, so cem mounts with an empty registry: its
+// tools are listed, and reading an element resource reports not found rather
+// than removing the surface. This is intentional; the mount condition is
+// workspace constructibility, not the presence of a manifest.
+func TestMountUpstreamsMountsCEMWithoutManifest(t *testing.T) {
 	t.Chdir(t.TempDir())
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.0.0"}, nil)
 	if err := MountUpstreams(server, MountOptions{}); err != nil {
-		t.Fatalf("MountUpstreams() error = %v, want nil when cem is skipped", err)
+		t.Fatalf("MountUpstreams() error = %v, want nil for a constructible empty workspace", err)
 	}
 
-	names := listToolNames(t, connectServer(t, server))
+	session := connectServer(t, server)
+	names := listToolNames(t, session)
 	for _, name := range cemToolNames {
-		if slices.Contains(names, name) {
-			t.Errorf("tools/list contains cem tool %q without a workspace manifest", name)
+		if !slices.Contains(names, name) {
+			t.Errorf("tools/list is missing cem tool %q for an empty workspace: %v", name, names)
 		}
 	}
 	for _, name := range asimonimToolNames {
 		if !slices.Contains(names, name) {
-			t.Errorf("tools/list is missing asimonim tool %q after the cem skip: %v", name, names)
+			t.Errorf("tools/list is missing asimonim tool %q: %v", name, names)
 		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := session.ReadResource(ctx, &mcp.ReadResourceParams{URI: "cem://element/fixture-element"}); err == nil {
+		t.Fatal("ReadResource(cem://element/fixture-element) error = nil, want a not-found error on an empty workspace")
+	} else if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("ReadResource(cem://element/fixture-element) error = %v, want a not-found error", err)
 	}
 }
 
@@ -411,6 +530,11 @@ func TestMountUpstreamsWarnsWhenCEMWorkspaceIsUnavailable(t *testing.T) {
 	}
 
 	names := listToolNames(t, connectServer(t, server))
+	for _, name := range cemToolNames {
+		if slices.Contains(names, name) {
+			t.Errorf("tools/list contains cem tool %q when the workspace is unavailable", name)
+		}
+	}
 	for _, name := range asimonimToolNames {
 		if !slices.Contains(names, name) {
 			t.Errorf("tools/list is missing asimonim tool %q after the cem warning: %v", name, names)

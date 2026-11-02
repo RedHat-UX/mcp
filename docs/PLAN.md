@@ -276,10 +276,14 @@ Imported only by `tools/gen-data` (not shipped):
 The upstream MCP layers are mounted on the RHDS server rather than served by separate
 processes: `cem/mcp.Register` and `asimonim/mcp.Register` add their tools, resources,
 and resource templates to the same `mcp.Server`. The RHDS tool set remains the primary
-surface. cem mounts only when the process working directory has a custom elements
-manifest; a missing workspace skips cem without failing startup. asimonim mounts with a
-nil config so each session resolves its own config from MCP roots. Per-mount disable
-lists remove exact tool names, resource URIs, or URI templates after registration.
+surface. cem mounts whenever the process working directory is a constructible
+workspace, because cem discovers manifests from the workspace itself, its workspace
+packages, and `node_modules`. A consumer project that depends on a design system
+therefore mounts cem even without a root `custom-elements.json`. Only a workspace that
+cannot be constructed, or a cem registration failure, skips cem without failing
+startup. asimonim mounts with a nil config so each session resolves its own config from
+MCP roots. Per-mount disable lists remove exact tool names, resource URIs, or URI
+templates after registration.
 
 asimonim resolves per-session config from MCP roots: directly through
 `ServerSession.ListRoots` on `2025-06-18` and `2025-11-25`, and through

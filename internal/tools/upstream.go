@@ -58,11 +58,14 @@ func (w *MountWarning) Unwrap() error {
 // MountUpstreams registers cem's and asimonim's tools, resources, and resource
 // templates on server.
 //
-// cem's surface is mounted for the process working directory when that
-// directory holds a custom elements manifest. A missing or unusable workspace
-// skips cem without failing startup: the skip is logged to stderr through slog
-// and returned as a *MountWarning. asimonim is always mounted with a nil
-// config, so each MCP session resolves its own config from the client's roots.
+// cem's surface is mounted whenever the process working directory can be used
+// as a workspace. cem discovers manifests from the workspace itself, its
+// workspace packages, and node_modules, so a consumer project that depends on a
+// design system mounts even when it has no root custom-elements.json. A
+// workspace that cannot be constructed, or a cem registration failure, skips
+// cem without failing startup: the skip is logged to stderr through slog and
+// returned as a *MountWarning. asimonim is always mounted with a nil config, so
+// each MCP session resolves its own config from the client's roots.
 //
 // Disable lists are passed to each upstream as registration exclusions, so the
 // excluded surface is never registered. Both upstreams use their default
@@ -128,26 +131,21 @@ func nonEmpty(names []string) []string {
 	return filtered
 }
 
-// mountCEM registers cem's surface when cwd has a custom elements manifest.
+// mountCEM registers cem's surface for the workspace rooted at cwd.
 //
-// A manifest that exists but fails to decode is left to cem's handlers, which
-// report per-request errors: only a missing manifest skips mounting.
+// Mounting depends only on the workspace being constructible. cem's own
+// LoadFromWorkspace discovers manifests from the workspace, workspace packages,
+// and node_modules, in that order, so a missing root custom-elements.json is
+// not a reason to skip: a consumer may get every manifest from its
+// dependencies. A workspace with no manifests at all still registers with an
+// empty registry: its tools answer with empty results and its element
+// resources report not found, rather than the surface disappearing. A manifest
+// that exists but fails to decode is likewise left to cem's handlers, which
+// report per-request errors.
 func mountCEM(server *mcp.Server, cwd string, opts MountOptions) error {
 	workspace, err := cemworkspace.NewFileSystemWorkspaceContext(cwd)
 	if err != nil {
 		return &MountWarning{Package: "cem", Err: err}
-	}
-
-	manifestPath := workspace.CustomElementsManifestPath()
-	if manifestPath == "" {
-		slog.Warn("skipping cem upstream tools", "reason", "no custom elements manifest", "root", cwd)
-		return nil
-	}
-	if _, err := workspace.Stat(manifestPath); err != nil {
-		slog.Warn("skipping cem upstream tools",
-			"reason", "custom elements manifest is missing",
-			"path", manifestPath, "error", err)
-		return nil
 	}
 
 	// The Registration handle is discarded: no reload hook consumes it yet.
