@@ -42,7 +42,7 @@ func connectToolClient(t *testing.T, svc *Service) *mcp.ClientSession {
 	return clientSession
 }
 
-func TestResourcesExposeVersionedArtifacts(t *testing.T) {
+func TestResourcesExposeProgressiveDisclosureSurface(t *testing.T) {
 	client := connectToolClient(t, fixtureService(t))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -51,27 +51,22 @@ func TestResourcesExposeVersionedArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListResources() error = %v", err)
 	}
+	if len(list.Resources) != 2 {
+		t.Fatalf("resources = %d, want exactly 2 static resources: %+v",
+			len(list.Resources), list.Resources)
+	}
 	uris := make(map[string]bool)
 	for _, resource := range list.Resources {
 		uris[resource.URI] = true
 	}
-	want := []string{
-		"rhds://elements/5.0.0/manifest",
-		"rhds://tokens/3.2.0/tokens",
-		"rhds://tokens/3.2.0/themes",
-		"rhds://docs/v5.0.0/get-started/introduction.md",
-		"rhds://docs/v5.0.0/elements/rh-button/docs/00-overview.md",
-		"rhds://release-notes/5.0.0",
-		"rhds://migrations/tokens",
-	}
-	for _, uri := range want {
+	for _, uri := range []string{migrationsResourceURI, packagesResourceURI} {
 		if !uris[uri] {
 			t.Errorf("resources are missing %q", uri)
 		}
 	}
 
 	manifest, err := client.ReadResource(ctx, &mcp.ReadResourceParams{
-		URI: "rhds://elements/5.0.0/manifest",
+		URI: "rhds://data/elements?version=5.0.0",
 	})
 	if err != nil {
 		t.Fatalf("ReadResource(manifest) error = %v", err)
@@ -84,7 +79,7 @@ func TestResourcesExposeVersionedArtifacts(t *testing.T) {
 	}
 
 	migrations, err := client.ReadResource(ctx, &mcp.ReadResourceParams{
-		URI: "rhds://migrations/tokens",
+		URI: migrationsResourceURI,
 	})
 	if err != nil {
 		t.Fatalf("ReadResource(migrations) error = %v", err)

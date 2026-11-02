@@ -125,6 +125,14 @@
       "path": "tokens/1.1.2.json",
       "sha256": "afd5706cb7354f88bcf62d91ca9150d8f40d3f29a76357c31435cfe6894b1503",
       "bytes": 1573
+    },
+    {
+      "package": "release-notes",
+      "version": "latest",
+      "kind": "changelog",
+      "path": "release-notes/changelog.md",
+      "sha256": "35a7ee73b4a30ab01dce95f1a8496ae794a952380e2acf0c10e1632154359b13",
+      "bytes": 57
     }
   ]
 }
