@@ -407,6 +407,37 @@ func TestValidateMarkupSkipsOpenAndLiteralFreeUnions(t *testing.T) {
 	}
 }
 
+func TestValidateMarkupWithEnvAcceptsRHDSVariantValues(t *testing.T) {
+	// Exercise the MCP-facing wrapper, not ValidateMarkup directly. The
+	// fixture mirrors the published @rhds/elements rh-button declaration,
+	// whose union literals use single quotes.
+	svc := memoryService(t, singleQuotedManifest(t), "5.0.0")
+
+	for _, value := range []string{"primary", "tertiary"} {
+		_, out := svc.validateMarkupWithEnv(context.Background(), nil, ValidateMarkupInput{
+			Markup:  `<rh-button variant="` + value + `">Save</rh-button>`,
+			Version: "5.0.0",
+		})
+		if out.Error != nil {
+			t.Fatalf("validateMarkupWithEnv(%q) error = %+v", value, out.Error)
+		}
+		if issue, ok := findIssue(out.Issues, "invalid-attribute-value"); ok {
+			t.Errorf("RHDS value %q flagged invalid: %+v", value, issue)
+		}
+	}
+
+	_, out := svc.validateMarkupWithEnv(context.Background(), nil, ValidateMarkupInput{
+		Markup:  `<rh-button variant="bogus">Save</rh-button>`,
+		Version: "5.0.0",
+	})
+	if out.Error != nil {
+		t.Fatalf("validateMarkupWithEnv(bogus) error = %+v", out.Error)
+	}
+	if _, ok := findIssue(out.Issues, "invalid-attribute-value"); !ok {
+		t.Errorf("RHDS bogus value not flagged: %+v", out.Issues)
+	}
+}
+
 func TestValidateMarkupFlagsEmptyEnumValues(t *testing.T) {
 	for _, markup := range []string{
 		`<rh-button variant></rh-button>`,
