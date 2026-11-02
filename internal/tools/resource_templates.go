@@ -17,6 +17,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/redhat-ux/mcp/internal/data"
 	"github.com/redhat-ux/mcp/internal/resolve"
 )
 
@@ -72,6 +73,9 @@ func parseResourceURI(uri string) (artifactResourceTarget, error) {
 	// not the router, rejects the URI.
 	if strings.Contains(uri, "#") {
 		return artifactResourceTarget{}, fmt.Errorf("resource %s: fragments are not supported", uri)
+	}
+	if parsed.ForceQuery && parsed.RawQuery == "" {
+		return artifactResourceTarget{}, fmt.Errorf("resource %s: the query is empty", uri)
 	}
 
 	escaped := parsed.EscapedPath()
@@ -276,16 +280,17 @@ func artifactResourceHandler(service *Service) mcp.ResourceHandler {
 		}
 		version, failure := service.resourceTargetVersion(ctx, request, target)
 		if failure != nil {
-			switch failure.Code {
-			case "ambiguous_version", "workspace_unavailable", "artifact_not_found":
-				return nil, fmt.Errorf("resource %s: %s: %s", uri, failure.Message, failure.Hint)
-			default:
+			if failure.Code == "artifact_not_found" && target.VersionExplicit {
 				return nil, mcp.ResourceNotFoundError(uri)
 			}
+			return nil, fmt.Errorf("resource %s: %s: %s", uri, failure.Message, failure.Hint)
 		}
 		payload, err := service.store.Read(target.Package, version, target.Kind)
 		if err != nil {
-			return nil, mcp.ResourceNotFoundError(uri)
+			if errors.Is(err, data.ErrArtifactNotFound) {
+				return nil, mcp.ResourceNotFoundError(uri)
+			}
+			return nil, fmt.Errorf("resource %s: %w", uri, err)
 		}
 		return textResource(uri, target.MIMEType, payload), nil
 	}

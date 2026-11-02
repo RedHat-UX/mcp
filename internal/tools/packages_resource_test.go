@@ -51,11 +51,12 @@ func TestPackagesResourceSummarizesAllPackages(t *testing.T) {
 	svc.resolveWorkspace = func(resolve.Options) (resolve.Result, error) {
 		return resolve.Result{
 			Elements: "4.0.0",
-			Source:   resolve.LevelLockfile,
+			Source:   "package-lock.json",
 			Candidates: []resolve.Candidate{{
 				Version: "4.0.0", Source: "package-lock.json",
 				Precedence: resolve.PrecedenceLockfile, Level: resolve.LevelLockfile,
 			}},
+			Warnings: []string{"workspace warning"},
 		}, nil
 	}
 	session := connectServer(t, newResourceOnlyServer(t, svc))
@@ -66,6 +67,13 @@ func TestPackagesResourceSummarizesAllPackages(t *testing.T) {
 	}
 	if payload.Resolved.Elements != "4.0.0" {
 		t.Errorf("resolved elements = %q, want 4.0.0", payload.Resolved.Elements)
+	}
+	if len(payload.Resolved.Warnings) != 0 {
+		t.Errorf("resolved warnings = %v, want warnings only at the top level",
+			payload.Resolved.Warnings)
+	}
+	if count := strings.Count(strings.Join(payload.Warnings, "\n"), "workspace warning"); count != 1 {
+		t.Errorf("workspace warning appears %d times, want 1: %v", count, payload.Warnings)
 	}
 
 	summaries := packageSummaries(payload)
@@ -83,7 +91,12 @@ func TestPackagesResourceSummarizesAllPackages(t *testing.T) {
 		t.Errorf("elements kinds = %v", elements.Kinds)
 	}
 	if elements.Level != resolve.LevelLockfile || elements.Source != "package-lock.json" {
-		t.Errorf("elements level/source = %q/%q", elements.Level, elements.Source)
+		t.Errorf("elements level/source = %q/%q, want lockfile/package-lock.json",
+			elements.Level, elements.Source)
+	}
+	if !strings.Contains(elements.Reason, "lockfile") ||
+		!strings.Contains(elements.Reason, "package-lock.json") {
+		t.Errorf("elements reason = %q", elements.Reason)
 	}
 
 	tokens, ok := summaries[packageTokens]

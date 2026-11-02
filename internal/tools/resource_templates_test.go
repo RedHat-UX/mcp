@@ -171,6 +171,7 @@ func TestParseResourceURIRejectsInvalidURIs(t *testing.T) {
 		"rhds://data/elements?foo=5.0.0",
 		"rhds://data/elements?version=5.0.0&version=4.0.0",
 		"rhds://data/elements?version=",
+		"rhds://data/elements?",
 		"rhds://data/elements?version",
 		"rhds://data/elements#manifest",
 	}
@@ -340,6 +341,7 @@ func TestArtifactResourceParserErrorsReachTheClient(t *testing.T) {
 		{"rhds://data/elements?version=5.0.0&foo=1", "foo"},
 		{"rhds://data/elements?version=5.0.0&version=4.0.0", "repeated"},
 		{"rhds://data/elements?version=", "empty"},
+		{"rhds://data/elements?", "query is empty"},
 		{"rhds://data/elements?version=5.0.0#manifest", "fragment"},
 	}
 	for _, tc := range cases {
@@ -348,7 +350,7 @@ func TestArtifactResourceParserErrorsReachTheClient(t *testing.T) {
 			if err == nil {
 				t.Fatalf("ReadResource(%q) error = nil, want a parser error", tc.uri)
 			}
-			if !strings.Contains(err.Error(), tc.contains) {
+			if tc.contains != "" && !strings.Contains(err.Error(), tc.contains) {
 				t.Errorf("error = %v, want it to mention %q", err, tc.contains)
 			}
 		})
@@ -544,14 +546,14 @@ func TestArtifactResourceInvalidVersionOrPathIsNotFound(t *testing.T) {
 		uri      string
 		contains string
 	}{
-		{"rhds://data/elements?version=9.9.9", "9.9.9"},
-		{"rhds://data/tokens?version=9.9.9", "9.9.9"},
-		{"rhds://data/docs?version=9.9.9", "9.9.9"},
-		{"rhds://data/tokens/themes?version=1.1.2", "themes"},
+		{"rhds://data/elements?version=9.9.9", ""},
+		{"rhds://data/tokens?version=9.9.9", ""},
+		{"rhds://data/docs?version=9.9.9", ""},
+		{"rhds://data/tokens/themes?version=1.1.2", ""},
 		{"rhds://data/elements/bogus", "unsupported package or path"},
 		{"rhds://data/tokens/bogus", "unsupported package or path"},
 		{"rhds://data/release-notes/bogus", "unsupported package or path"},
-		{"rhds://data/docs/does/not/exist.md?version=5.0.0", "does/not/exist.md"},
+		{"rhds://data/docs/does/not/exist.md?version=5.0.0", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.uri, func(t *testing.T) {
@@ -559,7 +561,7 @@ func TestArtifactResourceInvalidVersionOrPathIsNotFound(t *testing.T) {
 			if err == nil {
 				t.Fatalf("ReadResource(%q) error = nil, want not found", tc.uri)
 			}
-			if !strings.Contains(err.Error(), tc.contains) {
+			if tc.contains != "" && !strings.Contains(err.Error(), tc.contains) {
 				t.Errorf("error = %v, want it to mention %q", err, tc.contains)
 			}
 		})

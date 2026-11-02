@@ -85,11 +85,11 @@ func buildPackagesResource(
 
 	result, rootWarnings, failure := service.resourceCascade(ctx, request)
 	if failure != nil {
-		payload.Error = failure
+		payload.Error = boundedToolError(failure)
 		payload.Warnings = append(payload.Warnings, failure.Message)
 	} else {
-		payload.Candidates = result.Candidates
-		payload.Ambiguity = result.Ambiguity
+		payload.Candidates = boundedCandidates(result.Candidates, maxOutputCandidates)
+		payload.Ambiguity = boundedAmbiguity(result.Ambiguity)
 		payload.Warnings = append(payload.Warnings, rootWarnings...)
 		payload.Warnings = append(payload.Warnings, result.Warnings...)
 		if result.Ambiguity != nil {
@@ -98,8 +98,10 @@ func buildPackagesResource(
 				result.Ambiguity.Majors))
 		} else if resolved, resolutionFailure := service.resolutionFrom(result, "", true); resolutionFailure == nil {
 			payload.Resolved = resolved.Resolved
-			payload.Candidates = resolved.Candidates
-			payload.Ambiguity = resolved.Ambiguity
+			// Warnings are carried once, at the top level of the payload.
+			payload.Resolved.Warnings = nil
+			payload.Candidates = boundedCandidates(resolved.Candidates, maxOutputCandidates)
+			payload.Ambiguity = boundedAmbiguity(resolved.Ambiguity)
 		} else {
 			payload.Warnings = append(payload.Warnings, resolutionFailure.Message)
 		}
@@ -108,6 +110,29 @@ func buildPackagesResource(
 	payload.Packages = service.packageSummaries(payload.Resolved, result)
 	payload.Warnings = sanitizeWarnings(payload.Warnings)
 	return payload
+}
+
+// boundedAmbiguity caps and shortens the candidate evidence so a hostile
+// workspace cannot inflate the package index.
+func boundedAmbiguity(ambiguity *resolve.Ambiguity) *resolve.Ambiguity {
+	if ambiguity == nil {
+		return nil
+	}
+	bounded := *ambiguity
+	bounded.Candidates = boundedCandidates(ambiguity.Candidates, maxOutputCandidates)
+	return &bounded
+}
+
+// boundedToolError shortens client-visible error text without dropping the
+// code or the option to report it.
+func boundedToolError(failure *ToolError) *ToolError {
+	if failure == nil {
+		return nil
+	}
+	bounded := *failure
+	bounded.Message = truncateResponseText(failure.Message, maxWarningRunes)
+	bounded.Hint = truncateResponseText(failure.Hint, maxWarningRunes)
+	return &bounded
 }
 
 func (s *Service) packageSummaries(
@@ -192,12 +217,21 @@ func (s *Service) packageResolution(
 		if resolved.Elements != "" && s.store.Has(packageElements, resolved.Elements, kindManifest) {
 			version = resolved.Elements
 		}
-		level = result.Source
+		// On a successful cascade result.Source is the evidence source (for
+		// example "package-lock.json"); on an ambiguous one it is the winning
+		// level. Match on source first, then fall back to the ambiguity level.
 		for _, candidate := range result.Candidates {
-			if candidate.Level == result.Source {
+			if candidate.Source == result.Source {
+				level = candidate.Level
 				source = candidate.Source
 				break
 			}
+		}
+		if level == "" && result.Ambiguity != nil {
+			level = result.Ambiguity.Level
+		}
+		if source == "" && result.Ambiguity == nil {
+			source = result.Source
 		}
 		if level != "" && source != "" {
 			reason = fmt.Sprintf("%s evidence from %s", level, source)
@@ -211,7 +245,13 @@ func (s *Service) packageResolution(
 			version = resolved.Tokens
 		}
 		if coupled, ok := s.store.Index().TokensForElements(resolved.Elements); ok {
-			reason = fmt.Sprintf("tokens@%s is coupled to elements@%s", coupled, resolved.Elements)
+			if coupled == version {
+				reason = fmt.Sprintf("tokens@%s is coupled to elements@%s", coupled, resolved.Elements)
+			} else {
+				reason = fmt.Sprintf(
+					"elements@%s couples tokens@%s, which is not bundled; using tokens@%s",
+					resolved.Elements, coupled, version)
+			}
 			level = "coupling"
 			source = "elements@" + resolved.Elements
 		} else {
@@ -253,18 +293,30 @@ func (s *Service) packageResolution(
 }
 
 // trimPackagesResource enforces the summary budget without ever failing the
-// read: drop candidates, then collapse version lists, then drop warnings.
+// read: drop candidates, then ambiguity candidates, then collapse version
+// lists, then drop warnings and ambiguity.
 func trimPackagesResource(service *Service, payload *PackagesResourcePayload) {
 	budget := defaultResponseBudget
 	if service != nil {
 		budget = service.responseBudget(false)
 	}
+	// Warnings are canonical at the top level; never measure or emit the
+	// nested copy.
+	payload.Resolved.Warnings = nil
 	payload.Candidates = boundedCandidates(payload.Candidates, maxOutputCandidates)
+	payload.Ambiguity = boundedAmbiguity(payload.Ambiguity)
 	if estimatedResponseBytes(*payload) <= budget {
 		return
 	}
 	payload.Candidates = nil
 	payload.Truncated = true
+	if estimatedResponseBytes(*payload) <= budget {
+		return
+	}
+	if payload.Ambiguity != nil {
+		payload.Ambiguity.Candidates = nil
+		payload.Truncated = true
+	}
 	if estimatedResponseBytes(*payload) <= budget {
 		return
 	}
@@ -278,5 +330,9 @@ func trimPackagesResource(service *Service, payload *PackagesResourcePayload) {
 		return
 	}
 	payload.Warnings = nil
+	if estimatedResponseBytes(*payload) <= budget {
+		return
+	}
+	payload.Ambiguity = nil
 	payload.Truncated = true
 }
