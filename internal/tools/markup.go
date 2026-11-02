@@ -541,14 +541,24 @@ func (s *Service) ValidateMarkup(_ context.Context, input ValidateMarkupInput) (
 					Column:    columnOf(attributeMatch.Range),
 				})
 			}
-			if !isValidAttributeValue(declaration, attributeMatch.Value) {
+			// A templated value is resolved at render time, so its static text
+			// cannot be compared against the declared enum. Only a closed enum
+			// with at least one literal member has a finite set of accepted
+			// values to validate against; a null-only union has none to report.
+			// IsValidValue also accepts a member's raw TypeScript source form,
+			// matching cem's compatibility behavior.
+			validValues := declaration.DisplayEnumValues()
+			if !isDynamicAttributeValue(attributeMatch.Value) &&
+				declaration.IsClosedEnum() &&
+				len(validValues) > 0 &&
+				!declaration.IsValidValue(attributeMatch.Value) {
 				out.Issues = append(out.Issues, MarkupIssue{
 					Rule:       "invalid-attribute-value",
 					Severity:   "error",
 					Confidence: "high",
 					Message: fmt.Sprintf(
 						"%q is not a valid value for %s attribute %q; valid values: %v",
-						attributeMatch.Value, tagName, name, enumValueLabels(declaration)),
+						attributeMatch.Value, tagName, name, validValues),
 					Element:   tagName,
 					Attribute: name,
 					Line:      lineOf(attributeMatch.Range),
@@ -583,57 +593,12 @@ func (s *Service) ValidateMarkup(_ context.Context, input ValidateMarkupInput) (
 	return out
 }
 
-// isValidAttributeValue reports whether value is valid for attribute. It
-// replaces manifest.Attribute.IsValidValue, which strips only double quotes:
-// published RHDS manifests declare union literals with single quotes, so its
-// check rejects every valid enum value.
-func isValidAttributeValue(attribute *manifest.Attribute, value string) bool {
-	// A templated value is resolved at render time, so its static text cannot be
-	// compared against the declared enum.
-	if isDynamicAttributeValue(value) {
-		return true
-	}
-	parts := attribute.EnumValues()
-	if parts == nil {
-		return true
-	}
-	for _, part := range parts {
-		if value == unquoteTypeLiteral(part) {
-			return true
-		}
-	}
-	return false
-}
-
 // isDynamicAttributeValue reports whether value contains Twig interpolation,
 // statement, or comment syntax.
 func isDynamicAttributeValue(value string) bool {
 	return strings.Contains(value, "{{") ||
 		strings.Contains(value, "{%") ||
 		strings.Contains(value, "{#")
-}
-
-// enumValueLabels returns the union members without their literal quotes, for
-// display in diagnostics.
-func enumValueLabels(attribute *manifest.Attribute) []string {
-	parts := attribute.EnumValues()
-	labels := make([]string, len(parts))
-	for i, part := range parts {
-		labels[i] = unquoteTypeLiteral(part)
-	}
-	return labels
-}
-
-// unquoteTypeLiteral removes one matching pair of single or double quotes from
-// a TypeScript string literal.
-func unquoteTypeLiteral(part string) string {
-	if len(part) >= 2 {
-		first, last := part[0], part[len(part)-1]
-		if (first == '"' && last == '"') || (first == '\'' && last == '\'') {
-			return part[1 : len(part)-1]
-		}
-	}
-	return part
 }
 
 // validateMarkupWithEnv implements rhds_validate_markup for an MCP call. It

@@ -5,6 +5,8 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -213,23 +215,195 @@ func singleQuotedManifest(t *testing.T) []byte {
 }
 
 func TestValidateMarkupAcceptsSingleQuotedEnumValues(t *testing.T) {
+	// The fixture mirrors the published @rhds/elements rh-button declaration,
+	// whose union literals use single quotes.
 	svc := memoryService(t, singleQuotedManifest(t), "5.0.0")
 
-	valid := svc.ValidateMarkup(context.Background(), ValidateMarkupInput{
-		Markup: `<rh-button variant="primary"></rh-button>`,
-	})
-	if valid.Error != nil {
-		t.Fatalf("ValidateMarkup() error = %+v", valid.Error)
-	}
-	if issue, ok := findIssue(valid.Issues, "invalid-attribute-value"); ok {
-		t.Errorf("valid value flagged invalid: %+v", issue)
+	for _, value := range []string{"primary", "tertiary"} {
+		valid := svc.ValidateMarkup(context.Background(), ValidateMarkupInput{
+			Markup: `<rh-button variant="` + value + `"></rh-button>`,
+		})
+		if valid.Error != nil {
+			t.Fatalf("ValidateMarkup(%q) error = %+v", value, valid.Error)
+		}
+		if issue, ok := findIssue(valid.Issues, "invalid-attribute-value"); ok {
+			t.Errorf("valid value %q flagged invalid: %+v", value, issue)
+		}
 	}
 
 	invalid := svc.ValidateMarkup(context.Background(), ValidateMarkupInput{
-		Markup: `<rh-button variant="huge"></rh-button>`,
+		Markup: `<rh-button variant="bogus"></rh-button>`,
 	})
-	if _, ok := findIssue(invalid.Issues, "invalid-attribute-value"); !ok {
-		t.Errorf("invalid value not flagged: %+v", invalid.Issues)
+	issue, ok := findIssue(invalid.Issues, "invalid-attribute-value")
+	if !ok {
+		t.Fatalf("invalid value not flagged: %+v", invalid.Issues)
+	}
+	// cem's DisplayEnumValues re-quotes string literals, so diagnostics show
+	// the double-quoted form regardless of the manifest's source quote style.
+	want := `"bogus" is not a valid value for rh-button attribute "variant"; valid values: ["primary" "secondary" "tertiary" "danger" "link"]`
+	if issue.Message != want {
+		t.Errorf("message = %q, want %q", issue.Message, want)
+	}
+}
+
+// manifestForAttributeType builds a minimal custom-elements manifest with one
+// element exposing a single attribute of the given TypeScript type.
+func manifestForAttributeType(t *testing.T, tagName, attributeName, typeText string) []byte {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{
+		"schemaVersion": "2.1.0",
+		"modules": []any{map[string]any{
+			"kind": "javascript-module",
+			"path": "./" + tagName + ".js",
+			"declarations": []any{map[string]any{
+				"kind":          "class",
+				"customElement": true,
+				"name":          "TestElement",
+				"tagName":       tagName,
+				"attributes": []any{map[string]any{
+					"name": attributeName,
+					"type": map[string]any{"text": typeText},
+				}},
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshaling test manifest: %v", err)
+	}
+	return raw
+}
+
+func TestValidateMarkupLiteralUnions(t *testing.T) {
+	tests := []struct {
+		name     string
+		typeText string
+		valid    []string
+		invalid  string
+		labels   string
+	}{
+		{
+			name:     "single quoted",
+			typeText: `'primary' | 'secondary' | 'tertiary'`,
+			valid:    []string{"primary", "tertiary"},
+			invalid:  "bogus",
+			labels:   `["primary" "secondary" "tertiary"]`,
+		},
+		{
+			name:     "double quoted",
+			typeText: `"primary" | "secondary" | "tertiary"`,
+			valid:    []string{"primary", "tertiary"},
+			invalid:  "bogus",
+			labels:   `["primary" "secondary" "tertiary"]`,
+		},
+		{
+			name:     "multiline leading pipe",
+			typeText: "\n    | 'primary'\n    | 'secondary'\n    | 'tertiary'",
+			valid:    []string{"primary", "tertiary"},
+			invalid:  "bogus",
+			labels:   `["primary" "secondary" "tertiary"]`,
+		},
+		{
+			name:     "numeric",
+			typeText: `1 | 2 | 3`,
+			valid:    []string{"1", "3"},
+			invalid:  "4",
+			labels:   `[1 2 3]`,
+		},
+		{
+			name:     "boolean",
+			typeText: `true | false`,
+			valid:    []string{"true", "false"},
+			invalid:  "yes",
+			labels:   `[true false]`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := memoryService(t, manifestForAttributeType(t, "rh-test", "kind", tt.typeText), "5.0.0")
+
+			for _, value := range tt.valid {
+				out := svc.ValidateMarkup(context.Background(), ValidateMarkupInput{
+					Markup: fmt.Sprintf(`<rh-test kind="%s"></rh-test>`, value),
+				})
+				if out.Error != nil {
+					t.Fatalf("ValidateMarkup(%q) error = %+v", value, out.Error)
+				}
+				if issue, ok := findIssue(out.Issues, "invalid-attribute-value"); ok {
+					t.Errorf("valid value %q flagged invalid: %+v", value, issue)
+				}
+			}
+
+			out := svc.ValidateMarkup(context.Background(), ValidateMarkupInput{
+				Markup: fmt.Sprintf(`<rh-test kind="%s"></rh-test>`, tt.invalid),
+			})
+			if out.Error != nil {
+				t.Fatalf("ValidateMarkup(%q) error = %+v", tt.invalid, out.Error)
+			}
+			issue, ok := findIssue(out.Issues, "invalid-attribute-value")
+			if !ok {
+				t.Fatalf("invalid value %q not flagged: %+v", tt.invalid, out.Issues)
+			}
+			want := fmt.Sprintf(`%q is not a valid value for rh-test attribute "kind"; valid values: %s`,
+				tt.invalid, tt.labels)
+			if issue.Message != want {
+				t.Errorf("message = %q, want %q", issue.Message, want)
+			}
+		})
+	}
+}
+
+func TestValidateMarkupRejectsNullForClosedEnum(t *testing.T) {
+	svc := memoryService(t, manifestForAttributeType(t, "rh-test", "size", `'sm' | null`), "5.0.0")
+
+	valid := svc.ValidateMarkup(context.Background(), ValidateMarkupInput{
+		Markup: `<rh-test size="sm"></rh-test>`,
+	})
+	if valid.Error != nil {
+		t.Fatalf("ValidateMarkup(sm) error = %+v", valid.Error)
+	}
+	if issue, ok := findIssue(valid.Issues, "invalid-attribute-value"); ok {
+		t.Errorf(`valid value "sm" flagged: %+v`, issue)
+	}
+
+	out := svc.ValidateMarkup(context.Background(), ValidateMarkupInput{
+		Markup: `<rh-test size="null"></rh-test>`,
+	})
+	if out.Error != nil {
+		t.Fatalf("ValidateMarkup() error = %+v", out.Error)
+	}
+	issue, ok := findIssue(out.Issues, "invalid-attribute-value")
+	if !ok {
+		t.Fatalf(`null not flagged for 'sm' | null: %+v`, out.Issues)
+	}
+	want := `"null" is not a valid value for rh-test attribute "size"; valid values: ["sm"]`
+	if issue.Message != want {
+		t.Errorf("message = %q, want %q", issue.Message, want)
+	}
+}
+
+func TestValidateMarkupSkipsOpenAndLiteralFreeUnions(t *testing.T) {
+	tests := []struct {
+		name     string
+		typeText string
+		value    string
+	}{
+		{name: "open union", typeText: `'a' | string`, value: "b"},
+		{name: "literal-free union", typeText: `string | number`, value: "bogus"},
+		{name: "null-only closed enum", typeText: `null | undefined`, value: "bogus"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := memoryService(t, manifestForAttributeType(t, "rh-test", "kind", tt.typeText), "5.0.0")
+			out := svc.ValidateMarkup(context.Background(), ValidateMarkupInput{
+				Markup: fmt.Sprintf(`<rh-test kind="%s"></rh-test>`, tt.value),
+			})
+			if out.Error != nil {
+				t.Fatalf("ValidateMarkup() error = %+v", out.Error)
+			}
+			if issue, ok := findIssue(out.Issues, "invalid-attribute-value"); ok {
+				t.Errorf("value %q flagged for non-closed enum %q: %+v", tt.value, tt.typeText, issue)
+			}
+		})
 	}
 }
 

@@ -9,7 +9,7 @@ toolchain go1.26.10
 
 require (
 	bennypowers.dev/asimonim v0.3.5
-	bennypowers.dev/cem v0.11.6
+	bennypowers.dev/cem v0.11.7
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/tidwall/jsonc v0.3.3
 	go.lsp.dev/protocol v1.0.1
