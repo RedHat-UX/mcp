@@ -169,6 +169,28 @@ func TestProxiedCEMToolMatchesDirectRegistration(t *testing.T) {
 	}
 }
 
+// TestProxiedCEMToolMatchesDirectRegistrationAtMRTR covers a host client on
+// 2026-07-28 calling through the cem internal client pinned to 2025-11-25. The
+// forwarded SEP-2575 request _meta must not change the result.
+func TestProxiedCEMToolMatchesDirectRegistrationAtMRTR(t *testing.T) {
+	cwd := projectWithManifest(t)
+	t.Chdir(cwd)
+
+	direct := connectServerWithProtocol(t, directCEMServer(t, cwd), "2026-07-28")
+	proxied := connectServerWithProtocol(t, newMountedServer(t, MountOptions{}), "2026-07-28")
+
+	args := map[string]any{"html": `<rh-button>Save</rh-button>`}
+	wantResult := callTool(t, direct, "validate_html", args)
+	gotResult := callTool(t, proxied, "validate_html", args)
+	if wantResult.IsError || gotResult.IsError {
+		t.Fatalf("validate_html IsError: direct=%v proxied=%v", wantResult.IsError, gotResult.IsError)
+	}
+	// _meta carries each server's own identity, so compare the result payload.
+	if want, got := contentText(wantResult), contentText(gotResult); want != got {
+		t.Errorf("proxied validate_html content at 2026-07-28 differs from direct registration:\ndirect: %s\nproxied: %s", want, got)
+	}
+}
+
 func TestProxiedCEMResourceMatchesDirectRegistration(t *testing.T) {
 	cwd := projectWithManifest(t)
 	t.Chdir(cwd)
