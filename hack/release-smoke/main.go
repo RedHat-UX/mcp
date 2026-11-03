@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -104,20 +105,79 @@ func run(binary string) error {
 		if size == 0 {
 			return fmt.Errorf("read %s returned no content", uri)
 		}
+		if uri == "rhds://packages/" {
+			if err := checkPackages(resourceText(result)); err != nil {
+				return err
+			}
+		}
 	}
 
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "rhds_resolve_version"})
 	if err != nil {
 		return fmt.Errorf("resolve version: %w", err)
 	}
-	var text strings.Builder
-	for _, content := range result.Content {
-		if typed, ok := content.(*mcp.TextContent); ok {
-			text.WriteString(typed.Text)
-		}
+	if result.IsError {
+		return fmt.Errorf("resolve version returned a tool error")
 	}
-	if strings.TrimSpace(text.String()) == "" {
-		return fmt.Errorf("resolve version returned no text")
+	if err := checkResolved(toolText(result)); err != nil {
+		return err
 	}
 	return nil
+}
+
+func resourceText(result *mcp.ReadResourceResult) string {
+	var builder strings.Builder
+	for _, content := range result.Contents {
+		builder.WriteString(content.Text)
+	}
+	return builder.String()
+}
+
+func checkPackages(body string) error {
+	var payload struct {
+		Error    json.RawMessage   `json:"error"`
+		Packages []json.RawMessage `json:"packages"`
+	}
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		return fmt.Errorf("decode packages resource: %w", err)
+	}
+	if present(payload.Error) {
+		return fmt.Errorf("packages resource reported an error: %s", payload.Error)
+	}
+	if len(payload.Packages) != 4 {
+		return fmt.Errorf("packages resource lists %d packages, want 4", len(payload.Packages))
+	}
+	return nil
+}
+
+func checkResolved(body string) error {
+	var payload struct {
+		Resolved map[string]any  `json:"resolved"`
+		Error    json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		return fmt.Errorf("decode version resolution: %w", err)
+	}
+	if present(payload.Error) {
+		return fmt.Errorf("version resolution reported an error: %s", payload.Error)
+	}
+	if len(payload.Resolved) == 0 {
+		return fmt.Errorf("version resolution returned no resolved versions")
+	}
+	return nil
+}
+
+func toolText(result *mcp.CallToolResult) string {
+	var builder strings.Builder
+	for _, content := range result.Content {
+		if typed, ok := content.(*mcp.TextContent); ok {
+			builder.WriteString(typed.Text)
+		}
+	}
+	return builder.String()
+}
+
+func present(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	return trimmed != "" && trimmed != "null"
 }
