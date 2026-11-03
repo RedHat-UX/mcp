@@ -1,0 +1,99 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 Red Hat, Inc.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Create release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          prerelease=()
+          case "$GITHUB_REF_NAME" in
+            v0.0.*) prerelease=(--prerelease) ;;
+          esac
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            "${prerelease[@]}"
+
+  build:
+    name: Build binaries
+    needs: release
+    permissions:
+      contents: write
+    uses: bennypowers/go-release-workflows/.github/workflows/build-binaries.yml@v2
+    with:
+      binary-name: rhds-mcp
+      release-tag: ${{ github.ref_name }}
+
+  assets:
+    name: Attach release assets
+    needs:
+      - release
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Generate embedded data archive
+        run: |
+          set -eu
+          make data
+          version="${GITHUB_REF_NAME#v}"
+          tar -czf "rhds-mcp-data-${version}.tar.gz" -C internal/data dist
+      - name: Collect release files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          mkdir release-assets
+          gh release download "$GITHUB_REF_NAME" --dir release-assets --clobber
+          cp LICENSE NOTICE release-assets/
+          cp "rhds-mcp-data-${GITHUB_REF_NAME#v}.tar.gz" release-assets/
+      - name: Smoke test linux-x64 binary
+        run: |
+          set -eu
+          got="$(./release-assets/rhds-mcp-linux-x64 --version)"
+          want="${GITHUB_REF_NAME#v}"
+          test "$got" = "$want"
+      - name: Write checksums
+        run: |
+          set -eu
+          cd release-assets
+          sha256sum rhds-mcp-* LICENSE NOTICE > SHA256SUMS
+      - name: Upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          gh release upload "$GITHUB_REF_NAME" \
+            release-assets/LICENSE \
+            release-assets/NOTICE \
+            "release-assets/rhds-mcp-data-${GITHUB_REF_NAME#v}.tar.gz" \
+            release-assets/SHA256SUMS \
+            --clobber
