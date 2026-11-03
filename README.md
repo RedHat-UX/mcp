@@ -26,18 +26,33 @@ Linux binaries require glibc 2.34 or newer: RHEL 9+, Ubuntu 22.04+, Debian 12+, 
 current Fedora. On RHEL 8 or another older distribution, run the Linux binary inside a
 UBI 9 container.
 
+Download `SHA256SUMS` alongside the asset, then substitute your asset name below.
+
 ```sh
-# macOS and Linux
+# Linux x64, replace the asset name for arm64
 chmod +x rhds-mcp-linux-x64
+grep ' rhds-mcp-linux-x64$' SHA256SUMS | sha256sum -c -
 mkdir -p ~/.local/bin
 mv rhds-mcp-linux-x64 ~/.local/bin/rhds-mcp
 ~/.local/bin/rhds-mcp --version
-
-# Verify the download
-sha256sum -c SHA256SUMS
 ```
 
-Windows users can rename the asset to `rhds-mcp.exe` and put it on `PATH`.
+```sh
+# macOS, replace the asset name for Intel
+chmod +x rhds-mcp-darwin-arm64
+grep ' rhds-mcp-darwin-arm64$' SHA256SUMS | shasum -a 256 -c -
+mkdir -p ~/.local/bin
+mv rhds-mcp-darwin-arm64 ~/.local/bin/rhds-mcp
+~/.local/bin/rhds-mcp --version
+```
+
+```powershell
+# Windows, compare the printed hash with the line in SHA256SUMS
+Get-FileHash .\rhds-mcp-win32-x64.exe -Algorithm SHA256
+Rename-Item .\rhds-mcp-win32-x64.exe rhds-mcp.exe
+```
+
+Windows users can move `rhds-mcp.exe` to a directory on `PATH`.
 
 There is no npm package yet. `go install` is not supported because generated data is
 not committed.
@@ -63,6 +78,8 @@ them. Otherwise it uses the process working directory.
 
 ### Claude Code
 
+See [Claude Code MCP](https://docs.claude.com/en/docs/claude-code/mcp).
+
 ```sh
 claude mcp add --transport stdio rhds -- /absolute/path/to/rhds-mcp
 ```
@@ -84,6 +101,8 @@ project file is `.mcp.json`:
 
 ### Codex CLI
 
+See [Codex MCP](https://developers.openai.com/codex/mcp/).
+
 ```sh
 codex mcp add rhds -- /absolute/path/to/rhds-mcp
 ```
@@ -97,6 +116,8 @@ args = []
 ```
 
 ### VS Code
+
+See [VS Code MCP servers](https://code.visualstudio.com/docs/copilot/chat/mcp-servers).
 
 Create `.vscode/mcp.json` in the workspace:
 
@@ -114,6 +135,8 @@ Create `.vscode/mcp.json` in the workspace:
 
 ### Cursor
 
+See [Cursor MCP](https://cursor.com/docs/mcp).
+
 Create `~/.cursor/mcp.json` for every project, or `.cursor/mcp.json` for one workspace:
 
 ```json
@@ -128,6 +151,8 @@ Create `~/.cursor/mcp.json` for every project, or `.cursor/mcp.json` for one wor
 ```
 
 ### Pi
+
+See [Pi MCP servers](https://pi.dev/docs/latest/mcp).
 
 ```sh
 pi mcp add rhds -- /absolute/path/to/rhds-mcp
@@ -149,6 +174,8 @@ format is the same as Cursor: `~/.pi/agent/mcp.json` or `.pi/mcp.json`.
 
 ### OpenCode
 
+See [OpenCode MCP servers](https://opencode.ai/docs/mcp-servers/).
+
 Add this to `opencode.json`:
 
 ```json
@@ -166,6 +193,7 @@ Add this to `opencode.json`:
 
 ### Other clients
 
+See the [MCP specification](https://modelcontextprotocol.io) for the stdio transport.
 Use the stdio configuration from the Cursor or Claude Code section. The server speaks
 MCP over stdin and stdout and writes logs to stderr.
 
