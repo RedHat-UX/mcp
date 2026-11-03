@@ -4,8 +4,198 @@
 version-aware answers about RHDS elements, design tokens, design guidelines, and
 migrations.
 
-Status: pre-release, under development. See [`docs/PLAN.md`](docs/PLAN.md) for the spec
-and the phase issues for progress.
+Status: pre-release. See [`docs/PLAN.md`](docs/PLAN.md) for the spec and the phase
+issues for progress. The current release is a prerelease: the MCP surface may still
+change.
+
+## Install
+
+Download a binary from the [releases page](https://github.com/RedHat-UX/mcp/releases).
+Each release includes a `SHA256SUMS` file.
+
+| OS | Architecture | Asset |
+|---|---|---|
+| Linux | x86-64 | `rhds-mcp-linux-x64` |
+| Linux | arm64 | `rhds-mcp-linux-arm64` |
+| macOS | Intel | `rhds-mcp-darwin-x64` |
+| macOS | Apple silicon | `rhds-mcp-darwin-arm64` |
+| Windows | x86-64 | `rhds-mcp-win32-x64.exe` |
+| Windows | arm64 | `rhds-mcp-win32-arm64.exe` |
+
+Linux binaries require glibc 2.34 or newer: RHEL 9+, Ubuntu 22.04+, Debian 12+, and
+current Fedora. On RHEL 8 or another older distribution, run the Linux binary inside a
+UBI 9 container.
+
+Download `SHA256SUMS` alongside the asset, then substitute your asset name below.
+
+```sh
+# Linux x64, replace the asset name for arm64
+chmod +x rhds-mcp-linux-x64
+grep ' rhds-mcp-linux-x64$' SHA256SUMS | sha256sum -c -
+mkdir -p ~/.local/bin
+mv rhds-mcp-linux-x64 ~/.local/bin/rhds-mcp
+~/.local/bin/rhds-mcp --version
+```
+
+```sh
+# macOS, replace the asset name for Intel
+chmod +x rhds-mcp-darwin-arm64
+grep ' rhds-mcp-darwin-arm64$' SHA256SUMS | shasum -a 256 -c -
+mkdir -p ~/.local/bin
+mv rhds-mcp-darwin-arm64 ~/.local/bin/rhds-mcp
+~/.local/bin/rhds-mcp --version
+```
+
+```powershell
+# Windows, compare the printed hash with the line in SHA256SUMS
+Get-FileHash .\rhds-mcp-win32-x64.exe -Algorithm SHA256
+Rename-Item .\rhds-mcp-win32-x64.exe rhds-mcp.exe
+```
+
+Windows users can move `rhds-mcp.exe` to a directory on `PATH`.
+
+There is no npm package yet. `go install` is not supported because generated data is
+not committed.
+
+### Build from source
+
+Requires Go, a C toolchain for cgo, and network access while generating data.
+
+```sh
+git clone https://github.com/RedHat-UX/mcp.git
+cd mcp
+make data build
+./dist/bin/rhds-mcp --version
+```
+
+## Configure a client
+
+Every example below assumes the binary is at `/absolute/path/to/rhds-mcp`. Use the
+real absolute path, and use forward slashes or escaped backslashes in JSON on Windows.
+
+The server reads the workspace from the client's MCP roots when the client provides
+them. Otherwise it uses the process working directory.
+
+### Claude Code
+
+See [Claude Code MCP](https://docs.claude.com/en/docs/claude-code/mcp).
+
+```sh
+claude mcp add --transport stdio rhds -- /absolute/path/to/rhds-mcp
+```
+
+Add `--scope user` to make the server available in every project. The equivalent
+project file is `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "rhds": {
+      "type": "stdio",
+      "command": "/absolute/path/to/rhds-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+### Codex CLI
+
+See [Codex MCP](https://developers.openai.com/codex/mcp/).
+
+```sh
+codex mcp add rhds -- /absolute/path/to/rhds-mcp
+```
+
+Or add this to `~/.codex/config.toml`, or to `.codex/config.toml` in a trusted project:
+
+```toml
+[mcp_servers.rhds]
+command = "/absolute/path/to/rhds-mcp"
+args = []
+```
+
+### VS Code
+
+See [VS Code MCP servers](https://code.visualstudio.com/docs/copilot/chat/mcp-servers).
+
+Create `.vscode/mcp.json` in the workspace:
+
+```json
+{
+  "servers": {
+    "rhds": {
+      "type": "stdio",
+      "command": "/absolute/path/to/rhds-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+### Cursor
+
+See [Cursor MCP](https://cursor.com/docs/mcp).
+
+Create `~/.cursor/mcp.json` for every project, or `.cursor/mcp.json` for one workspace:
+
+```json
+{
+  "mcpServers": {
+    "rhds": {
+      "command": "/absolute/path/to/rhds-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+### Pi
+
+See [Pi MCP servers](https://pi.dev/docs/latest/mcp).
+
+```sh
+pi mcp add rhds -- /absolute/path/to/rhds-mcp
+```
+
+Add `--local` to write project configuration instead of user configuration. The file
+format is the same as Cursor: `~/.pi/agent/mcp.json` or `.pi/mcp.json`.
+
+```json
+{
+  "mcpServers": {
+    "rhds": {
+      "command": "/absolute/path/to/rhds-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+### OpenCode
+
+See [OpenCode MCP servers](https://opencode.ai/docs/mcp-servers/).
+
+Add this to `opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "rhds": {
+      "type": "local",
+      "command": ["/absolute/path/to/rhds-mcp"],
+      "enabled": true
+    }
+  }
+}
+```
+
+### Other clients
+
+See the [MCP specification](https://modelcontextprotocol.io) for the stdio transport.
+Use the stdio configuration from the Cursor or Claude Code section. The server speaks
+MCP over stdin and stdout and writes logs to stderr.
 
 ## Upstream servers
 
@@ -24,4 +214,6 @@ duplicates. With both enabled, the same capability appears under two client
 prefixes, for example two `validate_html` entries backed by different bundled
 versions. That costs tool-listing context and can produce different answers.
 
-License: GPL-3.0-or-later.
+## License
+
+GPL-3.0-or-later. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).

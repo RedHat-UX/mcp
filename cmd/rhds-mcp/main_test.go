@@ -420,6 +420,27 @@ func TestLdflagsSetServerVersion(t *testing.T) {
 	}
 }
 
+// TestVersionFlagPrintsBuildVersion keeps the release smoke test honest: a
+// binary must report the version stamped by the Makefile without starting the
+// server or reading the embedded data.
+func TestVersionFlagPrintsBuildVersion(t *testing.T) {
+	const want = "9.9.9"
+	binary := buildServerBinary(t, "-ldflags=-X main.serverVersion="+want)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	for _, flag := range []string{"--version", "-version"} {
+		out, err := exec.CommandContext(ctx, binary, flag).Output()
+		if err != nil {
+			t.Fatalf("%s: %v", flag, err)
+		}
+		if got := strings.TrimSpace(string(out)); got != want {
+			t.Errorf("%s output = %q, want %q", flag, got, want)
+		}
+	}
+}
+
 // TestSIGTERMExitsCleanly asserts that an interrupt-style shutdown maps to exit
 // code 0 rather than logging an error and failing.
 func TestSIGTERMExitsCleanly(t *testing.T) {

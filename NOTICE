@@ -2,17 +2,19 @@ RHDS MCP Server (@rhds/mcp)
 Copyright 2026 Red Hat, Inc.
 SPDX-License-Identifier: GPL-3.0-or-later
 
-This product includes third-party software and data. This NOTICE file is a
-skeleton: dependencies and embedded data added in later phases must be recorded
-here before a public release. See docs/PLAN.md section 9.3.
+This product includes third-party software and data. The full Go dependency set
+and exact versions are pinned in go.mod and go.sum. The tables below record the
+direct dependencies, notable transitive ones, and the embedded data sources.
 
 Go dependencies
 ===============
 
 Module                                        Version  License            Copyright
 --------------------------------------------  -------  -----------------  ------------------------------------------------
-bennypowers.dev/cem                           pinned   GPL-3.0-or-later   Copyright © 2025 Benny Powers
-bennypowers.dev/asimonim                      pinned   GPL-3.0-or-later   Copyright 2026 Benny Powers
+bennypowers.dev/cem                           v0.11.8  GPL-3.0-or-later   Copyright © 2025 Benny Powers
+bennypowers.dev/asimonim                      v0.3.5   GPL-3.0-or-later   Copyright 2026 Benny Powers
+bennypowers.dev/tree-sitter-handlebars        v0.1.1   MIT                Copyright (c) 2026 Benny Powers
+bennypowers.dev/tree-sitter-jinja-dialects    v0.1.1   MIT                Copyright (c) 2024 Benny Powers
 github.com/modelcontextprotocol/go-sdk        v1.8.0   MIT and            Copyright (c) 2024-2025 Model Context Protocol
                                                        Apache-2.0 (code); a Series of LF Projects, LLC.
                                                        CC-BY-4.0 (docs)
@@ -51,7 +53,46 @@ charm.land/huh/v2                        v2.0.3   MIT      Copyright (c) 2023-20
 charm.land/lipgloss/v2                   v2.0.4   MIT      Copyright (c) 2021-2026 Charmbracelet, Inc.
 github.com/alecthomas/chroma/v2          v2.24.1  MIT      Copyright (C) 2017 Alec Thomas
 github.com/atotto/clipboard              v0.1.4   BSD-3-Clause  Copyright (c) 2013 Ato Araki.
-github.com/charmbracelet/ultraviolet     pinned   MIT      Copyright (c) 2025 Charmbracelet, Inc.
+github.com/charmbracelet/ultraviolet     v0.0.0-20260525132238-948f4557a654  MIT  Copyright (c) 2025 Charmbracelet, Inc.
+
+Embedded data
+=============
+
+The binary embeds data generated from these sources. All three are MIT licensed,
+which is compatible with this project's GPL-3.0-or-later license.
+
+Source                                              Copyright line
+--------------------------------------------------  ---------------------------------
+redhat-ux/red-hat-design-system                     Copyright 2022 Red Hat, Inc.
+  elements manifests, docs prose, pattern HTML,
+  release notes
+redhat-ux/red-hat-design-tokens                     Copyright (c) 2022 Red Hat UX
+  DTCG tokens
+project-felt/ai-guidelines                          Copyright (c) 2026 project-felt
+  AI guidelines submodule
+
+The MIT license text below applies to each embedded data source. Images are not
+bundled, so no logo or brand assets ship.
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 bennypowers.dev/cem, bennypowers.dev/asimonim, and
 github.com/Digital-Shane/treeview/v2 (transitive through cem) are
