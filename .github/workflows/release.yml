@@ -10,6 +10,8 @@ on:
 
 permissions:
   contents: write
+  # npm provenance will need OIDC once the npm wrapper ships.
+  id-token: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -43,6 +45,7 @@ jobs:
     needs: release
     permissions:
       contents: write
+      id-token: write
     uses: bennypowers/go-release-workflows/.github/workflows/build-binaries.yml@v2
     with:
       binary-name: rhds-mcp
