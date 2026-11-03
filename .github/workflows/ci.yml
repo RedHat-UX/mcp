@@ -30,7 +30,7 @@ jobs:
       - name: Clean checkout has no generated data
         run: test ! -e internal/data/dist/index.json
       - name: Version survives an empty environment override
-        run: test -n "$(VERSION= make -s version)"
+        run: test -n "$(VERSION='' make -s version)"
       - name: Vet
         run: go vet ./...
       - name: Test
