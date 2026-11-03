@@ -5,7 +5,9 @@ BINARY_NAME := rhds-mcp
 # grw build-binaries v1.4 runs plain `make <platform>` without VERSION. Derive
 # it from the exact release tag when the checkout is tagged, and fall back to
 # the development default elsewhere. An explicit VERSION always wins.
-VERSION ?= $(shell tag=$$(git describe --tags --exact-match 2>/dev/null); if [ -n "$$tag" ]; then printf '%s' "$${tag\#v}"; else printf '0.0.1'; fi)
+# Some CI images export an empty VERSION. Fall back to the tag-derived value
+# when that happens; an explicit command-line VERSION still wins.
+VERSION := $(if $(strip $(VERSION)),$(VERSION),$(shell tag=$$(git describe --tags --exact-match 2>/dev/null); if [ -n "$$tag" ]; then printf '%s' "$${tag\#v}"; else printf '0.0.1'; fi))
 DIST_DIR := dist/bin
 GO_PACKAGE := ./cmd/rhds-mcp
 GO_LDFLAGS := -s -w -X main.serverVersion=$(VERSION)
@@ -19,12 +21,15 @@ GOMODCACHE := $(shell go env GOMODCACHE)
 
 .DEFAULT_GOAL := build
 
-.PHONY: data data-update data-force data-determinism build size-check license-check linux-x64 linux-arm64 darwin-x64 darwin-arm64 win32-x64 win32-arm64 clean
+.PHONY: version data data-update data-force data-determinism build size-check license-check linux-x64 linux-arm64 darwin-x64 darwin-arm64 win32-x64 win32-arm64 clean
 
 # Generated data is not committed. `make data` reads the committed lock and
 # regenerates only when internal/data/dist/index.json is missing, stale, or was
 # produced by an older generator version. Network access happens only inside
 # tools/gen-data, never at runtime.
+version:
+	@printf '%s\n' "$(VERSION)"
+
 data:
 	go generate ./internal/data
 
