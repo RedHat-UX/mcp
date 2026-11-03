@@ -15,7 +15,7 @@ file holds the spec they reference with §. Work the phases in order:
 | C. Data pipeline | [#3](https://github.com/RedHat-UX/mcp/issues/3) | Soft: asimonim#64 fixture |
 | D. Resolution and component tools | [#4](https://github.com/RedHat-UX/mcp/issues/4) | cem#458 merged and in a cem tag |
 | E. Tokens, docs, migration | [#5](https://github.com/RedHat-UX/mcp/issues/5) | None |
-| F. Release v0.1.0 | [#6](https://github.com/RedHat-UX/mcp/issues/6) | grw license tag, cem and asimonim P0 tags, legal confirmation |
+| F. Prerelease v0.0.1 | [#6](https://github.com/RedHat-UX/mcp/issues/6) | grw `v2` tag, cem and asimonim P0 tags |
 
 Rules:
 
@@ -823,7 +823,12 @@ Wrapper behavior:
 
 ### 9.2 Other distribution
 
-- GitHub release archives with checksums, plus the generated data archive
+- `v0.0.1` is a prerelease: six-platform binaries, `LICENSE`, `NOTICE`, SHA-256
+  checksums, and the generated data archive, all attached to the GitHub release.
+  npm is deferred to `v0.1.0`.
+- The README carries the install matrix: binary download per platform, build from
+  source, and copy-paste configuration for Claude Code, Codex CLI, VS Code, Cursor,
+  Pi, OpenCode, and generic stdio clients.
 - Build from source: `make data build`. Needs a C toolchain for cgo. `go install` is not
   supported because generated data is not committed (section 4.3)
 - Signed git tags
@@ -839,7 +844,7 @@ Wrapper behavior:
 | npm metadata          | Set `license` in the npm wrapper and platform packages; do not rely on GitHub API detection alone        |
 | No added restrictions | No EULA or marketplace terms that contradict GPL                                                        |
 | Reproducibility       | Pin Go toolchain, dependency versions, and cgo toolchain                                                |
-| Release workflow      | Use `go-release-workflows` `fix/license-compliance`, merged and tagged; do not float on `@main`          |
+| Release workflow      | Use `go-release-workflows` `@v2`; do not float on `@main`                                                |
 
 Run a dependency license check in CI with an allowlist for GPL-3.0, MIT, Apache-2.0,
 BSD, and MPL-2.0. Anything else fails the build.
@@ -915,9 +920,10 @@ TDD. Red tests before implementation.
 
 ## 12. Versions and gates
 
-`0.0.x` tags are development builds: GitHub release artifacts only, no npm publish.
-`v0.1.0` is the first public release, when Phase F (#6) closes. "P0 blocks
-v0.1" means v0.1.0.
+`0.0.x` tags are prereleases: GitHub release artifacts only, no npm publish.
+`v0.0.1` is the first public prerelease. `v0.1.0` is the first stable release, adds
+npm distribution, and is when the release phase closes. "P0 blocks v0.1" means
+v0.1.0.
 
 Upstream work runs in parallel with `@rhds/mcp` work. The phase issues mark each step that
 must wait for an upstream change with **Gate**:
