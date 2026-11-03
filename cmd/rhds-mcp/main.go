@@ -155,7 +155,21 @@ func (h cleanShutdownHandler) WithGroup(name string) slog.Handler {
 	return cleanShutdownHandler{h.Handler.WithGroup(name)}
 }
 
+// versionRequested reports whether args ask for the build version. The flag
+// runs without a server and without reading embedded data.
+func versionRequested(args []string) bool {
+	if len(args) != 2 {
+		return false
+	}
+	return args[1] == "--version" || args[1] == "-version"
+}
+
 func main() {
+	if versionRequested(os.Args) {
+		fmt.Println(serverVersion)
+		return
+	}
+
 	logger := slog.New(cleanShutdownHandler{slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	})})
