@@ -7,7 +7,7 @@ BINARY_NAME := rhds-mcp
 # the development default elsewhere. An explicit VERSION always wins.
 # Some CI images export an empty VERSION. Fall back to the tag-derived value
 # when that happens; an explicit command-line VERSION still wins.
-VERSION := $(if $(strip $(VERSION)),$(VERSION),$(shell tag=$$(git describe --tags --exact-match 2>/dev/null); if [ -n "$$tag" ]; then printf '%s' "$${tag\#v}"; else printf '0.0.1'; fi))
+VERSION := $(if $(strip $(VERSION)),$(VERSION),$(shell tag=$$(git describe --tags --exact-match 2>/dev/null); if [ -n "$$tag" ]; then printf '%s' "$$tag" | sed 's/^v//'; else printf '0.0.1'; fi))
 DIST_DIR := dist/bin
 GO_PACKAGE := ./cmd/rhds-mcp
 GO_LDFLAGS := -s -w -X main.serverVersion=$(VERSION)
